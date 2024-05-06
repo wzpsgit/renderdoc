@@ -77,6 +77,14 @@ public:
     m_GL = NULL;
     m_Vulkan = vk;
   }
+
+  void SetDescriptorAccess(rdcarray<DescriptorAccess> &&descriptorAccess,
+                           rdcarray<Descriptor> &&descriptors, rdcarray<SamplerDescriptor> &&samplers)
+  {
+    m_Access = descriptorAccess;
+    m_Descriptors = descriptors;
+    m_SamplerDescriptors = samplers;
+  }
 #endif
 
   DOCUMENT(R"(Determines whether or not a capture is currently loaded.
@@ -238,16 +246,6 @@ requirements.
 )");
   Scissor GetScissor(uint32_t index) const;
 
-  DOCUMENT(R"(Retrieves the current bindpoint mapping for a shader stage.
-
-This returns an empty bindpoint mapping if no shader is bound.
-
-:param ShaderStage stage: The shader stage to fetch.
-:return: The bindpoint mapping for the given shader.
-:rtype: ShaderBindpointMapping
-)");
-  const ShaderBindpointMapping &GetBindpointMapping(ShaderStage stage) const;
-
   DOCUMENT(R"(Retrieves the shader reflection information for a shader stage.
 
 This returns ``None`` if no shader is bound.
@@ -342,65 +340,90 @@ For some APIs that don't distinguish by entry point, this may be empty.
 )");
   rdcarray<VertexInputAttribute> GetVertexInputs() const;
 
-  DOCUMENT(R"(Retrieves the constant buffer at a given binding.
+  DOCUMENT(R"(Retrieves the current list of descriptor accesses, as cached from a call to
+:meth:`ReplayController.GetDescriptorAccess`. The return value is identical, this is here for
+convenience of access.
+
+:return: The descriptor accesses.
+:rtype: List[DescriptorAccess]
+)");
+  const rdcarray<DescriptorAccess> &GetDescriptorAccess() const { return m_Access; }
+
+  DOCUMENT(R"(Retrieves all descriptor information for all descriptors accessed at the current event.
+
+:param bool onlyUsed: Omit descriptors bound or declared but not accessed.
+:return: All descriptors accessed at the current event.
+:rtype: List[UsedDescriptor]
+)");
+  rdcarray<UsedDescriptor> GetAllUsedDescriptors(bool onlyUsed = false) const;
+
+  DOCUMENT(R"(Retrieves the constant block at a given binding.
 
 :param ShaderStage stage: The shader stage to fetch from.
-:param int BufIdx: The index in the shader's ConstantBlocks array to look up.
-:param int ArrayIdx: For APIs that support arrays of constant buffers in a single binding, the index
+:param int index: The index in the shader's ConstantBlocks array to look up.
+:param int arrayIdx: For APIs that support arrays of constant buffers in a single binding, the index
   in that array to look up.
 :return: The constant buffer at the specified binding.
-:rtype: BoundCBuffer
+:rtype: UsedDescriptor
 )");
-  BoundCBuffer GetConstantBuffer(ShaderStage stage, uint32_t BufIdx, uint32_t ArrayIdx) const;
+  UsedDescriptor GetConstantBlock(ShaderStage stage, uint32_t index, uint32_t arrayIdx) const;
 
-  DOCUMENT(R"(Retrieves the read-only resources bound to a particular shader stage.
+  DOCUMENT(R"(Retrieves the constant blocks used by a particular shader stage.
 
 :param ShaderStage stage: The shader stage to fetch from.
-:param bool onlyUsed: Return only a subset of resources containing those actually used by the
-  shader.
-:return: The currently bound read-only resources.
-:rtype: List[BoundResourceArray]
+:param bool onlyUsed: Omit descriptors bound or declared but not accessed.
+:return: The currently bound constant blocks.
+:rtype: List[UsedDescriptor]
 )");
-  rdcarray<BoundResourceArray> GetReadOnlyResources(ShaderStage stage, bool onlyUsed = false) const;
+  rdcarray<UsedDescriptor> GetConstantBlocks(ShaderStage stage, bool onlyUsed = false) const;
+
+  DOCUMENT(R"(Retrieves the read-only resources used by a particular shader stage.
+
+:param ShaderStage stage: The shader stage to fetch from.
+:param bool onlyUsed: Omit descriptors bound or declared but not accessed.
+:return: The currently bound read-only resources.
+:rtype: List[UsedDescriptor]
+)");
+  rdcarray<UsedDescriptor> GetReadOnlyResources(ShaderStage stage, bool onlyUsed = false) const;
 
   DOCUMENT(R"(Retrieves the samplers bound to a particular shader stage.
 
 :param ShaderStage stage: The shader stage to fetch from.
+:param bool onlyUsed: Omit descriptors bound or declared but not accessed.
 :return: The currently bound sampler resources.
-:rtype: List[BoundResourceArray]
+:rtype: List[UsedDescriptor]
 )");
-  rdcarray<BoundResourceArray> GetSamplers(ShaderStage stage) const;
+  rdcarray<UsedDescriptor> GetSamplers(ShaderStage stage, bool onlyUsed = false) const;
 
-  DOCUMENT(R"(Retrieves the read/write resources bound to a particular shader stage.
+  DOCUMENT(R"(Retrieves the read/write resources used by a particular shader stage.
 
 :param ShaderStage stage: The shader stage to fetch from.
-:param bool onlyUsed: Return only a subset of resources containing those actually used by the
-  shader.
+:param bool onlyUsed: Omit descriptors bound or declared but not accessed.
 :return: The currently bound read/write resources.
-:rtype: List[BoundResourceArray]
+:rtype: List[UsedDescriptor]
 )");
-  rdcarray<BoundResourceArray> GetReadWriteResources(ShaderStage stage, bool onlyUsed = false) const;
+  rdcarray<UsedDescriptor> GetReadWriteResources(ShaderStage stage, bool onlyUsed = false) const;
 
   DOCUMENT(R"(Retrieves the read/write resources bound to the depth-stencil output.
 
 :return: The currently bound depth-stencil resource.
-:rtype: BoundResource
+:rtype: Descriptor
 )");
-  BoundResource GetDepthTarget() const;
+  Descriptor GetDepthTarget() const;
 
   DOCUMENT(R"(Retrieves the read/write resources bound to the depth-stencil resolve output.
 
 :return: The currently bound depth-stencil resolve resource.
-:rtype: BoundResource
+:rtype: Descriptor
 )");
-  BoundResource GetDepthResolveTarget() const;
+  Descriptor GetDepthResolveTarget() const;
 
   DOCUMENT(R"(Retrieves the resources bound to the color outputs.
 
 :return: The currently bound output targets.
-:rtype: List[BoundResource]
+:rtype: List[Descriptor]
 )");
-  rdcarray<BoundResource> GetOutputTargets() const;
+  rdcarray<Descriptor> GetOutputTargets() const;
 
   DOCUMENT(R"(Retrieves the current color blending states, per target.
 
@@ -446,4 +469,10 @@ private:
   bool IsD3D12Stage(ShaderStage stage) const;
   bool IsGLStage(ShaderStage stage) const;
   bool IsVulkanStage(ShaderStage stage) const;
+
+  rdcarray<DescriptorAccess> m_Access;
+  rdcarray<Descriptor> m_Descriptors;
+  rdcarray<SamplerDescriptor> m_SamplerDescriptors;
+
+  void ApplyVulkanDynamicOffsets(UsedDescriptor &used) const;
 };

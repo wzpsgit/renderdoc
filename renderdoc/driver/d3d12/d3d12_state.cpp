@@ -209,6 +209,9 @@ void D3D12RenderState::ApplyState(WrappedID3D12Device *dev, ID3D12GraphicsComman
   if(pipe != ResourceId())
     cmd->SetPipelineState(GetResourceManager()->GetCurrentAs<ID3D12PipelineState>(pipe));
 
+  if(stateobj != ResourceId())
+    cmd->SetPipelineState1(GetResourceManager()->GetCurrentAs<ID3D12StateObject>(stateobj));
+
   if(type == D3D12_COMMAND_LIST_TYPE_DIRECT || type == D3D12_COMMAND_LIST_TYPE_BUNDLE)
   {
     if(!views.empty())
@@ -344,7 +347,7 @@ void D3D12RenderState::ApplyState(WrappedID3D12Device *dev, ID3D12GraphicsComman
   }
 }
 
-void D3D12RenderState::ApplyDescriptorHeaps(ID3D12GraphicsCommandListX *cmd) const
+void D3D12RenderState::ApplyDescriptorHeaps(ID3D12GraphicsCommandList *cmd) const
 {
   rdcarray<ID3D12DescriptorHeap *> descHeaps;
   descHeaps.resize(heaps.size());
@@ -356,7 +359,7 @@ void D3D12RenderState::ApplyDescriptorHeaps(ID3D12GraphicsCommandListX *cmd) con
     cmd->SetDescriptorHeaps((UINT)descHeaps.size(), &descHeaps[0]);
 }
 
-void D3D12RenderState::ApplyComputeRootElements(ID3D12GraphicsCommandListX *cmd) const
+void D3D12RenderState::ApplyComputeRootElements(ID3D12GraphicsCommandList *cmd) const
 {
   for(size_t i = 0; i < compute.sigelems.size(); i++)
   {
@@ -364,7 +367,7 @@ void D3D12RenderState::ApplyComputeRootElements(ID3D12GraphicsCommandListX *cmd)
     // and is probably just from stale bindings that aren't going to be used
     if(compute.sigelems[i].type != eRootTable || heaps.contains(compute.sigelems[i].id))
     {
-      compute.sigelems[i].SetToCompute(GetResourceManager(), cmd, (UINT)i);
+      compute.sigelems[i].SetToCompute(GetResourceManager(), cmd, (UINT)i, false);
     }
     else
     {
@@ -374,7 +377,7 @@ void D3D12RenderState::ApplyComputeRootElements(ID3D12GraphicsCommandListX *cmd)
   }
 }
 
-void D3D12RenderState::ApplyGraphicsRootElements(ID3D12GraphicsCommandListX *cmd) const
+void D3D12RenderState::ApplyGraphicsRootElements(ID3D12GraphicsCommandList *cmd) const
 {
   for(size_t i = 0; i < graphics.sigelems.size(); i++)
   {
@@ -382,7 +385,43 @@ void D3D12RenderState::ApplyGraphicsRootElements(ID3D12GraphicsCommandListX *cmd
     // and is probably just from stale bindings that aren't going to be used
     if(graphics.sigelems[i].type != eRootTable || heaps.contains(graphics.sigelems[i].id))
     {
-      graphics.sigelems[i].SetToGraphics(GetResourceManager(), cmd, (UINT)i);
+      graphics.sigelems[i].SetToGraphics(GetResourceManager(), cmd, (UINT)i, false);
+    }
+    else
+    {
+      RDCDEBUG("Skipping setting possibly stale graphics root table referring to heap %s",
+               ToStr(graphics.sigelems[i].id).c_str());
+    }
+  }
+}
+
+void D3D12RenderState::ApplyComputeRootElementsUnwrapped(ID3D12GraphicsCommandList *cmd) const
+{
+  for(size_t i = 0; i < compute.sigelems.size(); i++)
+  {
+    // just don't set tables that aren't in the descriptor heaps, since it's invalid and can crash
+    // and is probably just from stale bindings that aren't going to be used
+    if(compute.sigelems[i].type != eRootTable || heaps.contains(compute.sigelems[i].id))
+    {
+      compute.sigelems[i].SetToCompute(GetResourceManager(), cmd, (UINT)i, true);
+    }
+    else
+    {
+      RDCDEBUG("Skipping setting possibly stale compute root table referring to heap %s",
+               ToStr(compute.sigelems[i].id).c_str());
+    }
+  }
+}
+
+void D3D12RenderState::ApplyGraphicsRootElementsUnwrapped(ID3D12GraphicsCommandList *cmd) const
+{
+  for(size_t i = 0; i < graphics.sigelems.size(); i++)
+  {
+    // just don't set tables that aren't in the descriptor heaps, since it's invalid and can crash
+    // and is probably just from stale bindings that aren't going to be used
+    if(graphics.sigelems[i].type != eRootTable || heaps.contains(graphics.sigelems[i].id))
+    {
+      graphics.sigelems[i].SetToGraphics(GetResourceManager(), cmd, (UINT)i, true);
     }
     else
     {

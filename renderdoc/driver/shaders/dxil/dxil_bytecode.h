@@ -27,10 +27,12 @@
 #include <stdint.h>
 
 #include "api/replay/apidefs.h"
+#include "api/replay/rdcflatmap.h"
 #include "api/replay/rdcstr.h"
 #include "common/common.h"
 #include "driver/dx/official/d3dcommon.h"
 #include "driver/shaders/dxbc/dxbc_common.h"
+#include "driver/shaders/dxil/dxil_common.h"
 
 #define DXC_COMPATIBLE_DISASM OPTION_OFF
 
@@ -1097,6 +1099,125 @@ struct Function : public Value
   AttachedMetadata attachedMeta;
 };
 
+class LLVMOrderAccumulator
+{
+public:
+  // types in id order
+  rdcarray<const Type *> types;
+  // types in disassembly print order
+  rdcarray<const Type *> printOrderTypes;
+  // values in id order
+  rdcarray<const Value *> values;
+  // metadata in id order
+  rdcarray<const Metadata *> metadata;
+
+  size_t firstConst;
+  size_t numConsts;
+
+  void processGlobals(Program *p, bool doLiveChecking);
+
+  size_t firstFuncConst;
+  size_t numFuncConsts;
+
+  void processFunction(const Function *f);
+  void exitFunction();
+
+private:
+  size_t functionWaterMark;
+  bool sortConsts = true;
+  bool liveChecking = false;
+
+  void reset(GlobalVar *g);
+  void reset(Alias *a);
+  void reset(Constant *c);
+  void reset(Metadata *m);
+  void reset(Function *f);
+  void reset(Block *b);
+  void reset(Instruction *i);
+  void reset(Value *v);
+
+  void accumulate(const Value *v);
+  void accumulate(const Metadata *m);
+  void accumulateTypePrintOrder(const Type *t);
+  void accumulateTypePrintOrder(rdcarray<const Metadata *> &visited, const Metadata *m);
+  void assignTypeId(const Type *t);
+  void assignTypeId(const Constant *c);
+};
+
+struct EntryPointInterface
+{
+  EntryPointInterface(const Metadata *entryPoint);
+
+  struct Signature
+  {
+    Signature(const Metadata *signature);
+    rdcstr name;
+    ComponentType type;
+    D3D_INTERPOLATION_MODE interpolation;
+    uint32_t rows;
+    uint32_t cols;
+    int32_t startRow;
+    int32_t startCol;
+  };
+
+  struct ResourceBase
+  {
+    ResourceBase(const Metadata *resourceBase);
+    uint32_t id;
+    const Type *type;
+    rdcstr name;
+    uint32_t space;
+    uint32_t regBase;
+    uint32_t regCount;
+  };
+
+  struct SRV : ResourceBase
+  {
+    SRV(const Metadata *srv);
+    ResourceKind shape;
+    uint32_t sampleCount;
+    ComponentType compType;
+    uint32_t elementStride;
+  };
+
+  struct UAV : ResourceBase
+  {
+    UAV(const Metadata *uav);
+    ResourceKind shape;
+    bool globallCoherent;
+    bool hasCounter;
+    bool rasterizerOrderedView;
+    ComponentType compType;
+    uint32_t elementStride;
+    SamplerFeedbackType samplerFeedback;
+    bool atomic64Use;
+  };
+
+  struct CBuffer : ResourceBase
+  {
+    CBuffer(const Metadata *cbuffer);
+    uint32_t sizeInBytes;
+    bool isTBuffer;
+    const DXBC::CBuffer *cbufferRefl;
+  };
+
+  struct Sampler : ResourceBase
+  {
+    Sampler(const Metadata *sampler);
+    SamplerKind samplerType;
+  };
+
+  rdcstr name;
+  const Type *function;
+  rdcarray<Signature> inputs;
+  rdcarray<Signature> outputs;
+  rdcarray<Signature> patchConstants;
+  rdcarray<SRV> srvs;
+  rdcarray<UAV> uavs;
+  rdcarray<CBuffer> cbuffers;
+  rdcarray<Sampler> samplers;
+};
+
 class Program : public DXBC::IDebugInfo
 {
 public:
@@ -1110,17 +1231,17 @@ public:
   const bytebuf &GetBytes() const { return m_Bytes; }
   void FetchComputeProperties(DXBC::Reflection *reflection);
   DXBC::Reflection *GetReflection();
+  rdcarray<ShaderEntryPoint> GetEntryPoints();
+  void FillRayPayloads(
+      Program *executable,
+      rdcflatmap<ShaderEntryPoint, rdcpair<DXBC::CBufferVariableType, DXBC::CBufferVariableType>>
+          &rayPayloads);
 
   DXBC::ShaderType GetShaderType() const { return m_Type; }
   uint32_t GetMajorVersion() const { return m_Major; }
   uint32_t GetMinorVersion() const { return m_Minor; }
   D3D_PRIMITIVE_TOPOLOGY GetOutputTopology();
-  const rdcstr &GetDisassembly()
-  {
-    if(m_Disassembly.empty())
-      MakeDisassemblyString();
-    return m_Disassembly;
-  }
+  const rdcstr &GetDisassembly(bool dxcStyle, const DXBC::Reflection *reflection);
 
   // IDebugInfo interface
 
@@ -1138,7 +1259,9 @@ public:
   const Metadata *GetMetadataByName(const rdcstr &name) const;
   uint32_t GetDirectHeapAcessCount() const { return m_directHeapAccessCount; }
 protected:
-  void MakeDisassemblyString();
+  void SettleIDs();
+  void MakeDXCDisassemblyString();
+  void MakeRDDisassemblyString(const DXBC::Reflection *reflection);
 
   void ParseConstant(ValueList &values, const LLVMBC::BlockOrRecord &constant);
   bool ParseDebugMetaRecord(MetadataList &metadata, const LLVMBC::BlockOrRecord &metaRecord,
@@ -1149,9 +1272,21 @@ protected:
   rdcstr GetValueSymtabString(Value *v);
   void SetValueSymtabString(Value *v, const rdcstr &s);
 
-  uint32_t GetOrAssignMetaSlot(rdcarray<Metadata *> &metaSlots, uint32_t &nextMetaSlot, Metadata *m);
-  uint32_t GetOrAssignMetaSlot(rdcarray<Metadata *> &metaSlots, uint32_t &nextMetaSlot,
-                               DebugLocation &l);
+  uint32_t GetMetaSlot(const Metadata *m) const;
+  void AssignMetaSlot(rdcarray<Metadata *> &metaSlots, uint32_t &nextMetaSlot, Metadata *m);
+  uint32_t GetMetaSlot(const DebugLocation *l) const;
+  void AssignMetaSlot(rdcarray<Metadata *> &metaSlots, uint32_t &nextMetaSlot, DebugLocation &l);
+
+  void FetchEntryPointInterfaces(rdcarray<EntryPointInterface> &entryPointInterfaces);
+  const Metadata *FindMetadata(uint32_t slot) const;
+  rdcstr ArgToString(const Value *v, bool withTypes, const rdcstr &attrString = "") const;
+  rdcstr DisassembleComDats(int &instructionLine) const;
+  rdcstr DisassembleTypes(int &instructionLine) const;
+  rdcstr DisassembleGlobalVars(int &instructionLine) const;
+  rdcstr DisassembleNamedMeta() const;
+  rdcstr DisassembleFuncAttrGroups() const;
+  rdcstr DisassembleMeta() const;
+  void DisassemblyAddNewLine(int countLines = 1);
 
   const Type *GetVoidType() { return m_VoidType; }
   const Type *GetBoolType() { return m_BoolType; }
@@ -1199,11 +1334,19 @@ protected:
 
   rdcarray<DebugLocation> m_DebugLocations;
 
+  LLVMOrderAccumulator m_Accum;
+  rdcarray<Metadata *> m_MetaSlots;
+  rdcarray<const AttributeGroup *> m_FuncAttrGroups;
+  uint32_t m_NextMetaSlot = 0;
+
   bool m_Uselists = false;
+  bool m_DXCStyle = false;
+  bool m_SettledIDs = false;
 
   rdcstr m_Triple, m_Datalayout;
 
   rdcstr m_Disassembly;
+  int m_DisassemblyInstructionLine;
 
   friend struct OpReader;
   friend class LLVMOrderAccumulator;
@@ -1212,51 +1355,6 @@ protected:
 bool needsEscaping(const rdcstr &name);
 rdcstr escapeString(const rdcstr &str);
 rdcstr escapeStringIfNeeded(const rdcstr &name);
-
-class LLVMOrderAccumulator
-{
-public:
-  // types in id order
-  rdcarray<const Type *> types;
-  // types in disassembly print order
-  rdcarray<const Type *> printOrderTypes;
-  // values in id order
-  rdcarray<const Value *> values;
-  // metadata in id order
-  rdcarray<const Metadata *> metadata;
-
-  size_t firstConst;
-  size_t numConsts;
-
-  void processGlobals(Program *p, bool doLiveChecking);
-
-  size_t firstFuncConst;
-  size_t numFuncConsts;
-
-  void processFunction(Function *f);
-  void exitFunction();
-
-private:
-  size_t functionWaterMark;
-  bool sortConsts = true;
-  bool liveChecking = false;
-
-  void reset(GlobalVar *g);
-  void reset(Alias *a);
-  void reset(Constant *c);
-  void reset(Metadata *m);
-  void reset(Function *f);
-  void reset(Block *b);
-  void reset(Instruction *i);
-  void reset(Value *v);
-
-  void accumulate(const Value *v);
-  void accumulate(const Metadata *m);
-  void accumulateTypePrintOrder(const Type *t);
-  void accumulateTypePrintOrder(rdcarray<const Metadata *> &visited, const Metadata *m);
-  void assignTypeId(const Type *t);
-  void assignTypeId(const Constant *c);
-};
 
 };    // namespace DXIL
 

@@ -619,43 +619,7 @@ D3D12Descriptor D3D12DebugAPIWrapper::FindDescriptor(DXBCBytecode::OperandType t
       {
         if(samp.RegisterSpace == slot.registerSpace && samp.ShaderRegister == slot.shaderRegister)
         {
-          D3D12_SAMPLER_DESC2 desc;
-
-          desc.Filter = samp.Filter;
-          desc.AddressU = samp.AddressU;
-          desc.AddressV = samp.AddressV;
-          desc.AddressW = samp.AddressW;
-          desc.MipLODBias = samp.MipLODBias;
-          desc.MaxAnisotropy = samp.MaxAnisotropy;
-          desc.ComparisonFunc = samp.ComparisonFunc;
-          switch(samp.BorderColor)
-          {
-            default:
-            case D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK:
-              desc.FloatBorderColor[0] = desc.FloatBorderColor[1] = desc.FloatBorderColor[2] =
-                  desc.FloatBorderColor[3] = 0.0f;
-              break;
-            case D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK:
-              desc.FloatBorderColor[0] = desc.FloatBorderColor[1] = desc.FloatBorderColor[2] = 0.0f;
-              desc.FloatBorderColor[3] = 1.0f;
-              break;
-            case D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE:
-              desc.FloatBorderColor[0] = desc.FloatBorderColor[1] = desc.FloatBorderColor[2] =
-                  desc.FloatBorderColor[3] = 1.0f;
-              break;
-            case D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK_UINT:
-              desc.UintBorderColor[0] = desc.UintBorderColor[1] = desc.UintBorderColor[2] = 0;
-              desc.UintBorderColor[3] = 1;
-              break;
-            case D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE_UINT:
-              desc.UintBorderColor[0] = desc.UintBorderColor[1] = desc.UintBorderColor[2] =
-                  desc.UintBorderColor[3] = 1;
-              break;
-          }
-          desc.MinLOD = samp.MinLOD;
-          desc.MaxLOD = samp.MaxLOD;
-          desc.Flags = samp.Flags;
-
+          D3D12_SAMPLER_DESC2 desc = ConvertStaticSampler(samp);
           descriptor.Init(&desc);
           return descriptor;
         }
@@ -1416,8 +1380,7 @@ bool D3D12DebugAPIWrapper::CalculateSampleGather(
 
 void GatherConstantBuffers(WrappedID3D12Device *pDevice, const DXBCBytecode::Program &program,
                            const D3D12RenderState::RootSignature &rootsig,
-                           const ShaderReflection &refl, const ShaderBindpointMapping &mapping,
-                           DXBCDebug::GlobalState &global,
+                           const ShaderReflection &refl, DXBCDebug::GlobalState &global,
                            rdcarray<SourceVariableMapping> &sourceVars)
 {
   WrappedID3D12RootSignature *pD3D12RootSig =
@@ -1438,7 +1401,7 @@ void GatherConstantBuffers(WrappedID3D12Device *pDevice, const DXBCBytecode::Pro
         UINT sizeBytes = sizeof(uint32_t) * RDCMIN(rootSigParam.Constants.Num32BitValues,
                                                    (UINT)element.constants.size());
         bytebuf cbufData((const byte *)element.constants.data(), sizeBytes);
-        AddCBufferToGlobalState(program, global, sourceVars, refl, mapping, slot, cbufData);
+        AddCBufferToGlobalState(program, global, sourceVars, refl, slot, cbufData);
       }
       else if(rootSigParam.ParameterType == D3D12_ROOT_PARAMETER_TYPE_CBV && element.type == eRootCBV)
       {
@@ -1447,7 +1410,7 @@ void GatherConstantBuffers(WrappedID3D12Device *pDevice, const DXBCBytecode::Pro
         ID3D12Resource *cbv = pDevice->GetResourceManager()->GetCurrentAs<ID3D12Resource>(element.id);
         bytebuf cbufData;
         pDevice->GetDebugManager()->GetBufferData(cbv, element.offset, 0, cbufData);
-        AddCBufferToGlobalState(program, global, sourceVars, refl, mapping, slot, cbufData);
+        AddCBufferToGlobalState(program, global, sourceVars, refl, slot, cbufData);
       }
       else if(rootSigParam.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE &&
               element.type == eRootTable)
@@ -1503,7 +1466,7 @@ void GatherConstantBuffers(WrappedID3D12Device *pDevice, const DXBCBytecode::Pro
             if(cbv.SizeInBytes > 0)
               pDevice->GetDebugManager()->GetBufferData(pCbvResource, byteOffset, cbv.SizeInBytes,
                                                         cbufData);
-            AddCBufferToGlobalState(program, global, sourceVars, refl, mapping, slot, cbufData);
+            AddCBufferToGlobalState(program, global, sourceVars, refl, slot, cbufData);
 
             desc++;
           }
@@ -1556,7 +1519,7 @@ ShaderDebugTrace *D3D12Replay::DebugVertex(uint32_t eventId, uint32_t vertid, ui
     return new ShaderDebugTrace;
   }
 
-  dxbc->GetDisassembly();
+  dxbc->GetDisassembly(true);
 
   const ActionDescription *action = m_pDevice->GetAction(eventId);
 
@@ -1629,13 +1592,13 @@ ShaderDebugTrace *D3D12Replay::DebugVertex(uint32_t eventId, uint32_t vertid, ui
 
   InterpretDebugger *interpreter = new InterpretDebugger;
   interpreter->eventId = eventId;
-  ShaderDebugTrace *ret = interpreter->BeginDebug(dxbc, refl, vs->GetMapping(), 0);
+  ShaderDebugTrace *ret = interpreter->BeginDebug(dxbc, refl, 0);
   GlobalState &global = interpreter->global;
   ThreadState &state = interpreter->activeLane();
 
   // Fetch constant buffer data from root signature
-  GatherConstantBuffers(m_pDevice, *dxbc->GetDXBCByteCode(), rs.graphics, refl,
-                        pso->VS()->GetMapping(), global, ret->sourceVars);
+  GatherConstantBuffers(m_pDevice, *dxbc->GetDXBCByteCode(), rs.graphics, refl, global,
+                        ret->sourceVars);
 
   for(size_t i = 0; i < state.inputs.size(); i++)
   {
@@ -1938,7 +1901,7 @@ ShaderDebugTrace *D3D12Replay::DebugPixel(uint32_t eventId, uint32_t x, uint32_t
     return new ShaderDebugTrace;
   }
 
-  dxbc->GetDisassembly();
+  dxbc->GetDisassembly(true);
 
   // Fetch the previous stage's disassembly, to match outputs to PS inputs
   DXBCContainer *prevDxbc = NULL;
@@ -2606,13 +2569,13 @@ void ExtractInputsPS(PSInput IN,
 
   InterpretDebugger *interpreter = new InterpretDebugger;
   interpreter->eventId = eventId;
-  ShaderDebugTrace *ret = interpreter->BeginDebug(dxbc, refl, origPSO->PS()->GetMapping(), destIdx);
+  ShaderDebugTrace *ret = interpreter->BeginDebug(dxbc, refl, destIdx);
   GlobalState &global = interpreter->global;
   ThreadState &state = interpreter->activeLane();
 
   // Fetch constant buffer data from root signature
-  GatherConstantBuffers(m_pDevice, *dxbc->GetDXBCByteCode(), rs.graphics, refl,
-                        origPSO->PS()->GetMapping(), global, ret->sourceVars);
+  GatherConstantBuffers(m_pDevice, *dxbc->GetDXBCByteCode(), rs.graphics, refl, global,
+                        ret->sourceVars);
 
   global.sampleEvalRegisterMask = sampleEvalRegisterMask;
 
@@ -2762,16 +2725,16 @@ ShaderDebugTrace *D3D12Replay::DebugThread(uint32_t eventId,
     return new ShaderDebugTrace;
   }
 
-  dxbc->GetDisassembly();
+  dxbc->GetDisassembly(true);
 
   InterpretDebugger *interpreter = new InterpretDebugger;
   interpreter->eventId = eventId;
-  ShaderDebugTrace *ret = interpreter->BeginDebug(dxbc, refl, pso->CS()->GetMapping(), 0);
+  ShaderDebugTrace *ret = interpreter->BeginDebug(dxbc, refl, 0);
   GlobalState &global = interpreter->global;
   ThreadState &state = interpreter->activeLane();
 
-  GatherConstantBuffers(m_pDevice, *dxbc->GetDXBCByteCode(), rs.compute, refl,
-                        pso->CS()->GetMapping(), global, ret->sourceVars);
+  GatherConstantBuffers(m_pDevice, *dxbc->GetDXBCByteCode(), rs.compute, refl, global,
+                        ret->sourceVars);
 
   for(int i = 0; i < 3; i++)
   {

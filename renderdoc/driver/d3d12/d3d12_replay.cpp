@@ -73,6 +73,18 @@ void D3D12Replay::Shutdown()
 
   SAFE_DELETE(m_RGP);
 
+  if(m_DevConfig)
+  {
+    SAFE_RELEASE(m_DevConfig->debug);
+    SAFE_RELEASE(m_DevConfig->devconfig);
+    SAFE_RELEASE(m_DevConfig->devfactory);
+
+    m_DevConfig->sdkconfig->FreeUnusedSDKs();
+    SAFE_RELEASE(m_DevConfig->sdkconfig);
+    SAFE_DELETE(m_DevConfig);
+  }
+
+  // this destroys the replay object
   m_pDevice->Release();
 
   // the this pointer is free'd after this point
@@ -90,9 +102,10 @@ void D3D12Replay::Shutdown()
   }
 }
 
-void D3D12Replay::Initialise(IDXGIFactory1 *factory)
+void D3D12Replay::Initialise(IDXGIFactory1 *factory, D3D12DevConfiguration *config)
 {
   m_pFactory = factory;
+  m_DevConfig = config;
 
   RDCEraseEl(m_DriverInfo);
 
@@ -302,7 +315,6 @@ APIProperties D3D12Replay::GetAPIProperties()
   ret.localRenderer = GraphicsAPI::D3D12;
   ret.vendor = m_DriverInfo.vendor;
   ret.degraded = false;
-  ret.shadersMutable = false;
   ret.rgpCapture =
       (m_DriverInfo.vendor == GPUVendor::AMD || m_DriverInfo.vendor == GPUVendor::Samsung) &&
       m_RGP != NULL && m_RGP->DriverSupportsInterop();
@@ -349,6 +361,16 @@ ResourceDescription &D3D12Replay::GetResourceDesc(ResourceId id)
 rdcarray<ResourceDescription> D3D12Replay::GetResources()
 {
   return m_Resources;
+}
+
+rdcarray<DescriptorStoreDescription> D3D12Replay::GetDescriptorStores()
+{
+  return m_DescriptorStores;
+}
+
+void D3D12Replay::RegisterDescriptorStore(const DescriptorStoreDescription &desc)
+{
+  m_DescriptorStores.push_back(desc);
 }
 
 rdcarray<BufferDescription> D3D12Replay::GetBuffers()
@@ -515,7 +537,7 @@ rdcarray<rdcstr> D3D12Replay::GetDisassemblyTargets(bool withPipeline)
 {
   rdcarray<rdcstr> ret;
 
-  // DXBC is always first
+  // DXBC/DXIL is always first
   ret.push_back(DXBCDXILDisassemblyTarget);
 
   if(!m_ISAChecked && m_TexRender.BlendPipe)
@@ -559,7 +581,7 @@ rdcstr D3D12Replay::DisassembleShader(ResourceId pipeline, const ShaderReflectio
   DXBC::DXBCContainer *dxbc = sh->GetDXBC();
 
   if(target == DXBCDXILDisassemblyTarget || target.empty())
-    return dxbc->GetDisassembly();
+    return dxbc->GetDisassembly(true);
 
   if(target == LiveDriverDisassemblyTarget)
   {
@@ -696,955 +718,444 @@ rdcarray<EventUsage> D3D12Replay::GetUsage(ResourceId id)
   return m_pDevice->GetQueue()->GetUsage(id);
 }
 
-void D3D12Replay::FillResourceView(D3D12Pipe::View &view, const D3D12Descriptor *desc)
+void D3D12Replay::FillDescriptor(Descriptor &dst, const D3D12Descriptor *src)
 {
   D3D12ResourceManager *rm = m_pDevice->GetResourceManager();
 
-  if(desc->GetType() == D3D12DescriptorType::Sampler || desc->GetType() == D3D12DescriptorType::CBV)
+  if(src->GetType() == D3D12DescriptorType::Sampler || src->GetType() == D3D12DescriptorType::CBV)
   {
     return;
   }
 
-  if(desc->GetHeap()->HasValidViewCache(desc->GetHeapIndex()))
+  if(src->GetHeap()->HasValidDescriptorCache(src->GetHeapIndex()))
   {
-    desc->GetHeap()->GetFromViewCache(desc->GetHeapIndex(), view);
+    src->GetHeap()->GetFromDescriptorCache(src->GetHeapIndex(), dst);
     return;
   }
 
-  view.resourceId = rm->GetOriginalID(desc->GetResResourceId());
+  dst.resource = rm->GetOriginalID(src->GetResResourceId());
 
-  if(view.resourceId == ResourceId())
+  if(dst.resource == ResourceId())
   {
-    desc->GetHeap()->SetToViewCache(desc->GetHeapIndex(), view);
-    return;
+    // TLASs annoyingly don't have a resource
+    if(src->GetType() != D3D12DescriptorType::SRV ||
+       src->GetSRV().ViewDimension != D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE)
+    {
+      src->GetHeap()->GetFromDescriptorCache(src->GetHeapIndex(), dst);
+      return;
+    }
   }
 
-  D3D12_RESOURCE_DESC res;
+  D3D12_RESOURCE_DESC res = {};
 
   {
-    ID3D12Resource *r = rm->GetCurrentAs<ID3D12Resource>(desc->GetResResourceId());
-    res = r->GetDesc();
+    ID3D12Resource *r = rm->GetCurrentAs<ID3D12Resource>(src->GetResResourceId());
+    if(r)
+      res = r->GetDesc();
   }
 
   {
     DXGI_FORMAT fmt = DXGI_FORMAT_UNKNOWN;
 
-    if(desc->GetType() == D3D12DescriptorType::RTV)
+    uint64_t firstElement = UINT64_MAX;
+    uint32_t numElements = UINT32_MAX;
+
+    if(src->GetType() == D3D12DescriptorType::SRV)
     {
-      const D3D12_RENDER_TARGET_VIEW_DESC &rtv = desc->GetRTV();
-
-      fmt = rtv.Format;
-
-      view.type = MakeTextureDim(rtv.ViewDimension);
-
-      if(rtv.ViewDimension == D3D12_RTV_DIMENSION_BUFFER)
-      {
-        view.firstElement = rtv.Buffer.FirstElement;
-        view.numElements = rtv.Buffer.NumElements;
-      }
-      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE1D)
-      {
-        view.firstMip = rtv.Texture1D.MipSlice & 0xff;
-        view.numMips = 1;
-        view.firstSlice = 0;
-        view.numSlices = 1;
-      }
-      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE1DARRAY)
-      {
-        view.firstMip = rtv.Texture1DArray.MipSlice & 0xff;
-        view.numMips = 1;
-        view.numSlices = rtv.Texture1DArray.ArraySize & 0xffff;
-        view.firstSlice = rtv.Texture1DArray.FirstArraySlice & 0xffff;
-      }
-      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE2D)
-      {
-        view.firstMip = rtv.Texture2D.MipSlice & 0xff;
-        view.numMips = 1;
-        view.firstSlice = 0;
-        view.numSlices = 1;
-      }
-      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE2DARRAY)
-      {
-        view.numSlices = rtv.Texture2DArray.ArraySize & 0xffff;
-        view.firstSlice = rtv.Texture2DArray.FirstArraySlice & 0xffff;
-        view.firstMip = rtv.Texture2DArray.MipSlice & 0xff;
-        view.numMips = 1;
-      }
-      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE2DMS)
-      {
-        view.firstMip = 0;
-        view.numMips = 1;
-        view.firstSlice = 0;
-        view.numSlices = 1;
-      }
-      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY)
-      {
-        view.firstMip = 0;
-        view.numMips = 1;
-        view.numSlices = rtv.Texture2DMSArray.ArraySize & 0xffff;
-        view.firstSlice = rtv.Texture2DMSArray.FirstArraySlice & 0xffff;
-      }
-      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE3D)
-      {
-        view.numSlices = rtv.Texture3D.WSize & 0xffff;
-        view.firstSlice = rtv.Texture3D.FirstWSlice & 0xffff;
-        view.firstMip = rtv.Texture3D.MipSlice & 0xff;
-        view.numMips = 1;
-      }
-    }
-    else if(desc->GetType() == D3D12DescriptorType::DSV)
-    {
-      const D3D12_DEPTH_STENCIL_VIEW_DESC &dsv = desc->GetDSV();
-
-      fmt = dsv.Format;
-
-      view.type = MakeTextureDim(dsv.ViewDimension);
-
-      if(dsv.ViewDimension == D3D12_DSV_DIMENSION_TEXTURE1D)
-      {
-        view.firstMip = dsv.Texture1D.MipSlice & 0xff;
-      }
-      else if(dsv.ViewDimension == D3D12_DSV_DIMENSION_TEXTURE1DARRAY)
-      {
-        view.numSlices = dsv.Texture1DArray.ArraySize & 0xffff;
-        view.firstSlice = dsv.Texture1DArray.FirstArraySlice & 0xffff;
-        view.firstMip = dsv.Texture1DArray.MipSlice & 0xff;
-      }
-      else if(dsv.ViewDimension == D3D12_DSV_DIMENSION_TEXTURE2D)
-      {
-        view.firstMip = dsv.Texture2D.MipSlice & 0xff;
-      }
-      else if(dsv.ViewDimension == D3D12_DSV_DIMENSION_TEXTURE2DARRAY)
-      {
-        view.numSlices = dsv.Texture2DArray.ArraySize & 0xffff;
-        view.firstSlice = dsv.Texture2DArray.FirstArraySlice & 0xffff;
-        view.firstMip = dsv.Texture2DArray.MipSlice & 0xff;
-      }
-      else if(dsv.ViewDimension == D3D12_DSV_DIMENSION_TEXTURE2DMS)
-      {
-      }
-      else if(dsv.ViewDimension == D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY)
-      {
-        view.numSlices = dsv.Texture2DMSArray.ArraySize & 0xffff;
-        view.firstSlice = dsv.Texture2DMSArray.FirstArraySlice & 0xffff;
-      }
-    }
-    else if(desc->GetType() == D3D12DescriptorType::SRV)
-    {
-      D3D12_SHADER_RESOURCE_VIEW_DESC srv = desc->GetSRV();
+      D3D12_SHADER_RESOURCE_VIEW_DESC srv = src->GetSRV();
 
       if(srv.ViewDimension == D3D12_SRV_DIMENSION_UNKNOWN)
         srv = MakeSRVDesc(res);
 
+      if(srv.ViewDimension == D3D12_SRV_DIMENSION_BUFFER)
+        dst.type = DescriptorType::TypedBuffer;
+      else
+        dst.type = DescriptorType::Image;
+
       fmt = srv.Format;
 
-      view.type = MakeTextureDim(srv.ViewDimension);
+      dst.textureType = MakeTextureDim(srv.ViewDimension);
 
-      view.swizzle.red =
+      dst.swizzle.red =
           (TextureSwizzle)D3D12_DECODE_SHADER_4_COMPONENT_MAPPING(0, srv.Shader4ComponentMapping);
-      view.swizzle.green =
+      dst.swizzle.green =
           (TextureSwizzle)D3D12_DECODE_SHADER_4_COMPONENT_MAPPING(1, srv.Shader4ComponentMapping);
-      view.swizzle.blue =
+      dst.swizzle.blue =
           (TextureSwizzle)D3D12_DECODE_SHADER_4_COMPONENT_MAPPING(2, srv.Shader4ComponentMapping);
-      view.swizzle.alpha =
+      dst.swizzle.alpha =
           (TextureSwizzle)D3D12_DECODE_SHADER_4_COMPONENT_MAPPING(3, srv.Shader4ComponentMapping);
 
       if(srv.ViewDimension == D3D12_SRV_DIMENSION_BUFFER)
       {
-        view.firstElement = srv.Buffer.FirstElement;
-        view.numElements = srv.Buffer.NumElements;
+        firstElement = srv.Buffer.FirstElement;
+        numElements = srv.Buffer.NumElements;
 
-        view.bufferFlags = MakeBufferFlags(srv.Buffer.Flags);
+        dst.flags = MakeDescriptorFlags(srv.Buffer.Flags);
         if(srv.Buffer.StructureByteStride > 0)
-          view.elementByteSize = srv.Buffer.StructureByteStride;
+        {
+          dst.elementByteSize = srv.Buffer.StructureByteStride;
+          dst.type = DescriptorType::Buffer;
+        }
+      }
+      else if(srv.ViewDimension == D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE)
+      {
+        dst.type = DescriptorType::AccelerationStructure;
+
+        ResourceId asID;
+        WrappedID3D12Resource::GetResIDFromAddr(srv.RaytracingAccelerationStructure.Location, asID,
+                                                dst.byteOffset);
+
+        WrappedID3D12Resource *asRes = rm->GetCurrentAs<WrappedID3D12Resource>(asID);
+
+        // we *should* get an AS here
+        D3D12AccelerationStructure *as = NULL;
+        asRes->GetAccStructIfExist(dst.byteOffset, &as);
+
+        if(as)
+        {
+          dst.resource = rm->GetOriginalID(as->GetResourceID());
+          dst.byteOffset = 0;
+          dst.byteSize = as->Size();
+        }
+        else
+        {
+          dst.resource = rm->GetOriginalID(asID);
+        }
       }
       else if(srv.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE1D)
       {
-        view.firstMip = srv.Texture1D.MostDetailedMip & 0xff;
-        view.numMips = srv.Texture1D.MipLevels & 0xff;
-        view.minLODClamp = srv.Texture1D.ResourceMinLODClamp;
+        dst.firstMip = srv.Texture1D.MostDetailedMip & 0xff;
+        dst.numMips = srv.Texture1D.MipLevels & 0xff;
+        dst.minLODClamp = srv.Texture1D.ResourceMinLODClamp;
       }
       else if(srv.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE1DARRAY)
       {
-        view.numSlices = srv.Texture1DArray.ArraySize & 0xffff;
-        view.firstSlice = srv.Texture1DArray.FirstArraySlice & 0xffff;
-        view.firstMip = srv.Texture1DArray.MostDetailedMip & 0xff;
-        view.numMips = srv.Texture1DArray.MipLevels & 0xff;
-        view.minLODClamp = srv.Texture1DArray.ResourceMinLODClamp;
+        dst.numSlices = srv.Texture1DArray.ArraySize & 0xffff;
+        dst.firstSlice = srv.Texture1DArray.FirstArraySlice & 0xffff;
+        dst.firstMip = srv.Texture1DArray.MostDetailedMip & 0xff;
+        dst.numMips = srv.Texture1DArray.MipLevels & 0xff;
+        dst.minLODClamp = srv.Texture1DArray.ResourceMinLODClamp;
       }
       else if(srv.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2D)
       {
-        view.firstMip = srv.Texture2D.MostDetailedMip & 0xff;
-        view.numMips = srv.Texture2D.MipLevels & 0xff;
-        view.minLODClamp = srv.Texture2D.ResourceMinLODClamp;
+        dst.firstMip = srv.Texture2D.MostDetailedMip & 0xff;
+        dst.numMips = srv.Texture2D.MipLevels & 0xff;
+        dst.minLODClamp = srv.Texture2D.ResourceMinLODClamp;
       }
       else if(srv.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DARRAY)
       {
-        view.numSlices = srv.Texture2DArray.ArraySize & 0xffff;
-        view.firstSlice = srv.Texture2DArray.FirstArraySlice & 0xffff;
-        view.firstMip = srv.Texture2DArray.MostDetailedMip & 0xff;
-        view.numMips = srv.Texture2DArray.MipLevels & 0xff;
-        view.minLODClamp = srv.Texture2DArray.ResourceMinLODClamp;
+        dst.numSlices = srv.Texture2DArray.ArraySize & 0xffff;
+        dst.firstSlice = srv.Texture2DArray.FirstArraySlice & 0xffff;
+        dst.firstMip = srv.Texture2DArray.MostDetailedMip & 0xff;
+        dst.numMips = srv.Texture2DArray.MipLevels & 0xff;
+        dst.minLODClamp = srv.Texture2DArray.ResourceMinLODClamp;
       }
       else if(srv.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DMS)
       {
       }
       else if(srv.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY)
       {
-        view.numSlices = srv.Texture2DMSArray.ArraySize & 0xffff;
-        view.firstSlice = srv.Texture2DMSArray.FirstArraySlice & 0xffff;
+        dst.numSlices = srv.Texture2DMSArray.ArraySize & 0xffff;
+        dst.firstSlice = srv.Texture2DMSArray.FirstArraySlice & 0xffff;
       }
       else if(srv.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE3D)
       {
-        view.firstMip = srv.Texture3D.MostDetailedMip & 0xff;
-        view.numMips = srv.Texture3D.MipLevels & 0xff;
-        view.minLODClamp = srv.Texture3D.ResourceMinLODClamp;
+        dst.firstMip = srv.Texture3D.MostDetailedMip & 0xff;
+        dst.numMips = srv.Texture3D.MipLevels & 0xff;
+        dst.minLODClamp = srv.Texture3D.ResourceMinLODClamp;
       }
       else if(srv.ViewDimension == D3D12_SRV_DIMENSION_TEXTURECUBE)
       {
-        view.numSlices = 6;
-        view.firstMip = srv.TextureCube.MostDetailedMip & 0xff;
-        view.numMips = srv.TextureCube.MipLevels & 0xff;
-        view.minLODClamp = srv.TextureCube.ResourceMinLODClamp;
+        dst.numSlices = 6;
+        dst.firstMip = srv.TextureCube.MostDetailedMip & 0xff;
+        dst.numMips = srv.TextureCube.MipLevels & 0xff;
+        dst.minLODClamp = srv.TextureCube.ResourceMinLODClamp;
       }
       else if(srv.ViewDimension == D3D12_SRV_DIMENSION_TEXTURECUBEARRAY)
       {
-        view.numSlices = (srv.TextureCubeArray.NumCubes * 6) & 0xffff;
-        view.firstSlice = srv.TextureCubeArray.First2DArrayFace & 0xffff;
-        view.firstMip = srv.TextureCubeArray.MostDetailedMip & 0xff;
-        view.numMips = srv.TextureCubeArray.MipLevels & 0xff;
-        view.minLODClamp = srv.TextureCube.ResourceMinLODClamp;
+        dst.numSlices = (srv.TextureCubeArray.NumCubes * 6) & 0xffff;
+        dst.firstSlice = srv.TextureCubeArray.First2DArrayFace & 0xffff;
+        dst.firstMip = srv.TextureCubeArray.MostDetailedMip & 0xff;
+        dst.numMips = srv.TextureCubeArray.MipLevels & 0xff;
+        dst.minLODClamp = srv.TextureCube.ResourceMinLODClamp;
       }
     }
-    else if(desc->GetType() == D3D12DescriptorType::UAV)
+    else if(src->GetType() == D3D12DescriptorType::UAV)
     {
-      D3D12_UNORDERED_ACCESS_VIEW_DESC uav = desc->GetUAV();
+      D3D12_UNORDERED_ACCESS_VIEW_DESC uav = src->GetUAV();
 
       if(uav.ViewDimension == D3D12_UAV_DIMENSION_UNKNOWN)
         uav = MakeUAVDesc(res);
 
+      if(uav.ViewDimension == D3D12_UAV_DIMENSION_BUFFER)
+        dst.type = uav.Format != DXGI_FORMAT_UNKNOWN ? DescriptorType::ReadWriteTypedBuffer
+                                                     : DescriptorType::ReadWriteBuffer;
+      else
+        dst.type = DescriptorType::ReadWriteImage;
+
       fmt = uav.Format;
 
-      view.counterResourceId = rm->GetOriginalID(desc->GetCounterResourceId());
+      dst.secondary = rm->GetOriginalID(src->GetCounterResourceId());
 
-      view.type = MakeTextureDim(uav.ViewDimension);
+      dst.textureType = MakeTextureDim(uav.ViewDimension);
 
       if(uav.ViewDimension == D3D12_UAV_DIMENSION_BUFFER)
       {
-        view.firstElement = uav.Buffer.FirstElement;
-        view.numElements = uav.Buffer.NumElements;
+        firstElement = uav.Buffer.FirstElement;
+        numElements = uav.Buffer.NumElements;
 
-        view.bufferFlags = MakeBufferFlags(uav.Buffer.Flags);
+        dst.flags = MakeDescriptorFlags(uav.Buffer.Flags);
         if(uav.Buffer.StructureByteStride > 0)
-          view.elementByteSize = uav.Buffer.StructureByteStride;
+          dst.elementByteSize = uav.Buffer.StructureByteStride;
 
-        view.counterByteOffset = uav.Buffer.CounterOffsetInBytes & 0xffffffff;
+        dst.counterByteOffset = uav.Buffer.CounterOffsetInBytes & 0xffffffff;
         RDCASSERT(uav.Buffer.CounterOffsetInBytes < 0xffffffff);
 
-        if(view.counterResourceId != ResourceId())
+        if(dst.secondary != ResourceId())
         {
           bytebuf counterVal;
           GetDebugManager()->GetBufferData(
-              rm->GetCurrentAs<ID3D12Resource>(desc->GetCounterResourceId()),
+              rm->GetCurrentAs<ID3D12Resource>(src->GetCounterResourceId()),
               uav.Buffer.CounterOffsetInBytes, 4, counterVal);
           uint32_t *val = (uint32_t *)&counterVal[0];
-          view.bufferStructCount = *val;
+          dst.bufferStructCount = *val;
         }
       }
       else if(uav.ViewDimension == D3D12_UAV_DIMENSION_TEXTURE1D)
       {
-        view.firstMip = uav.Texture1D.MipSlice & 0xff;
+        dst.firstMip = uav.Texture1D.MipSlice & 0xff;
       }
       else if(uav.ViewDimension == D3D12_UAV_DIMENSION_TEXTURE1DARRAY)
       {
-        view.numSlices = uav.Texture1DArray.ArraySize & 0xffff;
-        view.firstSlice = uav.Texture1DArray.FirstArraySlice & 0xffff;
-        view.firstMip = uav.Texture1DArray.MipSlice & 0xff;
+        dst.numSlices = uav.Texture1DArray.ArraySize & 0xffff;
+        dst.firstSlice = uav.Texture1DArray.FirstArraySlice & 0xffff;
+        dst.firstMip = uav.Texture1DArray.MipSlice & 0xff;
       }
       else if(uav.ViewDimension == D3D12_UAV_DIMENSION_TEXTURE2D)
       {
-        view.firstMip = uav.Texture2D.MipSlice & 0xff;
+        dst.firstMip = uav.Texture2D.MipSlice & 0xff;
       }
       else if(uav.ViewDimension == D3D12_UAV_DIMENSION_TEXTURE2DARRAY)
       {
-        view.numSlices = uav.Texture2DArray.ArraySize & 0xffff;
-        view.firstSlice = uav.Texture2DArray.FirstArraySlice & 0xffff;
-        view.firstMip = uav.Texture2DArray.MipSlice & 0xff;
+        dst.numSlices = uav.Texture2DArray.ArraySize & 0xffff;
+        dst.firstSlice = uav.Texture2DArray.FirstArraySlice & 0xffff;
+        dst.firstMip = uav.Texture2DArray.MipSlice & 0xff;
       }
       else if(uav.ViewDimension == D3D12_UAV_DIMENSION_TEXTURE2DMS)
       {
       }
       else if(uav.ViewDimension == D3D12_UAV_DIMENSION_TEXTURE2DMSARRAY)
       {
-        view.numSlices = uav.Texture2DMSArray.ArraySize & 0xffff;
-        view.firstSlice = uav.Texture2DMSArray.FirstArraySlice & 0xffff;
+        dst.numSlices = uav.Texture2DMSArray.ArraySize & 0xffff;
+        dst.firstSlice = uav.Texture2DMSArray.FirstArraySlice & 0xffff;
       }
       else if(uav.ViewDimension == D3D12_UAV_DIMENSION_TEXTURE3D)
       {
-        view.numSlices = uav.Texture3D.WSize & 0xffff;
-        view.firstSlice = uav.Texture3D.FirstWSlice & 0xffff;
-        view.firstMip = uav.Texture3D.MipSlice & 0xff;
+        dst.numSlices = uav.Texture3D.WSize & 0xffff;
+        dst.firstSlice = uav.Texture3D.FirstWSlice & 0xffff;
+        dst.firstMip = uav.Texture3D.MipSlice & 0xff;
+      }
+    }
+    else if(src->GetType() == D3D12DescriptorType::RTV)
+    {
+      D3D12_RENDER_TARGET_VIEW_DESC rtv = src->GetRTV();
+
+      if(rtv.ViewDimension == D3D12_RTV_DIMENSION_BUFFER)
+        dst.type = rtv.Format != DXGI_FORMAT_UNKNOWN ? DescriptorType::ReadWriteTypedBuffer
+                                                     : DescriptorType::ReadWriteBuffer;
+      else
+        dst.type = DescriptorType::ReadWriteImage;
+
+      fmt = rtv.Format;
+
+      dst.secondary = rm->GetOriginalID(src->GetCounterResourceId());
+
+      dst.textureType = MakeTextureDim(rtv.ViewDimension);
+
+      if(rtv.ViewDimension == D3D12_RTV_DIMENSION_BUFFER)
+      {
+        firstElement = rtv.Buffer.FirstElement;
+        numElements = rtv.Buffer.NumElements;
+      }
+      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE1D)
+      {
+        dst.firstMip = rtv.Texture1D.MipSlice & 0xff;
+      }
+      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE1DARRAY)
+      {
+        dst.numSlices = rtv.Texture1DArray.ArraySize & 0xffff;
+        dst.firstSlice = rtv.Texture1DArray.FirstArraySlice & 0xffff;
+        dst.firstMip = rtv.Texture1DArray.MipSlice & 0xff;
+      }
+      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE2D)
+      {
+        dst.firstMip = rtv.Texture2D.MipSlice & 0xff;
+      }
+      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE2DARRAY)
+      {
+        dst.numSlices = rtv.Texture2DArray.ArraySize & 0xffff;
+        dst.firstSlice = rtv.Texture2DArray.FirstArraySlice & 0xffff;
+        dst.firstMip = rtv.Texture2DArray.MipSlice & 0xff;
+      }
+      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE2DMS)
+      {
+      }
+      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY)
+      {
+        dst.numSlices = rtv.Texture2DMSArray.ArraySize & 0xffff;
+        dst.firstSlice = rtv.Texture2DMSArray.FirstArraySlice & 0xffff;
+      }
+      else if(rtv.ViewDimension == D3D12_RTV_DIMENSION_TEXTURE3D)
+      {
+        dst.numSlices = rtv.Texture3D.WSize & 0xffff;
+        dst.firstSlice = rtv.Texture3D.FirstWSlice & 0xffff;
+        dst.firstMip = rtv.Texture3D.MipSlice & 0xff;
+      }
+    }
+    else if(src->GetType() == D3D12DescriptorType::DSV)
+    {
+      D3D12_DEPTH_STENCIL_VIEW_DESC dsv = src->GetDSV();
+
+      dst.type = DescriptorType::ReadWriteImage;
+
+      fmt = dsv.Format;
+
+      dst.secondary = rm->GetOriginalID(src->GetCounterResourceId());
+
+      dst.textureType = MakeTextureDim(dsv.ViewDimension);
+      if(dsv.ViewDimension == D3D12_DSV_DIMENSION_TEXTURE1D)
+      {
+        dst.firstMip = dsv.Texture1D.MipSlice & 0xff;
+      }
+      else if(dsv.ViewDimension == D3D12_DSV_DIMENSION_TEXTURE1DARRAY)
+      {
+        dst.numSlices = dsv.Texture1DArray.ArraySize & 0xffff;
+        dst.firstSlice = dsv.Texture1DArray.FirstArraySlice & 0xffff;
+        dst.firstMip = dsv.Texture1DArray.MipSlice & 0xff;
+      }
+      else if(dsv.ViewDimension == D3D12_DSV_DIMENSION_TEXTURE2D)
+      {
+        dst.firstMip = dsv.Texture2D.MipSlice & 0xff;
+      }
+      else if(dsv.ViewDimension == D3D12_DSV_DIMENSION_TEXTURE2DARRAY)
+      {
+        dst.numSlices = dsv.Texture2DArray.ArraySize & 0xffff;
+        dst.firstSlice = dsv.Texture2DArray.FirstArraySlice & 0xffff;
+        dst.firstMip = dsv.Texture2DArray.MipSlice & 0xff;
+      }
+      else if(dsv.ViewDimension == D3D12_DSV_DIMENSION_TEXTURE2DMS)
+      {
+      }
+      else if(dsv.ViewDimension == D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY)
+      {
+        dst.numSlices = dsv.Texture2DMSArray.ArraySize & 0xffff;
+        dst.firstSlice = dsv.Texture2DMSArray.FirstArraySlice & 0xffff;
       }
     }
 
     if(fmt == DXGI_FORMAT_UNKNOWN)
       fmt = res.Format;
 
-    if(view.elementByteSize == 0)
-      view.elementByteSize = fmt == DXGI_FORMAT_UNKNOWN ? 1 : GetByteSize(1, 1, 1, fmt, 0);
+    if(dst.elementByteSize == 0)
+      dst.elementByteSize = fmt == DXGI_FORMAT_UNKNOWN ? 1 : GetByteSize(1, 1, 1, fmt, 0);
+
+    // decode elements into byte offsets
+    if(firstElement != UINT64_MAX)
+    {
+      dst.byteOffset = firstElement * dst.elementByteSize;
+      dst.byteSize = numElements * dst.elementByteSize;
+    }
 
     if(res.MipLevels == 0 && res.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER)
       res.MipLevels = (uint16_t)CalcNumMips(
           (uint32_t)res.Width, res.Height,
           res.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? res.DepthOrArraySize : 1);
-    view.numMips = RDCMIN(view.numMips, uint8_t(res.MipLevels & 0xff));
-    view.numSlices = RDCMIN(view.numSlices, res.DepthOrArraySize);
+    dst.numMips = RDCMIN(dst.numMips, uint8_t(res.MipLevels & 0xff));
+    dst.numSlices = RDCMIN(dst.numSlices, res.DepthOrArraySize);
 
-    view.viewFormat = MakeResourceFormat(fmt);
+    dst.format = MakeResourceFormat(fmt);
   }
 
-  desc->GetHeap()->SetToViewCache(desc->GetHeapIndex(), view);
+  src->GetHeap()->SetToDescriptorCache(src->GetHeapIndex(), dst);
 }
 
-void D3D12Replay::FillSampler(D3D12Pipe::Sampler &samp, const D3D12_SAMPLER_DESC2 &sampDesc)
+void D3D12Replay::FillSamplerDescriptor(SamplerDescriptor &dst, const D3D12_SAMPLER_DESC2 &src)
 {
-  samp.addressU = MakeAddressMode(sampDesc.AddressU);
-  samp.addressV = MakeAddressMode(sampDesc.AddressV);
-  samp.addressW = MakeAddressMode(sampDesc.AddressW);
+  dst.type = DescriptorType::Sampler;
 
-  samp.borderColorValue.uintValue = sampDesc.UintBorderColor;
-  samp.borderColorType =
-      ((sampDesc.Flags & D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR) != 0 ? CompType::UInt
-                                                                    : CompType::Float);
+  dst.addressU = MakeAddressMode(src.AddressU);
+  dst.addressV = MakeAddressMode(src.AddressV);
+  dst.addressW = MakeAddressMode(src.AddressW);
 
-  samp.unnormalized = (sampDesc.Flags & D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES) != 0;
+  dst.borderColorValue.uintValue = src.UintBorderColor;
+  dst.borderColorType =
+      ((src.Flags & D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR) != 0 ? CompType::UInt : CompType::Float);
 
-  samp.compareFunction = MakeCompareFunc(sampDesc.ComparisonFunc);
-  samp.filter = MakeFilter(sampDesc.Filter);
-  samp.maxAnisotropy = 0;
-  if(samp.filter.minify == FilterMode::Anisotropic)
-    samp.maxAnisotropy = sampDesc.MaxAnisotropy;
-  samp.maxLOD = sampDesc.MaxLOD;
-  samp.minLOD = sampDesc.MinLOD;
-  samp.mipLODBias = sampDesc.MipLODBias;
+  dst.unnormalized = (src.Flags & D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES) != 0;
+
+  dst.compareFunction = MakeCompareFunc(src.ComparisonFunc);
+  dst.filter = MakeFilter(src.Filter);
+  dst.maxAnisotropy = 0;
+  if(dst.filter.minify == FilterMode::Anisotropic)
+    dst.maxAnisotropy = (float)src.MaxAnisotropy;
+  dst.maxLOD = src.MaxLOD;
+  dst.minLOD = src.MinLOD;
+  dst.mipBias = src.MipLODBias;
 }
 
-ShaderStageMask ToShaderStageMask(D3D12_SHADER_VISIBILITY vis)
+void D3D12Replay::FillRootDescriptor(Descriptor &dst, const D3D12RenderState::SignatureElement &src)
 {
-  switch(vis)
-  {
-    case D3D12_SHADER_VISIBILITY_ALL: return ShaderStageMask::All;
-    case D3D12_SHADER_VISIBILITY_VERTEX: return ShaderStageMask::Vertex;
-    case D3D12_SHADER_VISIBILITY_HULL: return ShaderStageMask::Hull;
-    case D3D12_SHADER_VISIBILITY_DOMAIN: return ShaderStageMask::Domain;
-    case D3D12_SHADER_VISIBILITY_GEOMETRY: return ShaderStageMask::Geometry;
-    case D3D12_SHADER_VISIBILITY_PIXEL: return ShaderStageMask::Pixel;
-    case D3D12_SHADER_VISIBILITY_AMPLIFICATION: return ShaderStageMask::Amplification;
-    case D3D12_SHADER_VISIBILITY_MESH: return ShaderStageMask::Mesh;
-    default: return ShaderStageMask::Unknown;
-  }
-}
-
-void D3D12Replay::FillRootElements(uint32_t eventId, const D3D12RenderState::RootSignature &rootSig,
-                                   const ShaderBindpointMapping *mappings[NumShaderStages],
-                                   rdcarray<D3D12Pipe::RootSignatureRange> &rootElements)
-{
-  if(rootSig.rootsig == ResourceId())
-    return;
-
   D3D12ResourceManager *rm = m_pDevice->GetResourceManager();
 
-  const D3D12DynamicShaderFeedback &usage = m_BindlessFeedback.Usage[eventId];
-
-  const D3D12FeedbackBindIdentifier *curUsage = usage.used.begin();
-  const D3D12FeedbackBindIdentifier *lastUsage = usage.used.end();
-  D3D12FeedbackBindIdentifier curIdentifier = {};
-
-  WrappedID3D12RootSignature *sig =
-      m_pDevice->GetResourceManager()->GetCurrentAs<WrappedID3D12RootSignature>(rootSig.rootsig);
-
-  size_t numReserve = sig->sig.Parameters.size() + sig->sig.StaticSamplers.size();
-
-  for(size_t rootEl = 0; rootEl < sig->sig.Parameters.size(); rootEl++)
-    if(sig->sig.Parameters[rootEl].ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE)
-      numReserve += sig->sig.Parameters[rootEl].ranges.size();
-
-  rootElements.reserve(numReserve);
-
-  size_t ridx = 0;
-
-  for(size_t rootEl = 0; rootEl < sig->sig.Parameters.size(); rootEl++)
+  if(src.type == eRootCBV)
   {
-    curIdentifier.rootEl = rootEl;
+    dst.type = DescriptorType::ConstantBuffer;
 
-    const D3D12RootSignatureParameter &p = sig->sig.Parameters[rootEl];
+    ID3D12Resource *buf = rm->GetCurrentAs<ID3D12Resource>(src.id);
 
-    if(p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS)
-    {
-      rootElements.resize_for_index(ridx);
-      D3D12Pipe::RootSignatureRange &element = rootElements[ridx++];
-      element.immediate = true;
-      element.rootSignatureIndex = (uint32_t)rootEl;
-      element.type = BindType::ConstantBuffer;
-      element.registerSpace = p.Constants.RegisterSpace;
-      element.visibility = ToShaderStageMask(p.ShaderVisibility);
-
-      element.samplers.clear();
-      element.constantBuffers.clear();
-      element.views.clear();
-
-      element.constantBuffers.push_back(D3D12Pipe::ConstantBuffer(p.Constants.ShaderRegister));
-      D3D12Pipe::ConstantBuffer &cb = element.constantBuffers.back();
-      cb.resourceId = ResourceId();
-      cb.byteOffset = 0;
-      cb.byteSize = uint32_t(sizeof(uint32_t) * p.Constants.Num32BitValues);
-
-      if(rootEl < rootSig.sigelems.size())
-      {
-        const D3D12RenderState::SignatureElement &e = rootSig.sigelems[rootEl];
-        if(e.type == eRootConst)
-          cb.rootValues.assign(e.constants.data(),
-                               RDCMIN(e.constants.size(), (size_t)p.Constants.Num32BitValues));
-      }
-
-      if(cb.rootValues.empty())
-        cb.rootValues.resize(p.Constants.Num32BitValues);
-    }
-    else if(p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_CBV)
-    {
-      rootElements.resize_for_index(ridx);
-      D3D12Pipe::RootSignatureRange &element = rootElements[ridx++];
-      element.immediate = true;
-      element.rootSignatureIndex = (uint32_t)rootEl;
-      element.type = BindType::ConstantBuffer;
-      element.registerSpace = p.Descriptor.RegisterSpace;
-      element.visibility = ToShaderStageMask(p.ShaderVisibility);
-
-      element.samplers.clear();
-      element.constantBuffers.clear();
-      element.views.clear();
-
-      element.constantBuffers.push_back(D3D12Pipe::ConstantBuffer(p.Descriptor.ShaderRegister));
-      D3D12Pipe::ConstantBuffer &cb = element.constantBuffers.back();
-
-      if(rootEl < rootSig.sigelems.size())
-      {
-        const D3D12RenderState::SignatureElement &e = rootSig.sigelems[rootEl];
-        if(e.type == eRootCBV)
-        {
-          ID3D12Resource *res = rm->GetCurrentAs<ID3D12Resource>(e.id);
-
-          cb.resourceId = rm->GetOriginalID(e.id);
-          cb.byteOffset = e.offset;
-          if(res)
-            cb.byteSize = uint32_t(res->GetDesc().Width - cb.byteOffset);
-          else
-            cb.byteSize = 0;
-        }
-      }
-    }
-    else if(p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_SRV)
-    {
-      rootElements.resize_for_index(ridx);
-      D3D12Pipe::RootSignatureRange &element = rootElements[ridx++];
-      element.immediate = true;
-      element.rootSignatureIndex = (uint32_t)rootEl;
-      element.type = BindType::ReadOnlyResource;
-      element.registerSpace = p.Descriptor.RegisterSpace;
-      element.visibility = ToShaderStageMask(p.ShaderVisibility);
-
-      element.samplers.clear();
-      element.constantBuffers.clear();
-      element.views.clear();
-
-      element.views.push_back(D3D12Pipe::View(p.Descriptor.ShaderRegister));
-      D3D12Pipe::View &view = element.views.back();
-
-      view.dynamicallyUsed = true;
-
-      if(rootEl < rootSig.sigelems.size())
-      {
-        const D3D12RenderState::SignatureElement &e = rootSig.sigelems[rootEl];
-        if(e.type == eRootSRV)
-        {
-          ID3D12Resource *res = rm->GetCurrentAs<ID3D12Resource>(e.id);
-
-          // parameters from resource/view
-          view.resourceId = rm->GetOriginalID(e.id);
-          view.type = TextureType::Buffer;
-          view.viewFormat = MakeResourceFormat(DXGI_FORMAT_R32_UINT);
-
-          view.elementByteSize = sizeof(uint32_t);
-          view.firstElement = e.offset / sizeof(uint32_t);
-          if(res)
-            view.numElements = uint32_t((res->GetDesc().Width - e.offset) / sizeof(uint32_t));
-          else
-            view.numElements = 0;
-        }
-      }
-    }
-    else if(p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_UAV)
-    {
-      rootElements.resize_for_index(ridx);
-      D3D12Pipe::RootSignatureRange &element = rootElements[ridx++];
-      element.immediate = true;
-      element.rootSignatureIndex = (uint32_t)rootEl;
-      element.type = BindType::ReadWriteResource;
-      element.registerSpace = p.Descriptor.RegisterSpace;
-      element.visibility = ToShaderStageMask(p.ShaderVisibility);
-
-      element.samplers.clear();
-      element.constantBuffers.clear();
-      element.views.clear();
-
-      element.views.push_back(D3D12Pipe::View(p.Descriptor.ShaderRegister));
-      D3D12Pipe::View &view = element.views.back();
-
-      view.dynamicallyUsed = true;
-
-      if(rootEl < rootSig.sigelems.size())
-      {
-        const D3D12RenderState::SignatureElement &e = rootSig.sigelems[rootEl];
-        if(e.type == eRootUAV)
-        {
-          ID3D12Resource *res = rm->GetCurrentAs<ID3D12Resource>(e.id);
-
-          // parameters from resource/view
-          view.resourceId = rm->GetOriginalID(e.id);
-          view.type = TextureType::Buffer;
-          view.viewFormat = MakeResourceFormat(DXGI_FORMAT_R32_UINT);
-
-          view.elementByteSize = sizeof(uint32_t);
-          view.firstElement = e.offset / sizeof(uint32_t);
-          if(res)
-            view.numElements = uint32_t((res->GetDesc().Width - e.offset) / sizeof(uint32_t));
-          else
-            view.numElements = 0;
-        }
-      }
-    }
-    else if(p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE)
-    {
-      const D3D12RenderState::SignatureElement *e = NULL;
-      WrappedID3D12DescriptorHeap *heap = NULL;
-
-      if(rootEl < rootSig.sigelems.size() && rootSig.sigelems[rootEl].type == eRootTable)
-      {
-        e = &rootSig.sigelems[rootEl];
-
-        heap = rm->GetCurrentAs<WrappedID3D12DescriptorHeap>(e->id);
-      }
-
-      UINT prevTableOffset = 0;
-
-      for(size_t r = 0; r < p.ranges.size(); r++)
-      {
-        const D3D12_DESCRIPTOR_RANGE1 &range = p.ranges[r];
-
-        curIdentifier.rangeIndex = r;
-
-        // Here we diverge slightly from how root signatures store data. A descriptor table can
-        // contain multiple ranges which can each contain different types. D3D12Pipe treats
-        // each range as a separate RootElement
-        rootElements.resize_for_index(ridx);
-        D3D12Pipe::RootSignatureRange &element = rootElements[ridx++];
-
-        element.immediate = false;
-        element.rootSignatureIndex = (uint32_t)rootEl;
-        element.registerSpace = range.RegisterSpace;
-        element.visibility = ToShaderStageMask(p.ShaderVisibility);
-
-        element.samplers.clear();
-        element.constantBuffers.clear();
-        element.views.clear();
-
-        UINT shaderReg = range.BaseShaderRegister;
-
-        D3D12Descriptor *desc = NULL;
-
-        UINT offset = range.OffsetInDescriptorsFromTableStart;
-
-        if(range.OffsetInDescriptorsFromTableStart == D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND)
-          offset = prevTableOffset;
-
-        UINT num = range.NumDescriptors;
-
-        if(heap)
-        {
-          desc = (D3D12Descriptor *)heap->GetCPUDescriptorHandleForHeapStart().ptr;
-          const D3D12Descriptor *endDesc = desc + heap->GetNumDescriptors();
-          desc += e->offset;
-          desc += offset;
-
-          if(desc >= endDesc)
-          {
-            RDCERR("Binding points past end of corresponding heap.");
-            num = 0;
-          }
-          else if(desc + num >= endDesc)
-          {
-            const UINT availDescriptors = UINT(endDesc - desc);
-
-            const Bindpoint *highestBind = NULL;
-            UINT maxBindReg = shaderReg + availDescriptors;
-
-            // Find shader binds that map any or all of this range to see if we can trim it
-            for(ShaderStage stage = ShaderStage::Vertex; stage < ShaderStage::Count; ++stage)
-            {
-              const ShaderBindpointMapping *mapping = mappings[(uint32_t)stage];
-              if((element.visibility & MaskForStage(stage)) != ShaderStageMask::Unknown)
-              {
-                // This range is visible to this shader stage, check its mappings
-                const rdcarray<Bindpoint> &bps = range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_UAV
-                                                     ? mapping->readWriteResources
-                                                     : mapping->readOnlyResources;
-                for(size_t b = 0; b < bps.size(); ++b)
-                {
-                  if(bps[b].bindset == (int32_t)element.registerSpace &&
-                     bps[b].bind >= (int32_t)shaderReg)
-                  {
-                    UINT bindEnd = bps[b].arraySize == ~0U ? ~0U : bps[b].bind + bps[b].arraySize;
-                    if(highestBind == NULL || bindEnd > maxBindReg)
-                    {
-                      highestBind = &bps[b];
-                      maxBindReg = bindEnd;
-                    }
-                  }
-                }
-              }
-            }
-
-            // If we didn't find a bindpoint, this will evaluate to simply availDescriptors - the
-            // number of remaining entries in the heap. If we did find a bind in this range, it
-            // will trim to the max register used by bindings in the range.
-            num = RDCMIN(availDescriptors, maxBindReg - shaderReg);
-          }
-        }
-        else if(num == UINT_MAX)
-        {
-          RDCWARN(
-              "Heap not available on replay with unbounded descriptor range, clamping to 1 "
-              "descriptor.");
-          num = 1;
-        }
-
-        prevTableOffset = offset + num;
-
-        if(range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER)
-        {
-          element.type = BindType::Sampler;
-
-          element.samplers.reserve(num);
-
-          for(UINT i = 0; i < num; i++, shaderReg++)
-          {
-            element.samplers.push_back(D3D12Pipe::Sampler(shaderReg));
-            D3D12Pipe::Sampler &samp = element.samplers.back();
-            samp.tableIndex = offset + i;
-
-            if(desc)
-            {
-              const D3D12_SAMPLER_DESC2 &sampDesc = desc->GetSampler();
-              FillSampler(samp, sampDesc);
-              desc++;
-            }
-          }
-        }
-        else if(range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_CBV)
-        {
-          element.type = BindType::ConstantBuffer;
-
-          element.constantBuffers.reserve(num);
-
-          for(UINT i = 0; i < num; i++, shaderReg++)
-          {
-            element.constantBuffers.push_back(D3D12Pipe::ConstantBuffer(shaderReg));
-            D3D12Pipe::ConstantBuffer &cb = element.constantBuffers.back();
-            cb.tableIndex = offset + i;
-
-            if(desc)
-            {
-              const D3D12_CONSTANT_BUFFER_VIEW_DESC &cbv = desc->GetCBV();
-              WrappedID3D12Resource::GetResIDFromAddr(cbv.BufferLocation, cb.resourceId,
-                                                      cb.byteOffset);
-              cb.resourceId = rm->GetOriginalID(cb.resourceId);
-              cb.byteSize = cbv.SizeInBytes;
-
-              desc++;
-            }
-          }
-        }
-        else if(range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SRV ||
-                range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_UAV)
-        {
-          if(range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SRV)
-            element.type = BindType::ReadOnlyResource;
-          else
-            element.type = BindType::ReadWriteResource;
-
-          element.firstUsedIndex = -1;
-          element.lastUsedIndex = -1;
-          element.dynamicallyUsedCount = 0;
-
-          element.views.reserve(num);
-
-          for(UINT i = 0; i < num; i++, shaderReg++)
-          {
-            element.views.push_back(D3D12Pipe::View(shaderReg));
-            D3D12Pipe::View &view = element.views.back();
-            view.tableIndex = offset + i;
-
-            if(usage.valid)
-            {
-              curIdentifier.descIndex = i;
-
-              // if the usage data is valid we expect entries for all descriptors that are used.
-              // Note that because of the messed up root signature/binding split, some of these
-              // entries will just be statically inserted and not actually from dynamic feedback
-              //
-              // usage data is only valid when at least one array exists to have feedback
-              if(curUsage >= lastUsage)
-              {
-                // if we exhausted the list, all other elements are unused
-                view.dynamicallyUsed = false;
-              }
-              else
-              {
-                // we never saw the current value of curUsage (which is odd, we should have
-                // when iterating over all descriptors. This could only happen if there's some
-                // layout mismatch or a feedback bug that lead to an invalid entry in the list).
-                // Keep advancing until we get to one that is >= our current bind
-                while(*curUsage < curIdentifier && curUsage < lastUsage)
-                {
-                  curUsage++;
-                }
-
-                // the next used bind is equal to this one. Mark it as dynamically used, and consume
-                if(curUsage < lastUsage && *curUsage == curIdentifier)
-                {
-                  view.dynamicallyUsed = true;
-                  curUsage++;
-                }
-                // the next used bind is after the current one, this is not used.
-                else if(curUsage < lastUsage && curIdentifier < *curUsage)
-                {
-                  view.dynamicallyUsed = false;
-                }
-              }
-            }
-            else
-            {
-              view.dynamicallyUsed = true;
-            }
-
-            if(view.dynamicallyUsed)
-            {
-              element.dynamicallyUsedCount++;
-              // we iterate in forward order, so we can unconditinoally set the last bind to the
-              // current one, and only set the first bind if we haven't encountered one before
-              element.lastUsedIndex = i;
-
-              if(element.firstUsedIndex < 0)
-                element.firstUsedIndex = i;
-            }
-
-            if(desc)
-            {
-              FillResourceView(view, desc);
-              desc++;
-            }
-          }
-
-          // if no bindings were set these will still be negative. Set them to something sensible.
-          if(element.firstUsedIndex < 0)
-          {
-            element.firstUsedIndex = 0;
-            element.lastUsedIndex = 0x7fffffff;
-          }
-        }
-      }
-    }
-  }
-
-  // direct heap access resources
-  {
-    D3D12RenderState &rs = m_pDevice->GetQueue()->GetCommandData()->m_RenderState;
-    WrappedID3D12DescriptorHeap *resourceHeap = NULL;
-    WrappedID3D12DescriptorHeap *samplerHeap = NULL;
-    for(ResourceId id : rs.heaps)
-    {
-      WrappedID3D12DescriptorHeap *heap =
-          (WrappedID3D12DescriptorHeap *)rm->GetCurrentAs<ID3D12DescriptorHeap>(id);
-      D3D12_DESCRIPTOR_HEAP_DESC desc = heap->GetDesc();
-      if(desc.Type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
-        resourceHeap = heap;
-      else
-        samplerHeap = heap;
-    }
-
-    D3D12Pipe::RootSignatureRange *element = NULL;
-    while(curUsage < lastUsage && curUsage->directAccess)
-    {
-      ShaderStageMask visibility = (ShaderStageMask)(1 << (int)curUsage->shaderStage);
-      if(element == NULL || (element->visibility != visibility) ||
-         (element->type != curUsage->bindType))
-      {
-        rootElements.resize_for_index(ridx);
-        element = &rootElements[ridx++];
-        element->immediate = false;
-        element->rootSignatureIndex = ~0U;
-        element->type = curUsage->bindType;
-        element->visibility = visibility;
-        element->registerSpace = ~0U;
-        element->dynamicallyUsedCount = 0;
-        element->samplers.clear();
-        element->constantBuffers.clear();
-        element->views.clear();
-      }
-      if(curUsage->bindType == BindType::Sampler)
-      {
-        if(samplerHeap)
-        {
-          D3D12Descriptor *desc =
-              (D3D12Descriptor *)samplerHeap->GetCPUDescriptorHandleForHeapStart().ptr;
-          desc += curUsage->descIndex;
-          element->samplers.push_back(D3D12Pipe::Sampler());
-          D3D12Pipe::Sampler &samp = element->samplers.back();
-          const D3D12_SAMPLER_DESC2 &sampDesc = desc->GetSampler();
-          FillSampler(samp, sampDesc);
-          samp.tableIndex = curUsage->descIndex;
-          element->dynamicallyUsedCount++;
-        }
-        else
-        {
-          RDCERR("Access to sampler heap detected with no sampler heap bound");
-        }
-      }
-      else if(curUsage->bindType == BindType::ConstantBuffer)
-      {
-        if(resourceHeap)
-        {
-          D3D12Descriptor *desc =
-              (D3D12Descriptor *)resourceHeap->GetCPUDescriptorHandleForHeapStart().ptr;
-          desc += curUsage->descIndex;
-          element->constantBuffers.push_back(D3D12Pipe::ConstantBuffer());
-          D3D12Pipe::ConstantBuffer &cb = element->constantBuffers.back();
-
-          const D3D12_CONSTANT_BUFFER_VIEW_DESC &cbv = desc->GetCBV();
-          WrappedID3D12Resource::GetResIDFromAddr(cbv.BufferLocation, cb.resourceId, cb.byteOffset);
-          cb.resourceId = rm->GetOriginalID(cb.resourceId);
-          cb.byteSize = cbv.SizeInBytes;
-          cb.tableIndex = curUsage->descIndex;
-          element->dynamicallyUsedCount++;
-        }
-        else
-        {
-          RDCERR("Access to resource heap detected with no resource heap bound");
-        }
-      }
-      else
-      {
-        if(resourceHeap)
-        {
-          D3D12Descriptor *desc =
-              (D3D12Descriptor *)resourceHeap->GetCPUDescriptorHandleForHeapStart().ptr;
-          desc += curUsage->descIndex;
-          D3D12Pipe::View view;
-          FillResourceView(view, desc);
-          view.tableIndex = curUsage->descIndex;
-          element->views.push_back(view);
-          element->dynamicallyUsedCount++;
-        }
-        else
-        {
-          RDCERR("Access to resource heap detected with no resource heap bound");
-        }
-      }
-      curUsage++;
-    }
-  }
-
-  // Each static sampler gets its own RootElement
-  for(size_t i = 0; i < sig->sig.StaticSamplers.size(); i++)
-  {
-    D3D12_STATIC_SAMPLER_DESC1 &sampDesc = sig->sig.StaticSamplers[i];
-
-    rootElements.resize_for_index(ridx);
-    D3D12Pipe::RootSignatureRange &element = rootElements[ridx++];
-    element.immediate = true;
-    element.rootSignatureIndex = (uint32_t)i;
-    element.type = BindType::Sampler;
-    element.registerSpace = sampDesc.RegisterSpace;
-    element.visibility = ToShaderStageMask(sampDesc.ShaderVisibility);
-
-    element.samplers.clear();
-    element.constantBuffers.clear();
-    element.views.clear();
-
-    element.samplers.push_back(D3D12Pipe::Sampler(sampDesc.ShaderRegister));
-    D3D12Pipe::Sampler &samp = element.samplers[0];
-
-    samp.addressU = MakeAddressMode(sampDesc.AddressU);
-    samp.addressV = MakeAddressMode(sampDesc.AddressV);
-    samp.addressW = MakeAddressMode(sampDesc.AddressW);
-
-    samp.borderColorType = CompType::Float;
-
-    if(sampDesc.BorderColor == D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK)
-    {
-      samp.borderColorValue.floatValue[0] = 0.0f;
-      samp.borderColorValue.floatValue[1] = 0.0f;
-      samp.borderColorValue.floatValue[2] = 0.0f;
-      samp.borderColorValue.floatValue[3] = 0.0f;
-    }
-    else if(sampDesc.BorderColor == D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK)
-    {
-      samp.borderColorValue.floatValue[0] = 0.0f;
-      samp.borderColorValue.floatValue[1] = 0.0f;
-      samp.borderColorValue.floatValue[2] = 0.0f;
-      samp.borderColorValue.floatValue[3] = 1.0f;
-    }
-    else if(sampDesc.BorderColor == D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE)
-    {
-      samp.borderColorValue.floatValue[0] = 1.0f;
-      samp.borderColorValue.floatValue[1] = 1.0f;
-      samp.borderColorValue.floatValue[2] = 1.0f;
-      samp.borderColorValue.floatValue[3] = 1.0f;
-    }
-    else if(sampDesc.BorderColor == D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK_UINT)
-    {
-      samp.borderColorValue.uintValue[0] = 0;
-      samp.borderColorValue.uintValue[1] = 0;
-      samp.borderColorValue.uintValue[2] = 0;
-      samp.borderColorValue.uintValue[3] = 1;
-      samp.borderColorType = CompType::UInt;
-    }
-    else if(sampDesc.BorderColor == D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE_UINT)
-    {
-      samp.borderColorValue.uintValue[0] = 1;
-      samp.borderColorValue.uintValue[1] = 1;
-      samp.borderColorValue.uintValue[2] = 1;
-      samp.borderColorValue.uintValue[3] = 1;
-      samp.borderColorType = CompType::UInt;
-    }
+    dst.resource = rm->GetOriginalID(src.id);
+    dst.byteOffset = src.offset;
+    if(buf)
+      dst.byteSize = uint32_t(buf->GetDesc().Width - dst.byteOffset);
     else
-    {
-      RDCERR("Unexpected static border colour: %u", sampDesc.BorderColor);
-    }
-
-    samp.unnormalized = (sampDesc.Flags & D3D12_SAMPLER_FLAG_NON_NORMALIZED_COORDINATES) != 0;
-
-    samp.compareFunction = MakeCompareFunc(sampDesc.ComparisonFunc);
-    samp.filter = MakeFilter(sampDesc.Filter);
-    samp.maxAnisotropy = 0;
-    if(samp.filter.minify == FilterMode::Anisotropic)
-      samp.maxAnisotropy = sampDesc.MaxAnisotropy;
-    samp.maxLOD = sampDesc.MaxLOD;
-    samp.minLOD = sampDesc.MinLOD;
-    samp.mipLODBias = sampDesc.MipLODBias;
+      dst.byteSize = 0;
   }
+  else if(src.type == eRootSRV)
+  {
+    dst.type = DescriptorType::Buffer;
 
-  rootElements.resize(ridx);
+    ID3D12Resource *buf = rm->GetCurrentAs<ID3D12Resource>(src.id);
+
+    // parameters from resource/view
+    dst.resource = rm->GetOriginalID(src.id);
+    dst.textureType = TextureType::Buffer;
+    dst.format = MakeResourceFormat(DXGI_FORMAT_R32_UINT);
+
+    dst.elementByteSize = sizeof(uint32_t);
+    dst.byteOffset = src.offset;
+    if(buf)
+      dst.byteSize = uint32_t(buf->GetDesc().Width - src.offset);
+    else
+      dst.byteSize = 0;
+  }
+  else if(src.type == eRootUAV)
+  {
+    dst.type = DescriptorType::ReadWriteBuffer;
+
+    ID3D12Resource *buf = rm->GetCurrentAs<ID3D12Resource>(src.id);
+
+    // parameters from resource/view
+    dst.resource = rm->GetOriginalID(src.id);
+    dst.textureType = TextureType::Buffer;
+    dst.format = MakeResourceFormat(DXGI_FORMAT_R32_UINT);
+
+    dst.elementByteSize = sizeof(uint32_t);
+    dst.byteOffset = src.offset;
+    if(buf)
+      dst.byteSize = uint32_t(buf->GetDesc().Width - src.offset);
+    else
+      dst.byteSize = 0;
+  }
 }
 
 void D3D12Replay::SavePipelineState(uint32_t eventId)
@@ -1737,7 +1248,6 @@ void D3D12Replay::SavePipelineState(uint32_t eventId)
     state.computeShader.resourceId = rm->GetUnreplacedOriginalID(sh->GetResourceID());
     state.computeShader.stage = ShaderStage::Compute;
     state.computeShader.reflection = &sh->GetDetails();
-    state.computeShader.bindpointMapping = sh->GetMapping();
   }
   else if(pipe)
   {
@@ -1780,13 +1290,11 @@ void D3D12Replay::SavePipelineState(uint32_t eventId)
       if(sh)
       {
         dst.resourceId = rm->GetUnreplacedOriginalID(sh->GetResourceID());
-        dst.bindpointMapping = sh->GetMapping();
         dst.reflection = &sh->GetDetails();
       }
       else
       {
         dst.resourceId = ResourceId();
-        dst.bindpointMapping = ShaderBindpointMapping();
         dst.reflection = NULL;
       }
     }
@@ -1796,27 +1304,141 @@ void D3D12Replay::SavePipelineState(uint32_t eventId)
   // Root Signature
   /////////////////////////////////////////////////
   {
-    const ShaderBindpointMapping *mappings[NumShaderStages];
-    mappings[(uint32_t)ShaderStage::Vertex] = &state.vertexShader.bindpointMapping;
-    mappings[(uint32_t)ShaderStage::Hull] = &state.hullShader.bindpointMapping;
-    mappings[(uint32_t)ShaderStage::Domain] = &state.domainShader.bindpointMapping;
-    mappings[(uint32_t)ShaderStage::Geometry] = &state.geometryShader.bindpointMapping;
-    mappings[(uint32_t)ShaderStage::Pixel] = &state.pixelShader.bindpointMapping;
-    mappings[(uint32_t)ShaderStage::Compute] = &state.computeShader.bindpointMapping;
-    mappings[(uint32_t)ShaderStage::Amplification] = &state.ampShader.bindpointMapping;
-    mappings[(uint32_t)ShaderStage::Mesh] = &state.meshShader.bindpointMapping;
+    const D3D12RenderState::RootSignature &sig =
+        (pipe && pipe->IsCompute()) ? rs.compute : rs.graphics;
+    const rdcarray<D3D12RenderState::SignatureElement> &rootElems = sig.sigelems;
 
-    if(pipe && pipe->IsCompute())
+    WrappedID3D12RootSignature *rootSig = rm->GetCurrentAs<WrappedID3D12RootSignature>(sig.rootsig);
+
+    state.rootSignature.resourceId = rm->GetOriginalID(GetResID(rootSig));
+    state.rootSignature.parameters.clear();
+    state.rootSignature.staticSamplers.clear();
+
+    if(rootSig)
     {
-      FillRootElements(eventId, rs.compute, mappings, state.rootElements);
-      state.rootSignatureResourceId = rm->GetOriginalID(rs.compute.rootsig);
-    }
-    else if(pipe)
-    {
-      FillRootElements(eventId, rs.graphics, mappings, state.rootElements);
-      state.rootSignatureResourceId = rm->GetOriginalID(rs.graphics.rootsig);
+      state.rootSignature.parameters.reserve(rootSig->sig.Parameters.size());
+      for(size_t i = 0; i < rootSig->sig.Parameters.size(); i++)
+      {
+        const D3D12RootSignatureParameter &src = rootSig->sig.Parameters[i];
+        D3D12Pipe::RootParam dst;
+        dst.visibility = ConvertVisibility(src.ShaderVisibility);
+
+        switch(src.ParameterType)
+        {
+          case D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE:
+          {
+            if(i < rootElems.size())
+            {
+              dst.heap = rm->GetOriginalID(rootElems[i].id);
+              dst.heapByteOffset = (uint32_t)rootElems[i].offset;
+            }
+
+            UINT prevTableOffset = 0;
+
+            dst.tableRanges.reserve(src.DescriptorTable.NumDescriptorRanges);
+            for(UINT r = 0; r < src.DescriptorTable.NumDescriptorRanges; r++)
+            {
+              const D3D12_DESCRIPTOR_RANGE1 &srcRange = src.DescriptorTable.pDescriptorRanges[r];
+
+              D3D12Pipe::RootTableRange range;
+
+              switch(srcRange.RangeType)
+              {
+                case D3D12_DESCRIPTOR_RANGE_TYPE_CBV:
+                  range.category = DescriptorCategory::ConstantBlock;
+                  break;
+                case D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER:
+                  range.category = DescriptorCategory::Sampler;
+                  break;
+                case D3D12_DESCRIPTOR_RANGE_TYPE_SRV:
+                  range.category = DescriptorCategory::ReadOnlyResource;
+                  break;
+                case D3D12_DESCRIPTOR_RANGE_TYPE_UAV:
+                  range.category = DescriptorCategory::ReadWriteResource;
+                  break;
+              }
+
+              UINT offset = srcRange.OffsetInDescriptorsFromTableStart;
+
+              if(srcRange.OffsetInDescriptorsFromTableStart == D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND)
+              {
+                range.appended = true;
+                offset = prevTableOffset;
+              }
+
+              range.space = srcRange.RegisterSpace;
+              range.baseRegister = srcRange.BaseShaderRegister;
+              range.count = srcRange.NumDescriptors;
+              range.tableByteOffset = offset;
+
+              prevTableOffset = offset + srcRange.NumDescriptors;
+
+              dst.tableRanges.push_back(range);
+            }
+
+            break;
+          }
+          case D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS:
+          {
+            dst.constants.resize(src.Constants.Num32BitValues * 4);
+
+            if(i < rootElems.size())
+            {
+              memcpy(dst.constants.data(), rootElems[i].constants.data(),
+                     RDCMIN(rootElems[i].constants.byteSize(), dst.constants.byteSize()));
+            }
+
+            break;
+          }
+          case D3D12_ROOT_PARAMETER_TYPE_CBV:
+          {
+            dst.descriptor.type = DescriptorType::ConstantBuffer;
+
+            if(i < rootElems.size())
+              FillRootDescriptor(dst.descriptor, rootElems[i]);
+            break;
+
+            case D3D12_ROOT_PARAMETER_TYPE_SRV:
+            {
+              dst.descriptor.type = DescriptorType::Buffer;
+
+              if(i < rootElems.size())
+                FillRootDescriptor(dst.descriptor, rootElems[i]);
+              break;
+            }
+            case D3D12_ROOT_PARAMETER_TYPE_UAV:
+            {
+              dst.descriptor.type = DescriptorType::ReadWriteBuffer;
+
+              if(i < rootElems.size())
+                FillRootDescriptor(dst.descriptor, rootElems[i]);
+              break;
+            }
+          }
+        }
+
+        state.rootSignature.parameters.push_back(std::move(dst));
+      }
+
+      state.rootSignature.staticSamplers.reserve(rootSig->sig.StaticSamplers.size());
+      for(const D3D12_STATIC_SAMPLER_DESC1 &src : rootSig->sig.StaticSamplers)
+      {
+        D3D12Pipe::StaticSampler dst;
+        dst.visibility = ConvertVisibility(src.ShaderVisibility);
+
+        dst.space = src.RegisterSpace;
+        dst.reg = src.ShaderRegister;
+
+        FillSamplerDescriptor(dst.descriptor, ConvertStaticSampler(src));
+
+        state.rootSignature.staticSamplers.push_back(std::move(dst));
+      }
     }
   }
+
+  state.descriptorHeaps.clear();
+  for(ResourceId id : rs.heaps)
+    state.descriptorHeaps.push_back(rm->GetOriginalID(id));
 
   if(pipe && pipe->IsGraphics())
   {
@@ -1949,16 +1571,14 @@ void D3D12Replay::SavePipelineState(uint32_t eventId)
 
       if(desc.GetResResourceId() != ResourceId())
       {
-        state.outputMerger.renderTargets.push_back(D3D12Pipe::View((uint32_t)i));
-        D3D12Pipe::View &view = state.outputMerger.renderTargets.back();
-
-        FillResourceView(view, &desc);
+        state.outputMerger.renderTargets.push_back(Descriptor());
+        FillDescriptor(state.outputMerger.renderTargets.back(), &desc);
       }
     }
 
     if(rs.dsv.GetResResourceId() != ResourceId())
     {
-      FillResourceView(state.outputMerger.depthTarget, &rs.dsv);
+      FillDescriptor(state.outputMerger.depthTarget, &rs.dsv);
 
       state.outputMerger.depthReadOnly = false;
       state.outputMerger.stencilReadOnly = false;
@@ -1970,7 +1590,7 @@ void D3D12Replay::SavePipelineState(uint32_t eventId)
     }
     else
     {
-      state.outputMerger.depthTarget = D3D12Pipe::View(0);
+      state.outputMerger.depthTarget = Descriptor();
 
       state.outputMerger.depthReadOnly = false;
       state.outputMerger.stencilReadOnly = false;
@@ -2066,6 +1686,421 @@ void D3D12Replay::SavePipelineState(uint32_t eventId)
       i++;
     }
   }
+}
+
+rdcarray<Descriptor> D3D12Replay::GetDescriptors(ResourceId descriptorStore,
+                                                 const rdcarray<DescriptorRange> &ranges)
+{
+  if(descriptorStore == ResourceId())
+    return {};
+
+  size_t count = 0;
+  for(const DescriptorRange &r : ranges)
+    count += r.count;
+  rdcarray<Descriptor> ret;
+  ret.resize(count);
+
+  D3D12ResourceManager *rm = m_pDevice->GetResourceManager();
+
+  ID3D12DeviceChild *res = rm->GetCurrentAs<ID3D12DeviceChild>(descriptorStore);
+
+  if(WrappedID3D12RootSignature::IsAlloc(res))
+  {
+    // root signature descriptor storage is for static samplers
+    for(Descriptor &d : ret)
+      d.type = DescriptorType::Sampler;
+    return ret;
+  }
+
+  if(WrappedID3D12PipelineState::IsAlloc(res))
+  {
+    const D3D12RenderState &rs = m_pDevice->GetQueue()->GetCommandData()->m_RenderState;
+
+    WrappedID3D12PipelineState *pipe = (WrappedID3D12PipelineState *)res;
+
+    // root constants
+    size_t dst = 0;
+    for(const DescriptorRange &r : ranges)
+    {
+      uint32_t rootIndex = r.offset;
+
+      for(uint32_t i = 0; i < r.count; i++, rootIndex++, dst++)
+      {
+        const rdcarray<D3D12RenderState::SignatureElement> &rootElems =
+            pipe->IsGraphics() ? rs.graphics.sigelems : rs.compute.sigelems;
+
+        // either the application didn't set some root elements properly, or we're at an event where
+        // the bindings aren't valid
+        if(rootIndex >= rootElems.size())
+          continue;
+
+        const D3D12RenderState::SignatureElement &rootEl = rootElems[rootIndex];
+
+        Descriptor &d = ret[dst];
+
+        if(rootEl.type == eRootConst)
+        {
+          d.type = DescriptorType::ConstantBuffer;
+          d.flags = DescriptorFlags::InlineData;
+          d.view = ResourceId();
+          // we pretend that the pipeline has all root constants appended together as its blob of
+          // data, so calculate local 'offset' into the root constants
+          d.resource = rm->GetOriginalID(descriptorStore);
+
+          d.byteOffset = 0;
+          for(uint32_t root = 0; root < rootIndex; root++)
+            if(rootElems[root].type == eRootConst)
+              d.byteOffset += rootElems[root].constants.byteSize();
+          d.byteSize = rootEl.constants.byteSize();
+        }
+        else
+        {
+          FillRootDescriptor(d, rootEl);
+        }
+      }
+    }
+
+    return ret;
+  }
+
+  if(!WrappedID3D12DescriptorHeap::IsAlloc(res))
+  {
+    RDCERR("Invalid/unrecognised descriptor store %s", ToStr(descriptorStore).c_str());
+    return ret;
+  }
+
+  WrappedID3D12DescriptorHeap *heap = (WrappedID3D12DescriptorHeap *)res;
+
+  size_t dst = 0;
+  for(const DescriptorRange &r : ranges)
+  {
+    D3D12Descriptor *desc = (D3D12Descriptor *)heap->GetCPUDescriptorHandleForHeapStart().ptr;
+    D3D12Descriptor *end = desc + heap->GetNumDescriptors();
+
+    desc += r.offset;
+
+    for(uint32_t i = 0; i < r.count; i++)
+    {
+      if(desc >= end)
+      {
+        // silently drop out of bounds descriptor reads
+      }
+      else if(desc->GetType() == D3D12DescriptorType::CBV)
+      {
+        const D3D12_CONSTANT_BUFFER_VIEW_DESC &cbv = desc->GetCBV();
+        WrappedID3D12Resource::GetResIDFromAddr(cbv.BufferLocation, ret[dst].resource,
+                                                ret[dst].byteOffset);
+
+        ret[dst].resource = rm->GetOriginalID(ret[dst].resource);
+        ret[dst].byteSize = cbv.SizeInBytes;
+      }
+      else if(desc->GetType() == D3D12DescriptorType::Sampler)
+      {
+        ret[dst].type = DescriptorType::Sampler;
+      }
+      else
+      {
+        FillDescriptor(ret[dst], desc);
+      }
+      dst++;
+      desc++;
+    }
+  }
+
+  return ret;
+}
+
+rdcarray<SamplerDescriptor> D3D12Replay::GetSamplerDescriptors(ResourceId descriptorStore,
+                                                               const rdcarray<DescriptorRange> &ranges)
+{
+  if(descriptorStore == ResourceId())
+    return {};
+
+  size_t count = 0;
+  for(const DescriptorRange &r : ranges)
+    count += r.count;
+  rdcarray<SamplerDescriptor> ret;
+  ret.resize(count);
+
+  D3D12ResourceManager *rm = m_pDevice->GetResourceManager();
+
+  ID3D12DeviceChild *res = rm->GetCurrentAs<ID3D12DeviceChild>(descriptorStore);
+
+  if(WrappedID3D12RootSignature::IsAlloc(res))
+  {
+    WrappedID3D12RootSignature *sig = (WrappedID3D12RootSignature *)res;
+    size_t dst = 0;
+    for(const DescriptorRange &r : ranges)
+    {
+      uint32_t staticIdx = r.offset;
+
+      for(uint32_t i = 0; i < r.count; i++)
+      {
+        if(staticIdx >= sig->sig.StaticSamplers.size())
+        {
+          // silently drop out of bounds descriptor reads
+        }
+        else
+        {
+          FillSamplerDescriptor(ret[dst], ConvertStaticSampler(sig->sig.StaticSamplers[staticIdx]));
+          ret[dst].creationTimeConstant = true;
+        }
+        dst++;
+        staticIdx++;
+      }
+    }
+    return ret;
+  }
+
+  if(WrappedID3D12PipelineState::IsAlloc(res))
+  {
+    // root constants, not sampler data
+    return ret;
+  }
+
+  if(!WrappedID3D12DescriptorHeap::IsAlloc(res))
+  {
+    RDCERR("Invalid/unrecognised descriptor store %s", ToStr(descriptorStore).c_str());
+    return ret;
+  }
+
+  WrappedID3D12DescriptorHeap *heap = (WrappedID3D12DescriptorHeap *)res;
+
+  size_t dst = 0;
+  for(const DescriptorRange &r : ranges)
+  {
+    D3D12Descriptor *desc = (D3D12Descriptor *)heap->GetCPUDescriptorHandleForHeapStart().ptr;
+    D3D12Descriptor *end = desc + heap->GetNumDescriptors();
+
+    desc += r.offset;
+
+    for(uint32_t i = 0; i < r.count; i++)
+    {
+      if(desc >= end)
+      {
+        // silently drop out of bounds descriptor reads
+      }
+      else if(desc->GetType() == D3D12DescriptorType::Sampler)
+      {
+        const D3D12_SAMPLER_DESC2 &sampDesc = desc->GetSampler();
+        FillSamplerDescriptor(ret[dst], sampDesc);
+      }
+      dst++;
+      desc++;
+    }
+  }
+
+  return ret;
+}
+
+rdcarray<DescriptorAccess> D3D12Replay::GetDescriptorAccess(uint32_t eventId)
+{
+  const D3D12RenderState &rs = m_pDevice->GetQueue()->GetCommandData()->m_RenderState;
+
+  D3D12ResourceManager *rm = m_pDevice->GetResourceManager();
+
+  WrappedID3D12PipelineState *pipe = NULL;
+
+  if(rs.pipe != ResourceId())
+    pipe = rm->GetCurrentAs<WrappedID3D12PipelineState>(rs.pipe);
+
+  rdcarray<DescriptorAccess> ret;
+
+  if(pipe)
+  {
+    pipe->ProcessDescriptorAccess();
+
+    ret = pipe->staticDescriptorAccess;
+
+    const D3D12DynamicShaderFeedback &usage = m_BindlessFeedback.Usage[eventId];
+
+    if(usage.valid)
+      ret.append(usage.access);
+
+    WrappedID3D12DescriptorHeap *resourceHeap = NULL;
+    WrappedID3D12DescriptorHeap *samplerHeap = NULL;
+    for(ResourceId id : rs.heaps)
+    {
+      WrappedID3D12DescriptorHeap *heap =
+          (WrappedID3D12DescriptorHeap *)rm->GetCurrentAs<ID3D12DescriptorHeap>(id);
+      D3D12_DESCRIPTOR_HEAP_DESC desc = heap->GetDesc();
+      if(desc.Type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+        resourceHeap = heap;
+      else
+        samplerHeap = heap;
+    }
+
+    for(DescriptorAccess &access : ret)
+    {
+      if(access.type == DescriptorType::Sampler)
+        access.descriptorStore =
+            samplerHeap ? rm->GetOriginalID(samplerHeap->GetResourceID()) : ResourceId();
+      else
+        access.descriptorStore =
+            resourceHeap ? rm->GetOriginalID(resourceHeap->GetResourceID()) : ResourceId();
+
+      // for direct heap access, don't do anything more
+      if(access.index == DescriptorAccess::NoShaderBinding)
+        continue;
+
+      const D3D12RenderState::RootSignature &rootSig = pipe->IsGraphics() ? rs.graphics : rs.compute;
+
+      uint32_t rootIndex = (uint32_t)access.byteSize;
+      access.byteSize = 1;
+
+      // access off the end of the root signature list indicates a static sampler. We virtualise
+      // this as root signature descriptor storage
+      if(access.type == DescriptorType::Sampler && rootIndex >= rootSig.sigelems.size())
+      {
+        access.descriptorStore = rm->GetOriginalID(rootSig.rootsig);
+        // the access byteOffset is the index of the static sampler
+        continue;
+      }
+
+      const D3D12RenderState::SignatureElement &rootEl = rootSig.sigelems[rootIndex];
+
+      // this indicates a root parameter
+      if(access.byteOffset == ~0U)
+      {
+        // root constants and descriptors specify the pipeline as the descriptor storage. The choice here is
+        // somewhat arbitrary (we could use the command buffer, or the root signature), we just need
+        // to be able to distinguish it in GetDescriptors and GetBufferData. Since we don't have
+        // other types of virtual constants to handle we can use the pipeline state directly
+        access.descriptorStore = rm->GetOriginalID(pipe->GetResourceID());
+        access.byteOffset = rootIndex;
+      }
+      else
+      {
+        // apply the per-parameter offset into the heap here
+        access.byteOffset += (uint32_t)rootEl.offset;
+      }
+    }
+  }
+
+  return ret;
+}
+
+rdcarray<DescriptorLogicalLocation> D3D12Replay::GetDescriptorLocations(
+    ResourceId descriptorStore, const rdcarray<DescriptorRange> &ranges)
+{
+  rdcarray<DescriptorLogicalLocation> ret;
+
+  D3D12ResourceManager *rm = m_pDevice->GetResourceManager();
+
+  ID3D12DeviceChild *res = rm->GetCurrentAs<ID3D12DeviceChild>(descriptorStore);
+
+  size_t count = 0;
+  for(const DescriptorRange &r : ranges)
+    count += r.count;
+  ret.resize(count);
+
+  // for sort keys we have the top 32-bits be the lower 32-bits of the store ResourceID, or 1 or 2
+  // for static samplers and root constants. Then the lower 32-bits are an index
+
+  if(WrappedID3D12RootSignature::IsAlloc(res))
+  {
+    WrappedID3D12RootSignature *sig = (WrappedID3D12RootSignature *)res;
+    size_t dst = 0;
+    for(const DescriptorRange &r : ranges)
+    {
+      uint32_t staticIdx = r.offset;
+
+      for(uint32_t i = 0; i < r.count; i++)
+      {
+        if(staticIdx >= sig->sig.StaticSamplers.size())
+        {
+          // silently drop out of bounds descriptor reads
+        }
+        else
+        {
+          ret[dst].fixedBindNumber = ~0U - 2048 + staticIdx;
+          ret[dst].stageMask = ConvertVisibility(sig->sig.StaticSamplers[staticIdx].ShaderVisibility);
+          ret[dst].category = DescriptorCategory::Sampler;
+          ret[dst].logicalBindName = StringFormat::Fmt("Static #%u", staticIdx);
+        }
+
+        dst++;
+        staticIdx++;
+      }
+    }
+    return ret;
+  }
+
+  if(WrappedID3D12PipelineState::IsAlloc(res))
+  {
+    WrappedID3D12PipelineState *pipe = (WrappedID3D12PipelineState *)res;
+
+    WrappedID3D12RootSignature *sig =
+        (WrappedID3D12RootSignature *)(pipe->IsGraphics() ? pipe->graphics->pRootSignature
+                                                          : pipe->compute->pRootSignature);
+
+    // root constants
+    size_t dst = 0;
+    for(const DescriptorRange &r : ranges)
+    {
+      uint32_t rootIndex = r.offset;
+
+      for(uint32_t i = 0; i < r.count; i++, rootIndex++, dst++)
+      {
+        const D3D12RootSignatureParameter &param = sig->sig.Parameters[rootIndex];
+
+        DescriptorLogicalLocation &l = ret[dst];
+
+        l.fixedBindNumber = ~0U - 2048 - 64 + rootIndex;
+        l.stageMask = ConvertVisibility(param.ShaderVisibility);
+
+        if(param.ParameterType == D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS)
+        {
+          l.category = DescriptorCategory::ConstantBlock;
+          l.logicalBindName = StringFormat::Fmt("Consts #", rootIndex);
+        }
+        else if(param.ParameterType == D3D12_ROOT_PARAMETER_TYPE_CBV)
+        {
+          l.category = DescriptorCategory::ConstantBlock;
+          l.logicalBindName = StringFormat::Fmt("Root CB #", rootIndex);
+        }
+        else if(param.ParameterType == D3D12_ROOT_PARAMETER_TYPE_SRV)
+        {
+          l.category = DescriptorCategory::ReadOnlyResource;
+          l.logicalBindName = StringFormat::Fmt("Root SRV #", rootIndex);
+        }
+        else if(param.ParameterType == D3D12_ROOT_PARAMETER_TYPE_UAV)
+        {
+          l.category = DescriptorCategory::ReadWriteResource;
+          l.logicalBindName = StringFormat::Fmt("Root UAV #", rootIndex);
+        }
+      }
+    }
+
+    return ret;
+  }
+
+  if(!WrappedID3D12DescriptorHeap::IsAlloc(res))
+  {
+    RDCERR("Invalid/unrecognised descriptor store %s", ToStr(descriptorStore).c_str());
+    return ret;
+  }
+
+  WrappedID3D12DescriptorHeap *heap = (WrappedID3D12DescriptorHeap *)res;
+  const bool sampler = (heap->GetDesc().Type == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
+
+  size_t dst = 0;
+  for(const DescriptorRange &r : ranges)
+  {
+    uint32_t descriptorId = r.offset;
+
+    for(uint32_t i = 0; i < r.count; i++, dst++, descriptorId++)
+    {
+      // can't set anything except the "bind number" which we just set as the offset.
+      ret[dst].fixedBindNumber = descriptorId;
+      if(sampler)
+        ret[dst].logicalBindName = StringFormat::Fmt("SamplerDescriptorHeap[%u]", descriptorId);
+      else
+        ret[dst].logicalBindName = StringFormat::Fmt("ResourceDescriptorHeap[%u]", descriptorId);
+    }
+  }
+
+  return ret;
 }
 
 void D3D12Replay::RenderHighlightBox(float w, float h, float scale)
@@ -3271,8 +3306,46 @@ bool D3D12Replay::NeedRemapForFetch(const ResourceFormat &format)
   return false;
 }
 
-void D3D12Replay::GetBufferData(ResourceId buff, uint64_t offset, uint64_t length, bytebuf &retData)
+void D3D12Replay::GetBufferData(ResourceId buff, uint64_t offset, uint64_t length, bytebuf &ret)
 {
+  ID3D12DeviceChild *res = m_pDevice->GetResourceManager()->GetCurrentResource(buff);
+  if(WrappedID3D12PipelineState::IsAlloc(res))
+  {
+    const D3D12RenderState &rs = m_pDevice->GetQueue()->GetCommandData()->m_RenderState;
+
+    WrappedID3D12PipelineState *pipe = (WrappedID3D12PipelineState *)res;
+
+    const rdcarray<D3D12RenderState::SignatureElement> &rootElems =
+        pipe->IsGraphics() ? rs.graphics.sigelems : rs.compute.sigelems;
+
+    bytebuf inlineData;
+
+    for(uint32_t i = 0; i < rootElems.size(); i++)
+      if(rootElems[i].type == eRootConst)
+        inlineData.append((byte *)rootElems[i].constants.data(), rootElems[i].constants.byteSize());
+
+    if(offset >= inlineData.size())
+      return;
+
+    if(length == 0 || length > inlineData.size())
+      length = inlineData.size() - offset;
+
+    if(offset + length > inlineData.size())
+    {
+      RDCWARN(
+          "Attempting to read off the end of current push constants (%llu %llu). Will be clamped "
+          "(%llu)",
+          offset, length, inlineData.size());
+      length = RDCMIN(length, inlineData.size() - offset);
+    }
+
+    ret.resize((size_t)length);
+
+    memcpy(ret.data(), inlineData.data() + offset, ret.size());
+
+    return;
+  }
+
   auto it = m_pDevice->GetResourceList().find(buff);
 
   if(it == m_pDevice->GetResourceList().end() || it->second == NULL)
@@ -3293,7 +3366,7 @@ void D3D12Replay::GetBufferData(ResourceId buff, uint64_t offset, uint64_t lengt
 
   RDCASSERT(buffer);
 
-  GetDebugManager()->GetBufferData(buffer, offset, length, retData);
+  GetDebugManager()->GetBufferData(buffer, offset, length, ret);
 }
 
 void D3D12Replay::FillCBufferVariables(ResourceId pipeline, ResourceId shader, ShaderStage stage,
@@ -3308,16 +3381,14 @@ void D3D12Replay::FillCBufferVariables(ResourceId pipeline, ResourceId shader, S
   WrappedID3D12Shader *sh = (WrappedID3D12Shader *)res;
 
   const ShaderReflection &refl = sh->GetDetails();
-  const ShaderBindpointMapping &mapping = sh->GetMapping();
 
-  if(cbufSlot >= (uint32_t)mapping.constantBlocks.count())
+  if(cbufSlot >= (uint32_t)refl.constantBlocks.count())
   {
     RDCERR("Invalid cbuffer slot");
     return;
   }
 
   const ConstantBlock &c = refl.constantBlocks[cbufSlot];
-  const Bindpoint &bind = mapping.constantBlocks[c.bindPoint];
 
   // check if the data actually comes from root constants
   const D3D12RenderState &rs = m_pDevice->GetQueue()->GetCommandData()->m_RenderState;
@@ -3347,9 +3418,9 @@ void D3D12Replay::FillCBufferVariables(ResourceId pipeline, ResourceId shader, S
     const D3D12RootSignatureParameter &p = sig->sig.Parameters[i];
 
     if(p.ParameterType == D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS &&
-       (ToShaderStageMask(p.ShaderVisibility) & reflMask) &&
-       p.Constants.RegisterSpace == (UINT)bind.bindset &&
-       p.Constants.ShaderRegister == (UINT)bind.bind)
+       (ConvertVisibility(p.ShaderVisibility) & reflMask) &&
+       p.Constants.RegisterSpace == c.fixedBindSetOrSpace &&
+       p.Constants.ShaderRegister == c.fixedBindNumber)
     {
       size_t dstSize = sig->sig.Parameters[i].Constants.Num32BitValues * sizeof(uint32_t);
       rootData.resize(dstSize);
@@ -4499,8 +4570,8 @@ RDResult D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, IRepl
   if(initParams.MinimumFeatureLevel < D3D_FEATURE_LEVEL_11_0)
     initParams.MinimumFeatureLevel = D3D_FEATURE_LEVEL_11_0;
 
-  D3D12_PrepareReplaySDKVersion(rdc && rdc->IsUntrusted(), initParams.SDKVersion, D3D12Core,
-                                D3D12SDKLayers, D3D12Lib);
+  D3D12DevConfiguration *config = D3D12_PrepareReplaySDKVersion(
+      rdc && rdc->IsUntrusted(), initParams.SDKVersion, D3D12Core, D3D12SDKLayers, D3D12Lib);
 
   const bool isProxy = (rdc == NULL);
 
@@ -4590,7 +4661,7 @@ RDResult D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, IRepl
 
   if(shouldEnableDebugLayer)
   {
-    debugLayerEnabled = EnableD3D12DebugLayer();
+    debugLayerEnabled = EnableD3D12DebugLayer(config, NULL);
 
     if(!debugLayerEnabled && !isProxy)
     {
@@ -4601,7 +4672,11 @@ RDResult D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, IRepl
   }
 
   ID3D12Device *dev = NULL;
-  hr = createDevice(adapter, initParams.MinimumFeatureLevel, __uuidof(ID3D12Device), (void **)&dev);
+  if(config)
+    hr = config->devfactory->CreateDevice(adapter, initParams.MinimumFeatureLevel,
+                                          __uuidof(ID3D12Device), (void **)&dev);
+  else
+    hr = createDevice(adapter, initParams.MinimumFeatureLevel, __uuidof(ID3D12Device), (void **)&dev);
 
   if((FAILED(hr) || !dev) && adapter)
   {
@@ -4610,7 +4685,12 @@ RDResult D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, IRepl
     RDCWARN("Couldn't replay on selected adapter, falling back to default adapter");
 
     SAFE_RELEASE(adapter);
-    hr = createDevice(adapter, initParams.MinimumFeatureLevel, __uuidof(ID3D12Device), (void **)&dev);
+    if(config)
+      hr = config->devfactory->CreateDevice(adapter, initParams.MinimumFeatureLevel,
+                                            __uuidof(ID3D12Device), (void **)&dev);
+    else
+      hr = createDevice(adapter, initParams.MinimumFeatureLevel, __uuidof(ID3D12Device),
+                        (void **)&dev);
   }
 
   SAFE_RELEASE(adapter);
@@ -4665,7 +4745,7 @@ RDResult D3D12_CreateReplayDevice(RDCFile *rdc, const ReplayOptions &opts, IRepl
   replay->SetProxy(isProxy);
   replay->SetRGP(rgp);
 
-  replay->Initialise(factory);
+  replay->Initialise(factory, config);
 
   *driver = (IReplayDriver *)replay;
   return ResultCode::Succeeded;

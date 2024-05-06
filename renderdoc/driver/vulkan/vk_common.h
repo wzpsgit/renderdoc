@@ -305,6 +305,9 @@ public:
   // If we do have a pipeline to bind, we should never be perturbing dynamic state in between static
   // pipeline binds.
   bool NVStaticPipelineRebindStates() const { return nvidiaStaticPipelineRebindStates; }
+  // On Mali there are some known issues regarding acceleration structure serialisation to device
+  // memory, for the affected driver versions we switch to the host command variants
+  bool MaliBrokenASDeviceSerialisation() const { return maliBrokenASDeviceSerialisation; }
 private:
   GPUVendor m_Vendor;
 
@@ -320,6 +323,7 @@ private:
   bool qualcommLineWidthCrash = false;
   bool intelBrokenOcclusionQueries = false;
   bool nvidiaStaticPipelineRebindStates = false;
+  bool maliBrokenASDeviceSerialisation = false;
 };
 
 enum
@@ -527,6 +531,7 @@ enum class DescriptorSlotType : EnumBaseType
   StorageBufferDynamic,
   InputAttachment,
   InlineBlock,
+  AccelerationStructure,
   Count,
 };
 
@@ -550,7 +555,9 @@ constexpr VkDescriptorType convert(DescriptorSlotType type)
              ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC
          : type == DescriptorSlotType::InputAttachment ? VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT
          : type == DescriptorSlotType::InlineBlock     ? VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK
-                                                       : VK_DESCRIPTOR_TYPE_MAX_ENUM;
+         : type == DescriptorSlotType::AccelerationStructure
+             ? VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR
+             : VK_DESCRIPTOR_TYPE_MAX_ENUM;
 }
 
 constexpr DescriptorSlotType convert(VkDescriptorType type)
@@ -570,7 +577,9 @@ constexpr DescriptorSlotType convert(VkDescriptorType type)
              ? DescriptorSlotType::StorageBufferDynamic
          : type == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT     ? DescriptorSlotType::InputAttachment
          : type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK ? DescriptorSlotType::InlineBlock
-                                                           : DescriptorSlotType::Unwritten;
+         : type == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR
+             ? DescriptorSlotType::AccelerationStructure
+             : DescriptorSlotType::Unwritten;
 }
 
 enum class DescriptorSlotImageLayout : EnumBaseType
@@ -682,6 +691,8 @@ struct DescriptorSetSlot
   void SetBuffer(VkDescriptorType writeType, const VkDescriptorBufferInfo &bufInfo);
   void SetImage(VkDescriptorType writeType, const VkDescriptorImageInfo &imInfo, bool useSampler);
   void SetTexelBuffer(VkDescriptorType writeType, ResourceId id);
+  void SetAccelerationStructure(VkDescriptorType writeType,
+                                VkAccelerationStructureKHR accelerationStructure);
 
   // 48-bit truncated VK_WHOLE_SIZE
   static const VkDeviceSize WholeSizeRange = 0xFFFFFFFFFFFF;
@@ -707,6 +718,9 @@ struct DescriptorSetSlot
 
   // used for buffers and inline blocks. We could steal some bits here if we needed them since 48
   // bits would be plenty for a long time.
+  //
+  // Immutable samplers set this to 1 to indicate for replay purposes that the sampler came from an
+  // immutable binding when looking purely at the descriptor without knowing its layout
   VkDeviceSize offset;
 
   // resource IDs are kept separate rather than overlapping/union'ing with other types. This
@@ -714,8 +728,8 @@ struct DescriptorSetSlot
   // as a different type and the resource ID is partly trampled. Since these are disjoint we know
   // that even if they're stale they're valid IDs.
 
-  // main contents: buffer, image, texel buffer view. NOT the sampler for sampler-only descriptors,
-  // just to avoid confusion
+  // main contents: buffer, image, texel buffer view, or acceleration structure. NOT the sampler for
+  // sampler-only descriptors, just to avoid confusion
   ResourceId resource;
   // sampler for sampler-only descriptors, or sampler for combined image-sampler descriptors
   ResourceId sampler;
@@ -732,6 +746,8 @@ struct BindingStorage
   bytebuf inlineBytes;
   rdcarray<DescriptorSetSlot *> binds;
   uint32_t variableDescriptorCount;
+
+  size_t totalDescriptorCount() const { return elems.size(); }
 
   void clear()
   {
@@ -1065,6 +1081,8 @@ enum class VulkanChunk : uint32_t
   vkCmdCopyAccelerationStructureToMemoryKHR,
   vkCmdCopyMemoryToAccelerationStructureKHR,
   vkCreateAccelerationStructureKHR,
+  vkCmdBindShadersEXT,
+  vkCreateShadersEXT,
   Max,
 };
 
@@ -1104,7 +1122,8 @@ DECLARE_REFLECTION_ENUM(VulkanChunk);
   SERIALISE_HANDLE(VkSurfaceKHR)               \
   SERIALISE_HANDLE(VkDescriptorUpdateTemplate) \
   SERIALISE_HANDLE(VkSamplerYcbcrConversion)   \
-  SERIALISE_HANDLE(VkAccelerationStructureKHR)
+  SERIALISE_HANDLE(VkAccelerationStructureKHR) \
+  SERIALISE_HANDLE(VkShaderEXT)
 
 #define SERIALISE_HANDLE(type) DECLARE_REFLECTION_STRUCT(type)
 
@@ -1359,6 +1378,8 @@ DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceMultisampledRenderToSingleSampledFeatu
 DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceMultiviewFeatures);
 DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceMultiviewProperties);
 DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT);
+DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceNestedCommandBufferFeaturesEXT);
+DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceNestedCommandBufferPropertiesEXT);
 DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceNonSeamlessCubeMapFeaturesEXT);
 DECLARE_REFLECTION_STRUCT(VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT);
 DECLARE_REFLECTION_STRUCT(VkPhysicalDevicePCIBusInfoPropertiesEXT);
@@ -1400,6 +1421,8 @@ DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT);
 DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceShaderImageFootprintFeaturesNV);
 DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceShaderIntegerDotProductFeatures);
 DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceShaderIntegerDotProductProperties);
+DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceShaderObjectFeaturesEXT);
+DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceShaderObjectPropertiesEXT);
 DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceShaderSubgroupExtendedTypesFeatures);
 DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR);
 DECLARE_REFLECTION_STRUCT(VkPhysicalDeviceShaderTerminateInvocationFeatures);
@@ -1508,6 +1531,7 @@ DECLARE_REFLECTION_STRUCT(VkSemaphoreSignalInfo);
 DECLARE_REFLECTION_STRUCT(VkSemaphoreSubmitInfo);
 DECLARE_REFLECTION_STRUCT(VkSemaphoreTypeCreateInfo);
 DECLARE_REFLECTION_STRUCT(VkSemaphoreWaitInfo);
+DECLARE_REFLECTION_STRUCT(VkShaderCreateInfoEXT);
 DECLARE_REFLECTION_STRUCT(VkShaderModuleCreateInfo);
 DECLARE_REFLECTION_STRUCT(VkShaderModuleValidationCacheCreateInfoEXT);
 DECLARE_REFLECTION_STRUCT(VkSharedPresentSurfaceCapabilitiesKHR);
@@ -1788,6 +1812,8 @@ DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceMultisampledRenderToSingleSampledFeatur
 DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceMultiviewFeatures);
 DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceMultiviewProperties);
 DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceMutableDescriptorTypeFeaturesEXT);
+DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceNestedCommandBufferFeaturesEXT);
+DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceNestedCommandBufferPropertiesEXT);
 DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceNonSeamlessCubeMapFeaturesEXT);
 DECLARE_DESERIALISE_TYPE(VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT);
 DECLARE_DESERIALISE_TYPE(VkPhysicalDevicePCIBusInfoPropertiesEXT);
@@ -1829,6 +1855,8 @@ DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT);
 DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceShaderImageFootprintFeaturesNV);
 DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceShaderIntegerDotProductFeatures);
 DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceShaderIntegerDotProductProperties);
+DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceShaderObjectFeaturesEXT);
+DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceShaderObjectPropertiesEXT);
 DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceShaderSubgroupExtendedTypesFeatures);
 DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR);
 DECLARE_DESERIALISE_TYPE(VkPhysicalDeviceShaderTerminateInvocationFeatures);
@@ -1934,6 +1962,7 @@ DECLARE_DESERIALISE_TYPE(VkSemaphoreSignalInfo);
 DECLARE_DESERIALISE_TYPE(VkSemaphoreSubmitInfo);
 DECLARE_DESERIALISE_TYPE(VkSemaphoreTypeCreateInfo);
 DECLARE_DESERIALISE_TYPE(VkSemaphoreWaitInfo);
+DECLARE_DESERIALISE_TYPE(VkShaderCreateInfoEXT);
 DECLARE_DESERIALISE_TYPE(VkShaderModuleCreateInfo);
 DECLARE_DESERIALISE_TYPE(VkShaderModuleValidationCacheCreateInfoEXT);
 DECLARE_DESERIALISE_TYPE(VkSharedPresentSurfaceCapabilitiesKHR);
@@ -1977,7 +2006,6 @@ DECLARE_DESERIALISE_TYPE(VkWriteDescriptorSetInlineUniformBlock);
 // plain structs with no next chain
 DECLARE_REFLECTION_STRUCT(VkAabbPositionsKHR);
 DECLARE_REFLECTION_STRUCT(VkAccelerationStructureBuildRangeInfoKHR);
-DECLARE_REFLECTION_STRUCT(VkAccelerationStructureGeometryDataKHR);
 DECLARE_REFLECTION_STRUCT(VkAccelerationStructureInstanceKHR);
 DECLARE_REFLECTION_STRUCT(VkAllocationCallbacks);
 DECLARE_REFLECTION_STRUCT(VkAttachmentDescription);
@@ -2290,6 +2318,8 @@ DECLARE_REFLECTION_ENUM(VkSamplerYcbcrRange);
 DECLARE_REFLECTION_ENUM(VkSemaphoreImportFlagBits);
 DECLARE_REFLECTION_ENUM(VkSemaphoreType);
 DECLARE_REFLECTION_ENUM(VkSemaphoreWaitFlagBits);
+DECLARE_REFLECTION_ENUM(VkShaderCodeTypeEXT);
+DECLARE_REFLECTION_ENUM(VkShaderCreateFlagBitsEXT);
 DECLARE_REFLECTION_ENUM(VkShaderFloatControlsIndependence);
 DECLARE_REFLECTION_ENUM(VkShaderStageFlagBits);
 DECLARE_REFLECTION_ENUM(VkSharingMode);

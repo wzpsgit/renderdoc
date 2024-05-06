@@ -481,7 +481,7 @@ DOCUMENT(R"(A texture addressing mode in a single direction (U,V or W).
   The texture is clamped such that texture co-ordinates outside the range of ``[0.0, 1.0]`` are set
   to the border color specified in the sampler.
 )");
-enum class AddressMode : uint32_t
+enum class AddressMode : uint8_t
 {
   Wrap,
   Repeat = Wrap,
@@ -517,7 +517,7 @@ DOCUMENT(R"(The color model conversion that a YCbCr sampler uses to convert from
 
   The conversion uses the BT.2020 color model conversion.
 )");
-enum class YcbcrConversion
+enum class YcbcrConversion : uint8_t
 {
   Raw,
   RangeOnly,
@@ -539,7 +539,7 @@ DOCUMENT(R"(Specifies the range of encoded values and their interpretation.
   A head and foot are reserved in the encoded values, and the remaining values are expanded
   according to "narrow range" rules.
 )");
-enum class YcbcrRange
+enum class YcbcrRange : uint8_t
 {
   ITUFull,
   ITUNarrow,
@@ -558,7 +558,7 @@ DOCUMENT(R"(Determines where in the pixel downsampled chrome samples are positio
   The chrome samples are positioned half way between each even luma sample and the next highest odd
   luma sample.
 )");
-enum class ChromaSampleLocation
+enum class ChromaSampleLocation : uint8_t
 {
   CositedEven,
   Midpoint,
@@ -662,6 +662,14 @@ API-specific concepts.
 
   A structure used to carry implementation-defined spatial partitioning data and related
   information, used to accelerate geometry intersection queries (e.g. for ray tracing).
+
+.. data:: DescriptorStore
+
+  A descriptor store, either driver or application managed. For example a Vulkan descriptor set or
+  a D3D12 descriptor heap.
+
+  APIs without an explicit concept of descriptor storage will have virtual objects corresponding to
+  temporary bindings.
 )");
 enum class ResourceType : uint32_t
 {
@@ -690,6 +698,8 @@ enum class ResourceType : uint32_t
   Pool,
 
   AccelerationStructure,
+
+  DescriptorStore,
 };
 
 DECLARE_REFLECTION_ENUM(ResourceType);
@@ -744,7 +754,7 @@ DOCUMENT(R"(The dimensionality of a texture binding.
 
   A Cubemap texture array.
 )");
-enum class TextureType : uint16_t
+enum class TextureType : uint8_t
 {
   Unknown,
   First = Unknown,
@@ -837,6 +847,174 @@ enum class BindType : uint32_t
 };
 
 DECLARE_REFLECTION_ENUM(BindType);
+
+DOCUMENT(R"(The type of a descriptor.
+
+.. data:: Unknown
+
+  An unknown or uninitialised type of descriptor.
+
+.. data:: ConstantBuffer
+
+  A constant or uniform buffer.
+
+.. data:: Sampler
+
+  A separate sampler object.
+
+.. data:: ImageSampler
+
+  A combined image and sampler object.
+
+.. data:: Image
+
+  An image that can only be sampled from.
+
+.. data:: Buffer
+
+  A buffer that can only be read from, with data read literally in a shader via raw or structured
+  access.
+
+.. data:: TypedBuffer
+
+  A typed buffer that can only be read from, interpreting each element via a format decode.
+
+.. data:: ReadWriteImage
+
+  An image that can be read from and written to arbitrarily.
+
+.. data:: ReadWriteTypedBuffer
+
+  A typed/texture buffer that can be read from and written to arbitrarily.
+
+.. data:: ReadWriteBuffer
+
+  A buffer that can be read from and written to arbitrarily.
+
+.. data:: AccelerationStructure
+
+  A ray-tracing acceleration structure, read-only in the shader.
+)");
+enum class DescriptorType : uint8_t
+{
+  Unknown = 0,
+  ConstantBuffer,
+  Sampler,
+  ImageSampler,
+  Image,
+  Buffer,
+  TypedBuffer,
+  ReadWriteImage,
+  ReadWriteTypedBuffer,
+  ReadWriteBuffer,
+  AccelerationStructure,
+};
+
+DECLARE_REFLECTION_ENUM(DescriptorType);
+
+DOCUMENT(R"(The category of a descriptor, corresponding to the interfaces in :class:`ShaderReflection`.
+
+.. data:: Unknown
+
+  An unknown or uninitialised type of descriptor.
+
+.. data:: ConstantBlock
+
+  A constant block.
+
+.. data:: Sampler
+
+  A sampler object.
+
+.. data:: ReadOnlyResource
+
+  A read-only resource.
+
+.. data:: ReadWriteResource
+
+  A read-write resource.
+)");
+enum class DescriptorCategory : uint8_t
+{
+  Unknown = 0,
+  ConstantBlock,
+  Sampler,
+  ReadOnlyResource,
+  ReadWriteResource,
+};
+
+DECLARE_REFLECTION_ENUM(DescriptorCategory);
+
+DOCUMENT(R"(Get the shader interface category for a given type of descriptor.
+
+:param DescriptorType type: The type of descriptor
+:return: The descriptor category.
+:rtype: DescriptorCategory
+)");
+constexpr DescriptorCategory CategoryForDescriptorType(DescriptorType type)
+{
+  return type == DescriptorType::ConstantBuffer ? DescriptorCategory::ConstantBlock
+
+         : type == DescriptorType::Sampler ? DescriptorCategory::Sampler
+
+         : (type == DescriptorType::ImageSampler || type == DescriptorType::Image ||
+            type == DescriptorType::TypedBuffer || type == DescriptorType::Buffer ||
+            type == DescriptorType::AccelerationStructure)
+             ? DescriptorCategory::ReadOnlyResource
+
+         : (type == DescriptorType::ReadWriteBuffer || type == DescriptorType::ReadWriteImage ||
+            type == DescriptorType::ReadWriteTypedBuffer)
+             ? DescriptorCategory::ReadWriteResource
+
+             : DescriptorCategory::Unknown;
+}
+
+DOCUMENT(R"(Checks if a descriptor type corresponds to a constant block in shader reflection.
+
+:param DescriptorType type: The type of descriptor
+:return: ``True`` if the descriptor type is a constant block descriptor.
+:rtype: bool
+)");
+constexpr bool IsConstantBlockDescriptor(DescriptorType type)
+{
+  return CategoryForDescriptorType(type) == DescriptorCategory::ConstantBlock;
+}
+
+DOCUMENT(R"(Checks if a descriptor type corresponds to a sampler in shader reflection. Only dedicated
+sampler types are sampler descriptors, combined image/samplers are reported only as read only
+resources.
+
+:param DescriptorType type: The type of descriptor
+:return: ``True`` if the descriptor type is a sampler descriptor.
+:rtype: bool
+)");
+constexpr bool IsSamplerDescriptor(DescriptorType type)
+{
+  return CategoryForDescriptorType(type) == DescriptorCategory::Sampler;
+}
+
+DOCUMENT(R"(Checks if a descriptor type corresponds to a read only resource in shader reflection.
+Combined image/samplers are reported as read only resources.
+
+:param DescriptorType type: The type of descriptor
+:return: ``True`` if the descriptor type is a read-only resource descriptor.
+:rtype: bool
+)");
+constexpr bool IsReadOnlyDescriptor(DescriptorType type)
+{
+  return CategoryForDescriptorType(type) == DescriptorCategory::ReadOnlyResource;
+}
+
+DOCUMENT(R"(Checks if a descriptor type corresponds to a read write resource in shader reflection.
+
+:param DescriptorType type: The type of descriptor
+:return: ``True`` if the descriptor type is a read-write resource descriptor.
+:rtype: bool
+)");
+constexpr bool IsReadWriteDescriptor(DescriptorType type)
+{
+  return CategoryForDescriptorType(type) == DescriptorCategory::ReadWriteResource;
+}
 
 DOCUMENT3(R"(Annotates a particular built-in input or output from a shader with a special meaning to
 the hardware or API.
@@ -2402,8 +2580,33 @@ DOCUMENT(R"(The stage in a pipeline where a shader runs
 .. data:: Mesh
 
   The mesh shader.
+
+.. data:: RayGen
+
+  A ray generation shader, called from a ray dispatch command to launch initial rays.
+
+.. data:: Intersection
+
+  An intersection shader, used for procedural objects in a BLAS to calculate hits.
+
+.. data:: AnyHit
+
+  An any-hit shader, called in an indeterminate order and number when a ray intersection has been
+  found with an object but may not be the final hit.
+
+.. data:: ClosestHit
+
+  A closest-hit shader, called once the closest hit on a ray has been found.
+
+.. data:: Miss
+
+  A miss shader, called when a ray has no valid closest hit at all.
+
+.. data:: Callable
+
+  A callable shader, called by shader code via index during ray processing.
 )");
-enum class ShaderStage : uint32_t
+enum class ShaderStage : uint8_t
 {
   Vertex = 0,
   First = Vertex,
@@ -2425,6 +2628,13 @@ enum class ShaderStage : uint32_t
   Amplification = Task,
 
   Mesh,
+
+  RayGen,
+  Intersection,
+  AnyHit,
+  ClosestHit,
+  Miss,
+  Callable,
 
   Count,
 };
@@ -3149,7 +3359,7 @@ between mips).
 
   This sampler is using anisotropic filtering.
 )");
-enum class FilterMode : uint32_t
+enum class FilterMode : uint8_t
 {
   NoFilter,
   Point,
@@ -3185,7 +3395,7 @@ DOCUMENT(R"(The function used to process the returned value after interpolation.
 
   Texels that were weight to 0 during interpolation are not included in the max function.
 )");
-enum class FilterFunction : uint32_t
+enum class FilterFunction : uint8_t
 {
   Normal,
   Comparison,
@@ -3230,7 +3440,7 @@ DOCUMENT(R"(A comparison function to return a ``bool`` result from two inputs ``
   ``A != B``
 
 )");
-enum class CompareFunction : uint32_t
+enum class CompareFunction : uint8_t
 {
   Never,
   AlwaysTrue,
@@ -4425,34 +4635,53 @@ enum class BufferCategory : uint32_t
 BITMASK_OPERATORS(BufferCategory);
 DECLARE_REFLECTION_ENUM(BufferCategory);
 
-DOCUMENT(R"(A set of flags for D3D buffer view properties.
+DOCUMENT(R"(A set of flags for descriptor properties.
 
 .. data:: NoFlags
 
   The buffer will not be used for any of the uses below.
 
-.. data:: Raw
+.. data:: RawBuffer
 
-  The buffer is used as a raw (byte-addressed) buffer.
+  On D3D, a buffer is used as a raw (byte-addressed) buffer.
 
-.. data:: Append
+.. data:: AppendBuffer
 
-  The buffer is used as a append/consume view.
+  On D3D, a buffer is used as a append/consume view.
 
-.. data:: Counter
+.. data:: CounterBuffer
 
-  The buffer is used with a structured buffer with associated hidden counter.
+  On D3D, a buffer is used with a structured buffer with associated hidden counter.
+
+.. data:: ReadOnlyAccess
+
+  On GL, a storage image or buffer is bound with read-only access.
+
+.. data:: WriteOnlyAccess
+
+  On GL, a storage image or buffer is bound with write-only access.
+
+.. data:: InlineData
+
+  This descriptor isn't backed by an explicit buffer in the API (though a resource may be provided
+  for data query purposes during replay), but instead by some virtual or in-line data. For example
+  in-line constants set directly, or compile/creation time constants.
+
+  The exact nature can be determined by the shader reflection data.
 )");
-enum class D3DBufferViewFlags : uint8_t
+enum class DescriptorFlags : uint8_t
 {
   NoFlags = 0x0,
-  Raw = 0x1,
-  Append = 0x2,
-  Counter = 0x4,
+  RawBuffer = 0x1,
+  AppendBuffer = 0x2,
+  CounterBuffer = 0x4,
+  ReadOnlyAccess = 0x8,
+  WriteOnlyAccess = 0x10,
+  InlineData = 0x20,
 };
 
-BITMASK_OPERATORS(D3DBufferViewFlags);
-DECLARE_REFLECTION_ENUM(D3DBufferViewFlags);
+BITMASK_OPERATORS(DescriptorFlags);
+DECLARE_REFLECTION_ENUM(DescriptorFlags);
 
 DOCUMENT(R"(A set of flags describing how this texture may be used
 
@@ -4547,11 +4776,35 @@ DOCUMENT(R"(A set of flags for ``ShaderStage`` stages
 
   The flag for :data:`ShaderStage.Mesh`.
 
+.. data:: RayGen
+
+  The flag for :data:`ShaderStage.RayGen`.
+
+.. data:: Intersection
+
+  The flag for :data:`ShaderStage.Intersection`.
+
+.. data:: AnyHit
+
+  The flag for :data:`ShaderStage.AnyHit`.
+
+.. data:: ClosestHit
+
+  The flag for :data:`ShaderStage.ClosestHit`.
+
+.. data:: Miss
+
+  The flag for :data:`ShaderStage.Miss`.
+
+.. data:: Callable
+
+  The flag for :data:`ShaderStage.Callable`.
+
 .. data:: All
 
   A shorthand version with flags set for all stages together.
 )");
-enum class ShaderStageMask : uint32_t
+enum class ShaderStageMask : uint16_t
 {
   Unknown = 0,
   Vertex = 1 << uint32_t(ShaderStage::Vertex),
@@ -4566,7 +4819,14 @@ enum class ShaderStageMask : uint32_t
   Task = 1 << uint32_t(ShaderStage::Task),
   Amplification = Task,
   Mesh = 1 << uint32_t(ShaderStage::Mesh),
-  All = Vertex | Hull | Domain | Geometry | Pixel | Compute | Task | Mesh,
+  RayGen = 1 << uint32_t(ShaderStage::RayGen),
+  Intersection = 1 << uint32_t(ShaderStage::Intersection),
+  AnyHit = 1 << uint32_t(ShaderStage::AnyHit),
+  ClosestHit = 1 << uint32_t(ShaderStage::ClosestHit),
+  Miss = 1 << uint32_t(ShaderStage::Miss),
+  Callable = 1 << uint32_t(ShaderStage::Callable),
+  All = Vertex | Hull | Domain | Geometry | Pixel | Compute | Task | Mesh | RayGen | Intersection |
+        AnyHit | ClosestHit | Miss | Callable,
 };
 
 BITMASK_OPERATORS(ShaderStageMask);
@@ -4581,6 +4841,29 @@ DOCUMENT(R"(Calculate the corresponding flag for a shader stage
 constexpr inline ShaderStageMask MaskForStage(ShaderStage stage)
 {
   return ShaderStageMask(1 << uint32_t(stage));
+}
+
+DOCUMENT(R"(For a shader stage mask that only covers one shader stage, return the shader stage.
+
+.. note::
+  If the shader stage mask covers multiple stages, only the first matching stage will be returned.
+  If the mask is empty, :data:`ShaderStage.Count` will be returned.
+
+:param ShaderStageMask stageMask: The shader stage mask.
+:return: The first shader stage covered by the mask.
+:rtype: ShaderStage
+)");
+constexpr inline ShaderStage FirstStageForMask(ShaderStageMask stageMask)
+{
+  return (stageMask & ShaderStageMask::Vertex)     ? ShaderStage::Vertex
+         : (stageMask & ShaderStageMask::Hull)     ? ShaderStage::Hull
+         : (stageMask & ShaderStageMask::Domain)   ? ShaderStage::Domain
+         : (stageMask & ShaderStageMask::Geometry) ? ShaderStage::Geometry
+         : (stageMask & ShaderStageMask::Pixel)    ? ShaderStage::Pixel
+         : (stageMask & ShaderStageMask::Compute)  ? ShaderStage::Compute
+         : (stageMask & ShaderStageMask::Task)     ? ShaderStage::Task
+         : (stageMask & ShaderStageMask::Mesh)     ? ShaderStage::Mesh
+                                                   : ShaderStage::Count;
 }
 
 DOCUMENT(R"(A set of flags for events that may occur while debugging a shader

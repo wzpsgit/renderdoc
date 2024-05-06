@@ -29,6 +29,10 @@
 #include "d3d12_device.h"
 #include "d3d12_manager.h"
 
+rdcpair<uint32_t, uint32_t> FindMatchingRootParameter(const D3D12RootSignature *sig,
+                                                      D3D12_SHADER_VISIBILITY visibility,
+                                                      D3D12_DESCRIPTOR_RANGE_TYPE rangeType,
+                                                      uint32_t space, uint32_t bind);
 UINT GetPlaneForSubresource(ID3D12Resource *res, int Subresource);
 UINT GetMipForSubresource(ID3D12Resource *res, int Subresource);
 UINT GetSliceForSubresource(ID3D12Resource *res, int Subresource);
@@ -395,8 +399,8 @@ class WrappedID3D12DescriptorHeap : public WrappedDeviceChild12<ID3D12Descriptor
 
   D3D12Descriptor *descriptors;
 
-  D3D12Pipe::View *cachedViews;
-  uint64_t *mutableViewBitmask;
+  Descriptor *cachedDescriptors;
+  uint64_t *mutableDescriptorBitmask;
 
 public:
   ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12DescriptorHeap);
@@ -412,10 +416,13 @@ public:
 
   D3D12Descriptor *GetDescriptors() { return descriptors; }
   UINT GetNumDescriptors() { return numDescriptors; }
-  bool HasValidViewCache(uint32_t index);
-  void MarkMutableView(uint32_t index);
-  void GetFromViewCache(uint32_t index, D3D12Pipe::View &view);
-  void SetToViewCache(uint32_t index, const D3D12Pipe::View &view);
+
+  void MarkMutableIndex(uint32_t index);
+
+  void EnsureDescriptorCache();
+  bool HasValidDescriptorCache(uint32_t index);
+  void GetFromDescriptorCache(uint32_t index, Descriptor &view);
+  void SetToDescriptorCache(uint32_t index, const Descriptor &view);
 
   //////////////////////////////
   // implement ID3D12DescriptorHeap
@@ -448,6 +455,8 @@ public:
     handle.ptr += idx * increment;
     return handle;
   }
+
+  uint32_t GetUnwrappedIncrement() const { return increment; }
 };
 
 class WrappedID3D12Fence : public WrappedDeviceChild12<ID3D12Fence, ID3D12Fence1>
@@ -624,6 +633,9 @@ public:
 
   D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC *graphics = NULL;
   D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC *compute = NULL;
+
+  rdcarray<DescriptorAccess> staticDescriptorAccess;
+  bool m_AccessProcessed = false;
 
   void Fill(D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC &desc)
   {
@@ -821,14 +833,6 @@ public:
       return *m_Details;
     }
 
-    const ShaderBindpointMapping &GetMapping()
-    {
-      if(!m_Built && GetDXBC() != NULL)
-        BuildReflection();
-      m_Built = true;
-      return m_Mapping;
-    }
-
   private:
     void TryReplaceOriginalByteCode();
 
@@ -842,7 +846,6 @@ public:
     bool m_Built;
     DXBC::DXBCContainer *m_DXBCFile;
     ShaderReflection *m_Details;
-    ShaderBindpointMapping m_Mapping;
 
     static std::map<DXBCKey, ShaderEntry *> m_Shaders;
   };
@@ -852,14 +855,14 @@ public:
     TypeEnum = Resource_PipelineState,
   };
 
-  ShaderEntry *VS() { return (ShaderEntry *)graphics->VS.pShaderBytecode; }
-  ShaderEntry *HS() { return (ShaderEntry *)graphics->HS.pShaderBytecode; }
-  ShaderEntry *DS() { return (ShaderEntry *)graphics->DS.pShaderBytecode; }
-  ShaderEntry *GS() { return (ShaderEntry *)graphics->GS.pShaderBytecode; }
-  ShaderEntry *PS() { return (ShaderEntry *)graphics->PS.pShaderBytecode; }
-  ShaderEntry *AS() { return (ShaderEntry *)graphics->AS.pShaderBytecode; }
-  ShaderEntry *MS() { return (ShaderEntry *)graphics->MS.pShaderBytecode; }
-  ShaderEntry *CS() { return (ShaderEntry *)compute->CS.pShaderBytecode; }
+  ShaderEntry *VS() { return graphics ? (ShaderEntry *)graphics->VS.pShaderBytecode : NULL; }
+  ShaderEntry *HS() { return graphics ? (ShaderEntry *)graphics->HS.pShaderBytecode : NULL; }
+  ShaderEntry *DS() { return graphics ? (ShaderEntry *)graphics->DS.pShaderBytecode : NULL; }
+  ShaderEntry *GS() { return graphics ? (ShaderEntry *)graphics->GS.pShaderBytecode : NULL; }
+  ShaderEntry *PS() { return graphics ? (ShaderEntry *)graphics->PS.pShaderBytecode : NULL; }
+  ShaderEntry *AS() { return graphics ? (ShaderEntry *)graphics->AS.pShaderBytecode : NULL; }
+  ShaderEntry *MS() { return graphics ? (ShaderEntry *)graphics->MS.pShaderBytecode : NULL; }
+  ShaderEntry *CS() { return compute ? (ShaderEntry *)compute->CS.pShaderBytecode : NULL; }
   WrappedID3D12PipelineState(ID3D12PipelineState *real, WrappedID3D12Device *device)
       : WrappedDeviceChild12(real, device)
   {
@@ -899,6 +902,8 @@ public:
     }
   }
 
+  void ProcessDescriptorAccess();
+
   //////////////////////////////
   // implement ID3D12PipelineState
 
@@ -908,7 +913,219 @@ public:
   }
 };
 
+// the priorities of subobject associations. Default associations are not(?) inherited from
+// collections into PSOs, and are not inherited from DXIL libraries into state objects.
+// explicit associations are passed down from collection to state object but have the lowest priority of them all
+enum class SubObjectPriority : uint16_t
+{
+  NotYetDefined,
+  // an explicit association in a collection - either from DXIL or code matters not by the time we
+  // get to a PSO including the collection
+  CollectionExplicitAssociation,
+  // subobject declared in DXIL in the same library but not associated at all
+  DXILImplicitDefault,
+  // subobject declared in DXIL and defaulted but just with an empty export string'
+  DXILExplicitDefault,
+  // subobject declared in DXIL and explicitly associated to an export
+  DXILExplicitAssociation,
+  // Object declared in code but not associated at all
+  CodeImplicitDefault,
+  // Object declared in code and defaulted with NULL export array
+  CodeExplicitDefault,
+  // Object declared in code and explicitly associated to an export
+  CodeExplicitAssociation,
+};
+
 typedef WrappedID3D12PipelineState::ShaderEntry WrappedID3D12Shader;
+
+struct D3D12ShaderExportDatabase : public RefCounter12<IUnknown>
+{
+public:
+  D3D12ShaderExportDatabase(ResourceId id, D3D12RaytracingResourceAndUtilHandler *rayManager,
+                            ID3D12StateObjectProperties *obj);
+  ~D3D12ShaderExportDatabase();
+
+  ResourceId GetResourceId() { return objectOriginalId; }
+
+  void PopulateDatabase(size_t NumSubobjects, const D3D12_STATE_SUBOBJECT *subobjects);
+
+  void *GetShaderIdentifier(const rdcstr &exportName)
+  {
+    RDCCOMPILE_ASSERT(sizeof(D3D12ShaderExportDatabase::ShaderIdentifier) ==
+                          D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES,
+                      "Shader Identifier is wrongly sized");
+    for(size_t i = 0; i < exportLookups.size(); i++)
+      if(exportLookups[i].name == exportName || exportLookups[i].altName == exportName)
+        return exportLookups[i].complete ? &wrappedIdentifiers[i] : NULL;
+    return NULL;
+  }
+
+  struct ExportedIdentifier
+  {
+    // the unwrapped identifier to patch the contents of ShaderIdentifier into
+    uint32_t real[8];
+    // the index of the local root signature data to look up if local parameters need to be patched.
+    uint16_t localRootSigIndex;
+    // Subobjects have many different levels of priority they can come from, and the correct maximum
+    // level may not be clear for a while and may be overridden late. This keeps track of where we
+    // got the root signature from so that it can be overridden as necessary
+    SubObjectPriority rootSigPrio;
+  };
+
+  // unwrapped identifiers of NON-INHERITED NEWLY CREATED exports
+  // inherited exports are stored in the ownExports array of the database created for those objects,
+  // even if the objects themselves are not even around anymore - since the identifiers returned for
+  // them need to stay valid.
+  rdcarray<ExportedIdentifier> ownExports;
+
+private:
+  // the state object that originally created this export database. Some of our shader identifiers
+  // may come from other databases, but when uploading the unwrap buffer we store information such
+  // that if we want to unwrap an identifier that comes from this id we look up into unwrappedOwnExports
+  // below. This is the original ID since this is used to look up identifiers that came from the application
+  ResourceId objectOriginalId;
+
+  rdcarray<D3D12ShaderExportDatabase *> parents;
+
+  ID3D12StateObjectProperties *m_StateObjectProps = NULL;
+  D3D12RaytracingResourceAndUtilHandler *m_RayManager = NULL;
+
+  struct ExportLookup
+  {
+    ExportLookup(rdcstr name, rdcstr altName, bool complete)
+        : name(name), altName(altName), complete(complete)
+    {
+    }
+    ExportLookup() = default;
+
+    // name of an export
+    rdcstr name;
+    // alternate names - for when name is mangled and unmangled names can be looked up
+    rdcstr altName;
+    // is this export complete - we rely on the runtime to resolve all the arcane rules and do any
+    // DXIL linking to tell if this export is actually complete or not.
+    // the first object where a shader identifier comes back is the one where we store the wrapped
+    // identifier, since identifiers must be cross-compatible and persistent
+    bool complete = false;
+    // whether this export is a hitgroup - incomplete hitgroups get inherited explicitly
+    bool hitgroup = false;
+  };
+
+  struct ShaderIdentifier
+  {
+    ResourceId id;      // the object which has the actual identifier in its ownExports array
+    uint32_t index;     // the index in the object's ownExports array
+    uint32_t pad[5];    // padding up to D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES
+  };
+
+  // wrapped identifiers for all exports in this database, ready to return to the application,
+  // including any inherited from parent objects and not referring to our exports
+  rdcarray<ShaderIdentifier> wrappedIdentifiers;
+
+  // parallel array to wrappedIdentifiers of export lookup information. This is parallel and not
+  // in-line with wrappedIdentifiers because we want that to be a tight array of actual identifiers
+  rdcarray<ExportLookup> exportLookups;
+
+  // these are not technically part of the 'exports' interface but they are very helpful to keep
+  // around at the same time. These are explicit associations which might yet apply to future
+  // exports in child state objects
+  rdcarray<rdcpair<rdcstr, uint32_t>> danglingRootSigAssocs;
+  rdcarray<rdcpair<rdcstr, rdcstr>> danglingDXILRootSigAssocs;
+  rdcflatmap<rdcstr, uint32_t> danglingDXILLocalRootSigs;
+
+  // list of hitgroups, with the name of the hit group export and the names of each shader export
+  // we can't precalculate the indices in this list because they could be dangling references that
+  // get inherited, so we have to do string lookups every time
+  rdcarray<rdcpair<rdcstr, rdcarray<rdcstr>>> hitGroups;
+
+  void InheritExport(const rdcstr &exportName, D3D12ShaderExportDatabase *existing, size_t i);
+
+  void ApplyRoot(const ShaderIdentifier &identifier, SubObjectPriority priority,
+                 uint32_t localRootSigIndex);
+
+  // register our own newly created export
+  void AddExport(const rdcstr &exportName);
+
+  // import some or all of a collection's exports
+  void InheritCollectionExport(D3D12ShaderExportDatabase *existing, const rdcstr &nameToExport,
+                               const rdcstr &nameInExisting);
+  void InheritAllCollectionExports(D3D12ShaderExportDatabase *existing);
+
+  // we only apply root signature associations to our own exports. Anything that was considered exported
+  // in a parent object was already final and either had a local root signature, or didn't need one at all.
+  void ApplyDefaultRoot(SubObjectPriority priority, uint32_t localRootSigIndex);
+  void ApplyRoot(SubObjectPriority priority, const rdcstr &exportName, uint32_t localRootSigIndex);
+
+  // register a hit group for local root sig inheritance
+  void AddLastHitGroupShaders(rdcarray<rdcstr> &&shaders);
+  void UpdateHitGroupAssociations();
+};
+
+class WrappedID3D12StateObject : public WrappedDeviceChild12<ID3D12StateObject>,
+                                 public ID3D12StateObjectProperties
+{
+  ID3D12StateObjectProperties *properties;
+
+public:
+  ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12StateObject);
+
+  D3D12ShaderExportDatabase *exports = NULL;
+
+  enum
+  {
+    TypeEnum = Resource_StateObject,
+  };
+
+  WrappedID3D12StateObject(ID3D12StateObject *real, WrappedID3D12Device *device)
+      : WrappedDeviceChild12(real, device)
+  {
+    real->QueryInterface(__uuidof(ID3D12StateObjectProperties), (void **)&properties);
+  }
+  virtual ~WrappedID3D12StateObject()
+  {
+    SAFE_RELEASE(properties);
+    SAFE_RELEASE(exports);
+    Shutdown();
+  }
+
+  ULONG STDMETHODCALLTYPE AddRef() { return WrappedDeviceChild12::AddRef(); }
+  ULONG STDMETHODCALLTYPE Release() { return WrappedDeviceChild12::Release(); }
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppvObject)
+  {
+    if(riid == __uuidof(ID3D12StateObjectProperties))
+    {
+      *ppvObject = (ID3D12StateObjectProperties *)this;
+      AddRef();
+      return S_OK;
+    }
+    return WrappedDeviceChild12::QueryInterface(riid, ppvObject);
+  }
+
+  ID3D12StateObjectProperties *GetProperties() const { return properties; }
+
+  //////////////////////////////
+  // implement ID3D12StateObject
+
+  //////////////////////////////
+  // implement ID3D12StateObjectProperties
+
+  virtual void *STDMETHODCALLTYPE GetShaderIdentifier(LPCWSTR pExportName)
+  {
+    return exports->GetShaderIdentifier(StringFormat::Wide2UTF8(pExportName));
+  }
+  virtual UINT64 STDMETHODCALLTYPE GetShaderStackSize(LPCWSTR pExportName)
+  {
+    return properties->GetShaderStackSize(pExportName);
+  }
+  virtual UINT64 STDMETHODCALLTYPE GetPipelineStackSize()
+  {
+    return properties->GetPipelineStackSize();
+  }
+  virtual void STDMETHODCALLTYPE SetPipelineStackSize(UINT64 PipelineStackSizeInBytes)
+  {
+    properties->SetPipelineStackSize(PipelineStackSizeInBytes);
+  }
+};
 
 class WrappedID3D12QueryHeap : public WrappedDeviceChild12<ID3D12QueryHeap>
 {
@@ -953,6 +1170,8 @@ public:
       return m_Heap->IsResident();
     return WrappedDeviceChild12::IsResident();
   }
+
+  WrappedID3D12Heap *GetHeap() { return m_Heap; }
 
   ID3D12Pageable *UnwrappedResidencyPageable()
   {
@@ -1169,6 +1388,7 @@ public:
   ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12RootSignature);
 
   D3D12RootSignature sig;
+  uint32_t localRootSigIdx = ~0U;
 
   enum
   {
@@ -1306,6 +1526,10 @@ public:
 
   uint64_t Size() const { return m_preBldInfo.ResultDataMaxSizeInBytes; }
   ResourceId GetBackingBufferResourceId() const { return m_asbWrappedResource->GetResourceID(); }
+  D3D12_GPU_VIRTUAL_ADDRESS GetVirtualAddress() const
+  {
+    return m_asbWrappedResource->GetGPUVirtualAddress() + m_asbWrappedResourceBufferOffset;
+  }
 
 private:
   WrappedID3D12Resource *m_asbWrappedResource;
@@ -1325,7 +1549,8 @@ private:
   D3D12_TYPE_MACRO(ID3D12RootSignature);            \
   D3D12_TYPE_MACRO(ID3D12PipelineLibrary);          \
   D3D12_TYPE_MACRO(ID3D12ProtectedResourceSession); \
-  D3D12_TYPE_MACRO(ID3D12ShaderCacheSession);
+  D3D12_TYPE_MACRO(ID3D12ShaderCacheSession);       \
+  D3D12_TYPE_MACRO(ID3D12StateObject);
 
 // template magic voodoo to unwrap types
 template <typename inner>

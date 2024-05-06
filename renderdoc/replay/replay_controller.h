@@ -150,6 +150,13 @@ public:
   const GLPipe::State *GetGLPipelineState();
   const VKPipe::State *GetVulkanPipelineState();
   const PipeState &GetPipelineState();
+  rdcarray<Descriptor> GetDescriptors(ResourceId descriptorStore,
+                                      const rdcarray<DescriptorRange> &ranges);
+  rdcarray<SamplerDescriptor> GetSamplerDescriptors(ResourceId descriptorStore,
+                                                    const rdcarray<DescriptorRange> &ranges);
+  const rdcarray<DescriptorAccess> &GetDescriptorAccess();
+  rdcarray<DescriptorLogicalLocation> GetDescriptorLocations(ResourceId descriptorStore,
+                                                             const rdcarray<DescriptorRange> &ranges);
 
   rdcarray<rdcstr> GetDisassemblyTargets(bool withPipeline);
   rdcstr DisassembleShader(ResourceId pipeline, const ShaderReflection *refl, const rdcstr &target);
@@ -181,6 +188,7 @@ public:
   CounterDescription DescribeCounter(GPUCounter counterID);
   const rdcarray<TextureDescription> &GetTextures();
   const rdcarray<BufferDescription> &GetBuffers();
+  const rdcarray<DescriptorStoreDescription> &GetDescriptorStores();
   const rdcarray<ResourceDescription> &GetResources();
   rdcarray<DebugMessage> GetDebugMessages();
   ResultDetails GetFatalErrorStatus()
@@ -276,6 +284,7 @@ private:
 
   rdcarray<ResourceDescription> m_Resources;
   rdcarray<BufferDescription> m_Buffers;
+  rdcarray<DescriptorStoreDescription> m_DescriptorStores;
   rdcarray<TextureDescription> m_Textures;
 
   IReplayDriver *m_pDevice;

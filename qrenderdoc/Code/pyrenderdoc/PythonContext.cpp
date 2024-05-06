@@ -29,7 +29,8 @@
 
 // must be included first
 #include <Python.h>
-#include <frameobject.h>
+
+#include "3rdparty/pythoncapi_compat.h"
 
 #ifdef slots_was_defined
 #define slots
@@ -71,43 +72,6 @@ PyTypeObject **SbkPySide2_QtWidgetsTypes = NULL;
 #include "Code/QRDUtils.h"
 #include "PythonContext.h"
 #include "version.h"
-
-// helpers for new PyFrameObject accessors in newer python versions, that are required starting from
-// python 3.11
-#if PY_VERSION_HEX < 0x030B0000
-
-// Get the frame's f_globals attribute.
-// Return a strong reference
-PyObject *PyFrame_GetGlobals(PyFrameObject *frame)
-{
-  PyObject *ret = frame->f_globals;
-  Py_XINCREF(ret);
-  return ret;
-}
-
-#endif
-
-#if PY_VERSION_HEX < 0x03090000
-
-// Get the frame next outer frame.
-// Return a strong reference
-PyFrameObject *PyFrame_GetBack(PyFrameObject *frame)
-{
-  PyFrameObject *ret = frame->f_back;
-  Py_XINCREF(ret);
-  return ret;
-}
-
-// Get the frame code.
-// Return a strong reference
-PyCodeObject *PyFrame_GetCode(PyFrameObject *frame)
-{
-  PyCodeObject *ret = frame->f_code;
-  Py_XINCREF(ret);
-  return ret;
-}
-
-#endif
 
 // exported by generated files, used to check interface compliance
 bool CheckCoreInterface(rdcstr &log);
@@ -258,6 +222,13 @@ void PythonContext::GlobalInit()
   PyImport_AppendInittab("renderdoc", &PyInit_renderdoc);
   PyImport_AppendInittab("qrenderdoc", &PyInit_qrenderdoc);
 
+#if PY_VERSION_HEX > 0x030B0000
+  PyConfig config;
+  PyConfig_InitPythonConfig(&config);
+  config.configure_c_stdio = 0;
+  config.parse_argv = 0;
+#endif
+
 #if defined(STATIC_QRENDERDOC)
   // add the location where our libs will be for statically-linked python installs
   {
@@ -267,17 +238,31 @@ void PythonContext::GlobalInit()
 
     pylibs.toWCharArray(python_home);
 
+#if PY_VERSION_HEX > 0x030B0000
+    config.home = python_home;
+#else
     Py_SetPythonHome(python_home);
+#endif
   }
 #endif
 
+#if PY_VERSION_HEX > 0x030B0000
+  config.program_name = program_name;
+
+  config.use_environment = 0;
+
+  Py_InitializeFromConfig(&config);
+#else
   Py_SetProgramName(program_name);
 
   Py_IgnoreEnvironmentFlag = 1;
 
   Py_Initialize();
+#endif
 
+#if PY_VERSION_HEX < 0x03090000
   PyEval_InitThreads();
+#endif
 
   OutputRedirectorType.tp_name = "renderdoc_output_redirector";
   OutputRedirectorType.tp_basicsize = sizeof(OutputRedirector);
@@ -862,8 +847,7 @@ void PythonContext::ConvertPyArgs(const ExtensionCallbackData &data,
     if(!out)
     {
       qCritical() << "Couldn't convert" << in << "to python object";
-      out = Py_None;
-      Py_XINCREF(out);
+      out = Py_XNewRef(Py_None);
     }
   }
 
@@ -1042,7 +1026,7 @@ QWidget *PythonContext::QWidgetFromPy(PyObject *widget)
   if(!initialised())
     return NULL;
 
-  if(widget == Py_None || widget == NULL)
+  if(Py_IsNone(widget) || widget == NULL)
     return NULL;
 
   if(!SbkPySide2_QtCoreTypes || !SbkPySide2_QtGuiTypes || !SbkPySide2_QtWidgetsTypes)
@@ -1077,7 +1061,7 @@ QStringList PythonContext::completionOptions(QString base)
   {
     opt = PyObject_CallFunction(completeFunction, "si", input, idx);
 
-    if(opt && opt != Py_None)
+    if(opt && !Py_IsNone(opt))
     {
       QString optstr = ToQStr(opt);
 
@@ -1093,7 +1077,7 @@ QStringList PythonContext::completionOptions(QString base)
     }
 
     idx++;
-  } while(opt && opt != Py_None);
+  } while(opt && !Py_IsNone(opt));
 
   // extra hack, remove the swig object functions/data but ONLY if we find a sure-fire identifier
   // (thisown) since otherwise we could remove append from a list object

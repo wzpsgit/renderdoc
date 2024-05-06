@@ -29,6 +29,7 @@
 #include "driver/ihv/amd/official/DXExt/AmdExtD3DCommandListMarkerApi.h"
 #include "d3d12_command_list.h"
 #include "d3d12_command_queue.h"
+#include "d3d12_replay.h"
 #include "d3d12_resources.h"
 #include "d3d12_shader_cache.h"
 
@@ -962,7 +963,14 @@ bool WrappedID3D12Device::Serialise_CreateDescriptorHeap(
 
       GetResourceManager()->AddLiveResource(pHeap, ret);
 
-      AddResource(pHeap, ResourceType::ShaderBinding, "Descriptor Heap");
+      AddResource(pHeap, ResourceType::DescriptorStore, "Descriptor Heap");
+
+      DescriptorStoreDescription desc;
+      desc.resourceId = pHeap;
+      desc.descriptorByteSize = 1;
+      desc.firstDescriptorOffset = 0;
+      desc.descriptorCount = Descriptor.NumDescriptors;
+      GetReplay()->RegisterDescriptorStore(desc);
     }
   }
 
@@ -1070,6 +1078,11 @@ bool WrappedID3D12Device::Serialise_CreateRootSignature(SerialiserType &ser, UIN
 
       wrapped->sig = GetShaderCache()->GetRootSig(pBlobWithRootSignature, (size_t)blobLengthInBytes);
 
+      if(wrapped->sig.Flags & D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE)
+        wrapped->localRootSigIdx =
+            GetResourceManager()->GetRaytracingResourceAndUtilHandler()->RegisterLocalRootSig(
+                wrapped->sig);
+
       {
         StructuredSerialiser structuriser(ser.GetStructuredFile().chunks.back(), &GetChunkName);
         structuriser.SetUserData(GetResourceManager());
@@ -1134,6 +1147,11 @@ HRESULT WrappedID3D12Device::CreateRootSignature(UINT nodeMask, const void *pBlo
       wrapped->SetResourceRecord(record);
 
       wrapped->sig = GetShaderCache()->GetRootSig(pBlobWithRootSignature, blobLengthInBytes);
+
+      if(wrapped->sig.Flags & D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE)
+        wrapped->localRootSigIdx =
+            GetResourceManager()->GetRaytracingResourceAndUtilHandler()->RegisterLocalRootSig(
+                wrapped->sig);
 
       if(!m_BindlessResourceUseActive)
       {
@@ -1209,7 +1227,7 @@ bool WrappedID3D12Device::Serialise_DynamicDescriptorWrite(SerialiserType &ser,
       // be undefined
       RDCASSERT(desc.GetType() != D3D12DescriptorType::Undefined);
       desc.Create(D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES, this, *handle);
-      handle->GetHeap()->MarkMutableView(handle->GetHeapIndex());
+      handle->GetHeap()->MarkMutableIndex(handle->GetHeapIndex());
     }
   }
 
@@ -1939,7 +1957,7 @@ bool WrappedID3D12Device::Serialise_DynamicDescriptorCopies(
     for(const DynamicDescriptorCopy &copy : DescriptorCopies)
     {
       CopyDescriptorsSimple(1, *copy.dst, *copy.src, copy.type);
-      copy.dst->GetHeap()->MarkMutableView(copy.dst->GetHeapIndex());
+      copy.dst->GetHeap()->MarkMutableIndex(copy.dst->GetHeapIndex());
     }
   }
 

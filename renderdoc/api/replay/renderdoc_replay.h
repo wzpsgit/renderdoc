@@ -566,6 +566,45 @@ capture's API.
 )");
   virtual const PipeState &GetPipelineState() = 0;
 
+  DOCUMENT(R"(Retrieve the contents of a number of descriptors in a descriptor store. Multiple
+ranges within the store can be queried at once, and are returned in a contiguous array.
+
+:param ResourceId descriptorStore: The descriptor store to be queried from.
+:param List[DescriptorRange] ranges: The descriptor ranges to query.
+:return: The contents of the descriptors specified.
+:rtype: List[Descriptor]
+)");
+  virtual rdcarray<Descriptor> GetDescriptors(ResourceId descriptorStore,
+                                              const rdcarray<DescriptorRange> &ranges) = 0;
+
+  DOCUMENT(R"(Retrieve the contents of a number of sampler descriptors in a descriptor store.
+Multiple ranges within the store can be queried at once, and are returned in a contiguous array.
+
+:param ResourceId descriptorStore: The descriptor store to be queried from.
+:param List[DescriptorRange] ranges: The descriptor ranges to query.
+:return: The contents of the descriptors specified.
+:rtype: List[SamplerDescriptor]
+)");
+  virtual rdcarray<SamplerDescriptor> GetSamplerDescriptors(
+      ResourceId descriptorStore, const rdcarray<DescriptorRange> &ranges) = 0;
+
+  DOCUMENT(R"(Retrieve the descriptor accesses that happened at the current event.
+
+:return: The descriptor accesses.
+:rtype: List[DescriptorAccess]
+)");
+  virtual const rdcarray<DescriptorAccess> &GetDescriptorAccess() = 0;
+
+  DOCUMENT(R"(Retrieve the logical locations for descriptors in a given descriptor store.
+
+:param ResourceId descriptorStore: The descriptor store to be queried from.
+:param List[DescriptorRange] ranges: The descriptor ranges to query.
+:return: The descriptor logical locations.
+:rtype: List[DescriptorLogicalLocation]
+)");
+  virtual rdcarray<DescriptorLogicalLocation> GetDescriptorLocations(
+      ResourceId descriptorStore, const rdcarray<DescriptorRange> &ranges) = 0;
+
   DOCUMENT(R"(Retrieve the list of possible disassembly targets for :meth:`DisassembleShader`. The
 values are implementation dependent but will always include a default target first which is the
 native disassembly of the shader. Further options may be available for additional diassembly views
@@ -810,6 +849,13 @@ are only used as intermediary elements.
 :rtype: List[BufferDescription]
 )");
   virtual const rdcarray<BufferDescription> &GetBuffers() = 0;
+
+  DOCUMENT(R"(Retrieve the list of descriptor storage objects alive in the capture.
+
+:return: The list of descriptor storage objects in the capture.
+:rtype: List[DescriptorStoreDescription]
+)");
+  virtual const rdcarray<DescriptorStoreDescription> &GetDescriptorStores() = 0;
 
   DOCUMENT(R"(Retrieve a list of any newly generated diagnostic messages.
 

@@ -20,6 +20,10 @@
 #define DOCUMENT3(text1, text2, text3) %feature("docstring") text1 text2 text3
 #define DOCUMENT4(text1, text2, text3, text4) %feature("docstring") text1 text2 text3 text4
 
+%header %{
+#include "3rdparty/pythoncapi_compat.h"
+%}
+
 // include header for typed enums (hopefully using PEP435 enums)
 %include <enums.swg>
 
@@ -361,7 +365,7 @@ TEMPLATE_ARRAY_INSTANTIATE(rdcarray, ActionDescription)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, GPUCounter)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, CounterResult)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, APIEvent)
-TEMPLATE_ARRAY_INSTANTIATE(rdcarray, Bindpoint)
+TEMPLATE_ARRAY_INSTANTIATE(rdcarray, DescriptorStoreDescription)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, BufferDescription)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, CaptureFileFormat)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, ConstantBlock)
@@ -398,8 +402,6 @@ TEMPLATE_ARRAY_INSTANTIATE(rdcarray, ColorBlend)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, BoundVBuffer)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, Offset)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, VertexInputAttribute)
-TEMPLATE_ARRAY_INSTANTIATE(rdcarray, BoundResource)
-TEMPLATE_ARRAY_INSTANTIATE(rdcarray, BoundResourceArray)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, FloatVector)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, GraphicsAPI)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, GPUDevice)
@@ -408,9 +410,13 @@ TEMPLATE_ARRAY_INSTANTIATE(rdcarray, ShaderChangeStats)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, ResourceBindStats)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, SamplerBindStats)
 TEMPLATE_ARRAY_INSTANTIATE(rdcarray, ConstantBindStats)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, Attachment)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, BindingElement)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, DescriptorBinding)
+TEMPLATE_ARRAY_INSTANTIATE(rdcarray, DescriptorRange)
+TEMPLATE_ARRAY_INSTANTIATE(rdcarray, Descriptor)
+TEMPLATE_ARRAY_INSTANTIATE(rdcarray, SamplerDescriptor)
+TEMPLATE_ARRAY_INSTANTIATE(rdcarray, DescriptorAccess)
+TEMPLATE_ARRAY_INSTANTIATE(rdcarray, DescriptorLogicalLocation)
+TEMPLATE_ARRAY_INSTANTIATE(rdcarray, UsedDescriptor)
+TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, DynamicOffset)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, DescriptorSet)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, ImageData)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, ImageLayout)
@@ -420,28 +426,20 @@ TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, VertexBuffer)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, VertexAttribute)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, VertexBinding)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, VKPipe, ViewportScissor)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D11Pipe, ConstantBuffer)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D11Pipe, Layout)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D11Pipe, Sampler)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D11Pipe, StreamOutBind)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D11Pipe, VertexBuffer)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D11Pipe, View)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D12Pipe, ConstantBuffer)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D12Pipe, Layout)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D12Pipe, ResourceData)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D12Pipe, ResourceState)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D12Pipe, RootSignatureRange)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D12Pipe, Sampler)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D12Pipe, StreamOutBind)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D12Pipe, VertexBuffer)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D12Pipe, View)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, GLPipe, Attachment)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, GLPipe, Buffer)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, GLPipe, ImageLoadStore)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, GLPipe, Sampler)
-TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, GLPipe, Texture)
+TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D12Pipe, RootTableRange)
+TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D12Pipe, RootParam)
+TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, D3D12Pipe, StaticSampler)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, GLPipe, VertexBuffer)
 TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, GLPipe, VertexAttribute)
+TEMPLATE_NAMESPACE_ARRAY_INSTANTIATE(rdcarray, GLPipe, TextureCompleteness)
 
 ///////////////////////////////////////////////////////////////////////////////////////////
 // declare a function for passing external objects into python
@@ -470,9 +468,9 @@ extern "C" PyObject *RENDERDOC_DumpObject(PyObject *obj)
   void *resptr = NULL;
 
   // for basic types, return the repr directly
-  if(obj == (PyObject *)&_Py_TrueStruct ||
-     obj == (PyObject *)&_Py_FalseStruct ||
-     PyObject_IsInstance(obj, (PyObject*)&_PyNone_Type) ||
+  if(Py_IsTrue(obj) ||
+     Py_IsFalse(obj) ||
+     Py_IsNone(obj) ||
      PyObject_IsInstance(obj, (PyObject*)&PyFloat_Type) ||
      PyObject_IsInstance(obj, (PyObject*)&PyLong_Type) ||
      PyObject_IsInstance(obj, (PyObject*)&PyBytes_Type) ||

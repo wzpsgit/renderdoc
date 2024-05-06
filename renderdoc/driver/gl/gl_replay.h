@@ -136,6 +136,8 @@ public:
   ResourceDescription &GetResourceDesc(ResourceId id);
   rdcarray<ResourceDescription> GetResources();
 
+  rdcarray<DescriptorStoreDescription> GetDescriptorStores() { return {}; }
+
   rdcarray<BufferDescription> GetBuffers();
   BufferDescription GetBuffer(ResourceId id);
 
@@ -160,6 +162,13 @@ public:
     m_GLPipelineState = gl;
   }
   void SavePipelineState(uint32_t eventId);
+  rdcarray<Descriptor> GetDescriptors(ResourceId descriptorStore,
+                                      const rdcarray<DescriptorRange> &ranges);
+  rdcarray<SamplerDescriptor> GetSamplerDescriptors(ResourceId descriptorStore,
+                                                    const rdcarray<DescriptorRange> &ranges);
+  rdcarray<DescriptorAccess> GetDescriptorAccess(uint32_t eventId);
+  rdcarray<DescriptorLogicalLocation> GetDescriptorLocations(ResourceId descriptorStore,
+                                                             const rdcarray<DescriptorRange> &ranges);
   void FreeTargetResource(ResourceId id);
 
   RDResult ReadLogInitialisation(RDCFile *rdc, bool storeStructuredBuffers);
@@ -491,6 +500,8 @@ private:
   std::map<ResourceId, size_t> m_ResourceIdx;
 
   GLPipe::State *m_GLPipelineState = NULL;
+
+  rdcarray<DescriptorAccess> m_Access;
 
   FrameRecord m_FrameRecord;
 

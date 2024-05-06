@@ -187,7 +187,6 @@ APIProperties VulkanReplay::GetAPIProperties()
   ret.pipelineType = GraphicsAPI::Vulkan;
   ret.localRenderer = GraphicsAPI::Vulkan;
   ret.degraded = false;
-  ret.shadersMutable = false;
   ret.rgpCapture =
       (m_DriverInfo.vendor == GPUVendor::AMD || m_DriverInfo.vendor == GPUVendor::Samsung) &&
       m_RGP != NULL && m_RGP->DriverSupportsInterop();
@@ -303,6 +302,16 @@ ResourceDescription &VulkanReplay::GetResourceDesc(ResourceId id)
 rdcarray<ResourceDescription> VulkanReplay::GetResources()
 {
   return m_Resources;
+}
+
+rdcarray<DescriptorStoreDescription> VulkanReplay::GetDescriptorStores()
+{
+  return m_DescriptorStores;
+}
+
+void VulkanReplay::RegisterDescriptorStore(const DescriptorStoreDescription &desc)
+{
+  m_DescriptorStores.push_back(desc);
 }
 
 rdcarray<TextureDescription> VulkanReplay::GetTextures()
@@ -965,9 +974,99 @@ void VulkanReplay::RenderHighlightBox(float w, float h, float scale)
     m_pDriver->SubmitCmds();
 }
 
-void VulkanReplay::GetBufferData(ResourceId buff, uint64_t offset, uint64_t len, bytebuf &retData)
+void VulkanReplay::GetBufferData(ResourceId buff, uint64_t offset, uint64_t len, bytebuf &ret)
 {
-  GetDebugManager()->GetBufferData(buff, offset, len, retData);
+  bytebuf inlineData;
+  bool useInlineData = false;
+
+  // specialisation constants 'descriptor' stored in a pipeline
+  auto pipe = m_pDriver->m_CreationInfo.m_Pipeline.find(buff);
+  if(pipe != m_pDriver->m_CreationInfo.m_Pipeline.end())
+  {
+    const VulkanCreationInfo::Pipeline &p = pipe->second;
+
+    for(size_t i = 0; i < NumShaderStages; i++)
+    {
+      // set up the defaults
+      if(p.shaders[i].refl)
+      {
+        for(size_t cb = 0; cb < p.shaders[i].refl->constantBlocks.size(); cb++)
+        {
+          if(p.shaders[i].refl->constantBlocks[cb].compileConstants)
+          {
+            for(const ShaderConstant &sc : p.shaders[i].refl->constantBlocks[cb].variables)
+            {
+              inlineData.resize_for_index(sc.byteOffset + sizeof(uint64_t));
+              memcpy(inlineData.data() + sc.byteOffset, &sc.defaultValue, sizeof(uint64_t));
+            }
+            break;
+          }
+        }
+      }
+
+      // apply any specializations
+      for(const SpecConstant &s : p.shaders[i].specialization)
+      {
+        int32_t idx = p.shaders[i].patchData->specIDs.indexOf(s.specID);
+
+        if(idx == -1)
+        {
+          RDCWARN("Couldn't find offset for spec ID %u", s.specID);
+          continue;
+        }
+
+        size_t offs = idx * sizeof(uint64_t);
+
+        inlineData.resize_for_index(offs + sizeof(uint64_t));
+        memcpy(inlineData.data() + offs, &s.value, s.dataSize);
+      }
+    }
+
+    useInlineData = true;
+  }
+
+  // push constants 'descriptor' stored in a command buffer
+  if(WrappedVkCommandBuffer::IsAlloc(GetResourceManager()->GetCurrentResource(buff)))
+  {
+    inlineData.assign(m_pDriver->m_RenderState.pushconsts, m_pDriver->m_RenderState.pushConstSize);
+    useInlineData = true;
+  }
+
+  // inline uniform data inside a descriptor set
+  auto descit = m_pDriver->m_DescriptorSetState.find(buff);
+  if(descit != m_pDriver->m_DescriptorSetState.end())
+  {
+    const WrappedVulkan::DescriptorSetInfo &set = descit->second;
+
+    inlineData = set.data.inlineBytes;
+    useInlineData = true;
+  }
+
+  if(useInlineData)
+  {
+    if(offset >= inlineData.size())
+      return;
+
+    if(len == 0 || len > inlineData.size())
+      len = inlineData.size() - offset;
+
+    if(offset + len > inlineData.size())
+    {
+      RDCWARN(
+          "Attempting to read off the end of current push constants (%llu %llu). Will be clamped "
+          "(%llu)",
+          offset, len, inlineData.size());
+      len = RDCMIN(len, inlineData.size() - offset);
+    }
+
+    ret.resize((size_t)len);
+
+    memcpy(ret.data(), inlineData.data() + offset, ret.size());
+
+    return;
+  }
+
+  GetDebugManager()->GetBufferData(buff, offset, len, ret);
 }
 
 void VulkanReplay::FileChanged()
@@ -1107,8 +1206,6 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
       stage.entryPoint = p.shaders[i].entryPoint;
 
       stage.stage = ShaderStage::Compute;
-      if(p.shaders[i].mapping)
-        stage.bindpointMapping = *p.shaders[i].mapping;
       if(p.shaders[i].refl)
         stage.reflection = p.shaders[i].refl;
 
@@ -1128,11 +1225,11 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
       stage.specializationData.clear();
 
       // set up the defaults
-      if(p.shaders[i].mapping && p.shaders[i].refl)
+      if(p.shaders[i].refl)
       {
-        for(size_t cb = 0; cb < p.shaders[i].mapping->constantBlocks.size(); cb++)
+        for(size_t cb = 0; cb < p.shaders[i].refl->constantBlocks.size(); cb++)
         {
-          if(p.shaders[i].mapping->constantBlocks[cb].bindset == SpecializationConstantBindSet)
+          if(p.shaders[i].refl->constantBlocks[cb].compileConstants)
           {
             for(const ShaderConstant &sc : p.shaders[i].refl->constantBlocks[cb].variables)
             {
@@ -1239,8 +1336,6 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
       stages[i]->entryPoint = p.shaders[i].entryPoint;
 
       stages[i]->stage = StageFromIndex(i);
-      if(p.shaders[i].mapping)
-        stages[i]->bindpointMapping = *p.shaders[i].mapping;
       if(p.shaders[i].refl)
         stages[i]->reflection = p.shaders[i].refl;
 
@@ -1261,11 +1356,11 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
       stages[i]->requiredSubgroupSize = p.shaders[i].requiredSubgroupSize;
 
       // set up the defaults
-      if(p.shaders[i].mapping && p.shaders[i].refl)
+      if(p.shaders[i].refl)
       {
-        for(size_t cb = 0; cb < p.shaders[i].mapping->constantBlocks.size(); cb++)
+        for(size_t cb = 0; cb < p.shaders[i].refl->constantBlocks.size(); cb++)
         {
-          if(p.shaders[i].mapping->constantBlocks[cb].bindset == SpecializationConstantBindSet)
+          if(p.shaders[i].refl->constantBlocks[cb].compileConstants)
           {
             for(const ShaderConstant &sc : p.shaders[i].refl->constantBlocks[cb].variables)
             {
@@ -1655,22 +1750,22 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
 
       if(viewid != ResourceId())
       {
-        fbState.attachments.back().viewResourceId = rm->GetOriginalID(viewid);
-        ret.currentPass.framebuffer.attachments[attIdx].imageResourceId =
+        fbState.attachments.back().view = rm->GetOriginalID(viewid);
+        ret.currentPass.framebuffer.attachments[attIdx].resource =
             rm->GetOriginalID(c.m_ImageView[viewid].image);
 
-        fbState.attachments.back().viewFormat = MakeResourceFormat(c.m_ImageView[viewid].format);
-        fbState.attachments.back().firstMip = c.m_ImageView[viewid].range.baseMipLevel;
-        fbState.attachments.back().firstSlice = c.m_ImageView[viewid].range.baseArrayLayer;
-        fbState.attachments.back().numMips = c.m_ImageView[viewid].range.levelCount;
-        fbState.attachments.back().numSlices = c.m_ImageView[viewid].range.layerCount;
+        fbState.attachments.back().format = MakeResourceFormat(c.m_ImageView[viewid].format);
+        fbState.attachments.back().firstMip = c.m_ImageView[viewid].range.baseMipLevel & 0xff;
+        fbState.attachments.back().firstSlice = c.m_ImageView[viewid].range.baseArrayLayer & 0xffff;
+        fbState.attachments.back().numMips = c.m_ImageView[viewid].range.levelCount & 0xff;
+        fbState.attachments.back().numSlices = c.m_ImageView[viewid].range.layerCount & 0xffff;
 
         Convert(fbState.attachments.back().swizzle, c.m_ImageView[viewid].componentMapping);
       }
       else
       {
-        fbState.attachments.back().viewResourceId = ResourceId();
-        fbState.attachments.back().imageResourceId = ResourceId();
+        fbState.attachments.back().view = ResourceId();
+        fbState.attachments.back().resource = ResourceId();
 
         fbState.attachments.back().firstMip = 0;
         fbState.attachments.back().firstSlice = 0;
@@ -1686,15 +1781,15 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
 
         viewid = GetResID(dyn.color[i].resolveImageView);
 
-        fbState.attachments.back().viewResourceId = rm->GetOriginalID(viewid);
-        ret.currentPass.framebuffer.attachments[attIdx].imageResourceId =
+        fbState.attachments.back().view = rm->GetOriginalID(viewid);
+        ret.currentPass.framebuffer.attachments[attIdx].resource =
             rm->GetOriginalID(c.m_ImageView[viewid].image);
 
-        fbState.attachments.back().viewFormat = MakeResourceFormat(c.m_ImageView[viewid].format);
-        fbState.attachments.back().firstMip = c.m_ImageView[viewid].range.baseMipLevel;
-        fbState.attachments.back().firstSlice = c.m_ImageView[viewid].range.baseArrayLayer;
-        fbState.attachments.back().numMips = c.m_ImageView[viewid].range.levelCount;
-        fbState.attachments.back().numSlices = c.m_ImageView[viewid].range.layerCount;
+        fbState.attachments.back().format = MakeResourceFormat(c.m_ImageView[viewid].format);
+        fbState.attachments.back().firstMip = c.m_ImageView[viewid].range.baseMipLevel & 0xff;
+        fbState.attachments.back().firstSlice = c.m_ImageView[viewid].range.baseArrayLayer & 0xffff;
+        fbState.attachments.back().numMips = c.m_ImageView[viewid].range.levelCount & 0xff;
+        fbState.attachments.back().numSlices = c.m_ImageView[viewid].range.layerCount & 0xffff;
 
         Convert(fbState.attachments.back().swizzle, c.m_ImageView[viewid].componentMapping);
 
@@ -1710,15 +1805,15 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
       if(dyn.depth.imageView == VK_NULL_HANDLE)
         viewid = GetResID(dyn.stencil.imageView);
 
-      fbState.attachments.back().viewResourceId = rm->GetOriginalID(viewid);
-      ret.currentPass.framebuffer.attachments[attIdx].imageResourceId =
+      fbState.attachments.back().view = rm->GetOriginalID(viewid);
+      ret.currentPass.framebuffer.attachments[attIdx].resource =
           rm->GetOriginalID(c.m_ImageView[viewid].image);
 
-      fbState.attachments.back().viewFormat = MakeResourceFormat(c.m_ImageView[viewid].format);
-      fbState.attachments.back().firstMip = c.m_ImageView[viewid].range.baseMipLevel;
-      fbState.attachments.back().firstSlice = c.m_ImageView[viewid].range.baseArrayLayer;
-      fbState.attachments.back().numMips = c.m_ImageView[viewid].range.levelCount;
-      fbState.attachments.back().numSlices = c.m_ImageView[viewid].range.layerCount;
+      fbState.attachments.back().format = MakeResourceFormat(c.m_ImageView[viewid].format);
+      fbState.attachments.back().firstMip = c.m_ImageView[viewid].range.baseMipLevel & 0xff;
+      fbState.attachments.back().firstSlice = c.m_ImageView[viewid].range.baseArrayLayer & 0xffff;
+      fbState.attachments.back().numMips = c.m_ImageView[viewid].range.levelCount & 0xff;
+      fbState.attachments.back().numSlices = c.m_ImageView[viewid].range.layerCount & 0xffff;
 
       Convert(fbState.attachments.back().swizzle, c.m_ImageView[viewid].componentMapping);
 
@@ -1735,15 +1830,15 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
 
       ResourceId viewid = GetResID(dyn.fragmentDensityView);
 
-      fbState.attachments.back().viewResourceId = rm->GetOriginalID(viewid);
-      ret.currentPass.framebuffer.attachments[attIdx].imageResourceId =
+      fbState.attachments.back().view = rm->GetOriginalID(viewid);
+      ret.currentPass.framebuffer.attachments[attIdx].resource =
           rm->GetOriginalID(c.m_ImageView[viewid].image);
 
-      fbState.attachments.back().viewFormat = MakeResourceFormat(c.m_ImageView[viewid].format);
-      fbState.attachments.back().firstMip = c.m_ImageView[viewid].range.baseMipLevel;
-      fbState.attachments.back().firstSlice = c.m_ImageView[viewid].range.baseArrayLayer;
-      fbState.attachments.back().numMips = c.m_ImageView[viewid].range.levelCount;
-      fbState.attachments.back().numSlices = c.m_ImageView[viewid].range.layerCount;
+      fbState.attachments.back().format = MakeResourceFormat(c.m_ImageView[viewid].format);
+      fbState.attachments.back().firstMip = c.m_ImageView[viewid].range.baseMipLevel & 0xff;
+      fbState.attachments.back().firstSlice = c.m_ImageView[viewid].range.baseArrayLayer & 0xffff;
+      fbState.attachments.back().numMips = c.m_ImageView[viewid].range.levelCount & 0xff;
+      fbState.attachments.back().numSlices = c.m_ImageView[viewid].range.layerCount & 0xffff;
 
       Convert(fbState.attachments.back().swizzle, c.m_ImageView[viewid].componentMapping);
 
@@ -1760,15 +1855,15 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
 
       ResourceId viewid = GetResID(dyn.shadingRateView);
 
-      fbState.attachments.back().viewResourceId = rm->GetOriginalID(viewid);
-      ret.currentPass.framebuffer.attachments[attIdx].imageResourceId =
+      fbState.attachments.back().view = rm->GetOriginalID(viewid);
+      ret.currentPass.framebuffer.attachments[attIdx].resource =
           rm->GetOriginalID(c.m_ImageView[viewid].image);
 
-      fbState.attachments.back().viewFormat = MakeResourceFormat(c.m_ImageView[viewid].format);
-      fbState.attachments.back().firstMip = c.m_ImageView[viewid].range.baseMipLevel;
-      fbState.attachments.back().firstSlice = c.m_ImageView[viewid].range.baseArrayLayer;
-      fbState.attachments.back().numMips = c.m_ImageView[viewid].range.levelCount;
-      fbState.attachments.back().numSlices = c.m_ImageView[viewid].range.layerCount;
+      fbState.attachments.back().format = MakeResourceFormat(c.m_ImageView[viewid].format);
+      fbState.attachments.back().firstMip = c.m_ImageView[viewid].range.baseMipLevel & 0xff;
+      fbState.attachments.back().firstSlice = c.m_ImageView[viewid].range.baseArrayLayer & 0xffff;
+      fbState.attachments.back().numMips = c.m_ImageView[viewid].range.levelCount & 0xff;
+      fbState.attachments.back().numSlices = c.m_ImageView[viewid].range.layerCount & 0xffff;
 
       Convert(fbState.attachments.back().swizzle, c.m_ImageView[viewid].componentMapping);
 
@@ -1838,27 +1933,28 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
 
         if(viewid != ResourceId())
         {
-          ret.currentPass.framebuffer.attachments[i].viewResourceId = rm->GetOriginalID(viewid);
-          ret.currentPass.framebuffer.attachments[i].imageResourceId =
+          ret.currentPass.framebuffer.attachments[i].view = rm->GetOriginalID(viewid);
+          ret.currentPass.framebuffer.attachments[i].resource =
               rm->GetOriginalID(c.m_ImageView[viewid].image);
 
-          ret.currentPass.framebuffer.attachments[i].viewFormat =
+          ret.currentPass.framebuffer.attachments[i].format =
               MakeResourceFormat(c.m_ImageView[viewid].format);
           ret.currentPass.framebuffer.attachments[i].firstMip =
-              c.m_ImageView[viewid].range.baseMipLevel;
+              c.m_ImageView[viewid].range.baseMipLevel & 0xff;
           ret.currentPass.framebuffer.attachments[i].firstSlice =
-              c.m_ImageView[viewid].range.baseArrayLayer;
-          ret.currentPass.framebuffer.attachments[i].numMips = c.m_ImageView[viewid].range.levelCount;
+              c.m_ImageView[viewid].range.baseArrayLayer & 0xffff;
+          ret.currentPass.framebuffer.attachments[i].numMips =
+              c.m_ImageView[viewid].range.levelCount & 0xff;
           ret.currentPass.framebuffer.attachments[i].numSlices =
-              c.m_ImageView[viewid].range.layerCount;
+              c.m_ImageView[viewid].range.layerCount & 0xffff;
 
           Convert(ret.currentPass.framebuffer.attachments[i].swizzle,
                   c.m_ImageView[viewid].componentMapping);
         }
         else
         {
-          ret.currentPass.framebuffer.attachments[i].viewResourceId = ResourceId();
-          ret.currentPass.framebuffer.attachments[i].imageResourceId = ResourceId();
+          ret.currentPass.framebuffer.attachments[i].view = ResourceId();
+          ret.currentPass.framebuffer.attachments[i].resource = ResourceId();
 
           ret.currentPass.framebuffer.attachments[i].firstMip = 0;
           ret.currentPass.framebuffer.attachments[i].firstSlice = 0;
@@ -1916,6 +2012,66 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
   ret.graphics.descriptorSets.resize(state.graphics.descSets.size());
   ret.compute.descriptorSets.resize(state.compute.descSets.size());
 
+  // store dynamic offsets
+  {
+    rdcarray<VKPipe::DescriptorSet> *dsts[] = {
+        &ret.graphics.descriptorSets,
+        &ret.compute.descriptorSets,
+    };
+
+    const rdcarray<VulkanStatePipeline::DescriptorAndOffsets> *srcs[] = {
+        &state.graphics.descSets,
+        &state.compute.descSets,
+    };
+
+    for(size_t p = 0; p < ARRAY_COUNT(srcs); p++)
+    {
+      for(size_t i = 0; i < srcs[p]->size(); i++)
+      {
+        const VulkanStatePipeline::DescriptorAndOffsets &srcData = srcs[p]->at(i);
+        ResourceId sourceSet = srcData.descSet;
+        const uint32_t *srcOffset = srcData.offsets.begin();
+        VKPipe::DescriptorSet &destSet = dsts[p]->at(i);
+
+        destSet.dynamicOffsets.clear();
+
+        if(sourceSet == ResourceId())
+          continue;
+
+        destSet.dynamicOffsets.reserve(srcData.offsets.size());
+
+        VKPipe::DynamicOffset dynOffset;
+
+        const WrappedVulkan::DescriptorSetInfo &descSetState =
+            m_pDriver->m_DescriptorSetState[sourceSet];
+        const DescriptorSetSlot *first =
+            descSetState.data.binds.empty() ? NULL : descSetState.data.binds[0];
+        for(size_t b = 0; b < descSetState.data.binds.size(); b++)
+        {
+          const DescSetLayout::Binding &layoutBind =
+              c.m_DescSetLayout[descSetState.layout].bindings[b];
+
+          if(layoutBind.layoutDescType != VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC &&
+             layoutBind.layoutDescType != VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)
+            continue;
+
+          uint64_t descriptorByteOffset = descSetState.data.binds[b] - first;
+
+          // inline UBOs aren't dynamic and variable size can't be used with dynamic buffers, so the
+          // count is what it is at definition time
+          for(uint32_t a = 0; a < layoutBind.descriptorCount; a++)
+          {
+            dynOffset.descriptorByteOffset = descriptorByteOffset + a;
+            dynOffset.dynamicBufferByteOffset = *srcOffset;
+            srcOffset++;
+
+            destSet.dynamicOffsets.push_back(dynOffset);
+          }
+        }
+      }
+    }
+  }
+
   {
     rdcarray<VKPipe::DescriptorSet> *dsts[] = {
         &ret.graphics.descriptorSets,
@@ -1933,371 +2089,26 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
 
     for(size_t p = 0; p < ARRAY_COUNT(srcs); p++)
     {
-      bool hasUsedBinds = false;
-      const BindpointIndex *usedBindsData = NULL;
-      size_t usedBindsSize = 0;
-
-      {
-        bool curCompute = (p == 1);
-        if(usage.valid && usage.compute == curCompute)
-        {
-          hasUsedBinds = true;
-          usedBindsData = usage.used.data();
-          usedBindsSize = usage.used.size();
-        }
-
-        const ActionDescription *action = m_pDriver->GetAction(eventId);
-        if(action)
-        {
-          bool isDispatch = bool(action->flags & ActionFlags::Dispatch);
-
-          // ifor compute stage on draws, and non-compute stages on dispatches, pretend all
-          // resources are dynamically unused, to prevent the lack of data from causing large arrays
-          // to be force-expanded
-          if((curCompute && !isDispatch) || (!curCompute && isDispatch))
-          {
-            hasUsedBinds = true;
-            usedBindsData = NULL;
-            usedBindsSize = 0;
-          }
-        }
-      }
-
-      BindpointIndex curBind;
-
       for(size_t i = 0; i < srcs[p]->size(); i++)
       {
         ResourceId sourceSet = (*srcs[p])[i].descSet;
-        const uint32_t *srcOffset = (*srcs[p])[i].offsets.begin();
         VKPipe::DescriptorSet &destSet = (*dsts[p])[i];
 
         if(sourceSet == ResourceId())
         {
-          destSet.inlineData.clear();
           destSet.descriptorSetResourceId = ResourceId();
           destSet.pushDescriptor = false;
           destSet.layoutResourceId = ResourceId();
-          destSet.bindings.clear();
           continue;
         }
 
-        destSet.inlineData = m_pDriver->m_DescriptorSetState[sourceSet].data.inlineBytes;
-
-        curBind.bindset = (uint32_t)i;
-
         ResourceId layoutId = m_pDriver->m_DescriptorSetState[sourceSet].layout;
 
-        // push descriptors don't have a real descriptor set backing them
-        if(c.m_DescSetLayout[layoutId].flags & VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR)
-        {
-          destSet.descriptorSetResourceId = ResourceId();
-          destSet.pushDescriptor = true;
-        }
-        else
-        {
-          destSet.descriptorSetResourceId = rm->GetOriginalID(sourceSet);
-          destSet.pushDescriptor = false;
-        }
+        destSet.descriptorSetResourceId = rm->GetOriginalID(sourceSet);
+        destSet.pushDescriptor = (c.m_DescSetLayout[layoutId].flags &
+                                  VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR);
 
         destSet.layoutResourceId = rm->GetOriginalID(layoutId);
-        destSet.bindings.resize(m_pDriver->m_DescriptorSetState[sourceSet].data.binds.size());
-        for(size_t b = 0; b < m_pDriver->m_DescriptorSetState[sourceSet].data.binds.size(); b++)
-        {
-          DescriptorSetSlot *sourceSlots = m_pDriver->m_DescriptorSetState[sourceSet].data.binds[b];
-          VKPipe::DescriptorBinding &destSlots = destSet.bindings[b];
-          const DescSetLayout::Binding &layoutBind = c.m_DescSetLayout[layoutId].bindings[b];
-
-          curBind.bind = (uint32_t)b;
-
-          uint32_t descriptorCount = layoutBind.descriptorCount;
-
-          if(layoutBind.variableSize)
-            descriptorCount = m_pDriver->m_DescriptorSetState[sourceSet].data.variableDescriptorCount;
-
-          destSlots.descriptorCount = descriptorCount;
-
-          if(layoutBind.layoutDescType == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
-            destSlots.descriptorCount = 1;
-
-          destSlots.stageFlags = (ShaderStageMask)layoutBind.stageFlags;
-
-          destSlots.firstUsedIndex = -1;
-          destSlots.lastUsedIndex = -1;
-          destSlots.dynamicallyUsedCount = 0;
-
-          destSlots.binds.resize(destSlots.descriptorCount);
-          for(uint32_t a = 0; a < destSlots.descriptorCount; a++)
-          {
-            const DescriptorSetSlot &srcel = sourceSlots[a];
-            VKPipe::BindingElement &dstel = destSlots.binds[a];
-
-            // clear it so we don't have to manually reset all elements back to normal
-            memset(&dstel, 0, sizeof(dstel));
-
-            curBind.arrayIndex = a;
-
-            // if we have a list of used binds, and this is an array descriptor (so would be
-            // expected to be in the list), check it for dynamic usage.
-            if(destSlots.descriptorCount > 1 && hasUsedBinds)
-            {
-              // if we exhausted the list, all other elements are unused
-              if(usedBindsSize == 0)
-              {
-                dstel.dynamicallyUsed = false;
-              }
-              else
-              {
-                // we never saw the current value of usedBindsData (which is odd, we should have
-                // when iterating over all descriptors. This could only happen if there's some
-                // layout mismatch or a feedback bug that lead to an invalid entry in the list).
-                // Keep advancing until we get to one that is >= our current bind
-                while(curBind > *usedBindsData && usedBindsSize)
-                {
-                  usedBindsData++;
-                  usedBindsSize--;
-                }
-
-                // the next used bind is equal to this one. Mark it as dynamically used, and consume
-                if(usedBindsSize > 0 && curBind == *usedBindsData)
-                {
-                  dstel.dynamicallyUsed = true;
-                  usedBindsData++;
-                  usedBindsSize--;
-                }
-                // the next used bind is after the current one, this is not used.
-                else if(usedBindsSize > 0 && curBind < *usedBindsData)
-                {
-                  dstel.dynamicallyUsed = false;
-                }
-              }
-            }
-            else
-            {
-              dstel.dynamicallyUsed = true;
-            }
-
-            if(dstel.dynamicallyUsed)
-            {
-              destSlots.dynamicallyUsedCount++;
-              // we iterate in forward order, so we can unconditinoally set the last bind to the
-              // current one, and only set the first bind if we haven't encountered one before
-              destSlots.lastUsedIndex = a;
-
-              if(destSlots.firstUsedIndex < 0)
-                destSlots.firstUsedIndex = a;
-            }
-
-            DescriptorSlotType descriptorType = srcel.type;
-
-            // immutable samplers cannot be used with mutable descriptors, so if we have immutable
-            // samplers set the type from the layout. That way even if the descriptor is never
-            // written we still process immutable samplers properly.
-            if(layoutBind.immutableSampler)
-              descriptorType = convert(layoutBind.layoutDescType);
-
-            switch(descriptorType)
-            {
-              case DescriptorSlotType::Sampler: dstel.type = BindType::Sampler; break;
-              case DescriptorSlotType::CombinedImageSampler:
-                dstel.type = BindType::ImageSampler;
-                break;
-              case DescriptorSlotType::SampledImage: dstel.type = BindType::ReadOnlyImage; break;
-              case DescriptorSlotType::StorageImage: dstel.type = BindType::ReadWriteImage; break;
-              case DescriptorSlotType::UniformTexelBuffer:
-                dstel.type = BindType::ReadOnlyTBuffer;
-                break;
-              case DescriptorSlotType::StorageTexelBuffer:
-                dstel.type = BindType::ReadWriteTBuffer;
-                break;
-              case DescriptorSlotType::UniformBuffer: dstel.type = BindType::ConstantBuffer; break;
-              case DescriptorSlotType::StorageBuffer: dstel.type = BindType::ReadWriteBuffer; break;
-              case DescriptorSlotType::UniformBufferDynamic:
-                dstel.type = BindType::ConstantBuffer;
-                break;
-              case DescriptorSlotType::StorageBufferDynamic:
-                dstel.type = BindType::ReadWriteBuffer;
-                break;
-              case DescriptorSlotType::InputAttachment:
-                dstel.type = BindType::InputAttachment;
-                break;
-              case DescriptorSlotType::InlineBlock: dstel.type = BindType::ConstantBuffer; break;
-              case DescriptorSlotType::Unwritten:
-              case DescriptorSlotType::Count: dstel.type = BindType::Unknown; break;
-            }
-
-            // first handle the sampler separately because it might be in a combined descriptor
-            if(descriptorType == DescriptorSlotType::Sampler ||
-               descriptorType == DescriptorSlotType::CombinedImageSampler)
-            {
-              if(layoutBind.immutableSampler)
-              {
-                destSlots.binds[a].samplerResourceId = layoutBind.immutableSampler[a];
-                destSlots.binds[a].immutableSampler = true;
-              }
-              else if(srcel.sampler != ResourceId())
-              {
-                destSlots.binds[a].samplerResourceId = srcel.sampler;
-              }
-
-              if(destSlots.binds[a].samplerResourceId != ResourceId())
-              {
-                VKPipe::BindingElement &el = destSlots.binds[a];
-                const VulkanCreationInfo::Sampler &sampl = c.m_Sampler[el.samplerResourceId];
-
-                ResourceId liveId = el.samplerResourceId;
-
-                el.samplerResourceId = rm->GetOriginalID(el.samplerResourceId);
-
-                // sampler info
-                el.filter = MakeFilter(sampl.minFilter, sampl.magFilter, sampl.mipmapMode,
-                                       sampl.maxAnisotropy >= 1.0f, sampl.compareEnable,
-                                       sampl.reductionMode);
-                el.addressU = MakeAddressMode(sampl.address[0]);
-                el.addressV = MakeAddressMode(sampl.address[1]);
-                el.addressW = MakeAddressMode(sampl.address[2]);
-                el.mipBias = sampl.mipLodBias;
-                el.maxAnisotropy = sampl.maxAnisotropy;
-                el.compareFunction = MakeCompareFunc(sampl.compareOp);
-                el.minLOD = sampl.minLod;
-                el.maxLOD = sampl.maxLod;
-                MakeBorderColor(sampl.borderColor, el.borderColorValue.floatValue);
-                el.borderColorType = CompType::Float;
-                el.unnormalized = sampl.unnormalizedCoordinates;
-                el.seamless = sampl.seamless;
-
-                if(sampl.ycbcr != ResourceId())
-                {
-                  const VulkanCreationInfo::YCbCrSampler &ycbcr = c.m_YCbCrSampler[sampl.ycbcr];
-                  el.ycbcrSampler = rm->GetOriginalID(sampl.ycbcr);
-
-                  el.ycbcrModel = ycbcr.ycbcrModel;
-                  el.ycbcrRange = ycbcr.ycbcrRange;
-                  Convert(el.samplerSwizzle, ycbcr.componentMapping);
-                  el.xChromaOffset = ycbcr.xChromaOffset;
-                  el.yChromaOffset = ycbcr.yChromaOffset;
-                  el.chromaFilter = ycbcr.chromaFilter;
-                  el.forceExplicitReconstruction = ycbcr.forceExplicitReconstruction;
-                }
-                else
-                {
-                  Convert(el.samplerSwizzle, sampl.componentMapping);
-                  el.srgbBorder = sampl.srgbBorder;
-                }
-
-                if(sampl.customBorder)
-                {
-                  if(sampl.borderColor == VK_BORDER_COLOR_INT_CUSTOM_EXT)
-                  {
-                    el.borderColorValue.uintValue = sampl.customBorderColor.uint32;
-                    el.borderColorType = CompType::UInt;
-                  }
-                  else
-                  {
-                    el.borderColorValue.floatValue = sampl.customBorderColor.float32;
-                  }
-                }
-              }
-            }
-
-            // now look at the 'base' type. Sampler is excluded from these ifs
-            if(descriptorType == DescriptorSlotType::SampledImage ||
-               descriptorType == DescriptorSlotType::CombinedImageSampler ||
-               descriptorType == DescriptorSlotType::InputAttachment ||
-               descriptorType == DescriptorSlotType::StorageImage)
-            {
-              ResourceId viewid = srcel.resource;
-
-              if(viewid != ResourceId())
-              {
-                destSlots.binds[a].viewResourceId = rm->GetOriginalID(viewid);
-                destSlots.binds[a].resourceResourceId =
-                    rm->GetOriginalID(c.m_ImageView[viewid].image);
-                destSlots.binds[a].viewFormat = MakeResourceFormat(c.m_ImageView[viewid].format);
-
-                Convert(destSlots.binds[a].swizzle, c.m_ImageView[viewid].componentMapping);
-                destSlots.binds[a].firstMip = c.m_ImageView[viewid].range.baseMipLevel;
-                destSlots.binds[a].firstSlice = c.m_ImageView[viewid].range.baseArrayLayer;
-                destSlots.binds[a].numMips = c.m_ImageView[viewid].range.levelCount;
-                destSlots.binds[a].numSlices = c.m_ImageView[viewid].range.layerCount;
-
-                if(c.m_ImageView[viewid].viewType == VK_IMAGE_VIEW_TYPE_3D)
-                  destSlots.binds[a].firstSlice = destSlots.binds[a].numSlices = 0;
-
-                // temporary hack, store image layout enum in byteOffset as it's not used for images
-                destSlots.binds[a].byteOffset = convert(srcel.imageLayout);
-
-                destSlots.binds[a].minLOD = c.m_ImageView[viewid].minLOD;
-              }
-              else
-              {
-                destSlots.binds[a].viewResourceId = ResourceId();
-                destSlots.binds[a].resourceResourceId = ResourceId();
-                destSlots.binds[a].firstMip = 0;
-                destSlots.binds[a].firstSlice = 0;
-                destSlots.binds[a].numMips = 1;
-                destSlots.binds[a].numSlices = 1;
-                destSlots.binds[a].minLOD = 0.0f;
-              }
-            }
-            else if(descriptorType == DescriptorSlotType::UniformTexelBuffer ||
-                    descriptorType == DescriptorSlotType::StorageTexelBuffer)
-            {
-              ResourceId viewid = srcel.resource;
-
-              if(viewid != ResourceId())
-              {
-                destSlots.binds[a].viewResourceId = rm->GetOriginalID(viewid);
-                destSlots.binds[a].resourceResourceId =
-                    rm->GetOriginalID(c.m_BufferView[viewid].buffer);
-                destSlots.binds[a].byteOffset = c.m_BufferView[viewid].offset;
-                destSlots.binds[a].viewFormat = MakeResourceFormat(c.m_BufferView[viewid].format);
-                destSlots.binds[a].byteSize = c.m_BufferView[viewid].size;
-              }
-              else
-              {
-                destSlots.binds[a].viewResourceId = ResourceId();
-                destSlots.binds[a].resourceResourceId = ResourceId();
-                destSlots.binds[a].byteOffset = 0;
-                destSlots.binds[a].byteSize = 0;
-              }
-            }
-            else if(descriptorType == DescriptorSlotType::InlineBlock)
-            {
-              destSlots.binds[a].viewResourceId = ResourceId();
-              destSlots.binds[a].resourceResourceId = ResourceId();
-              destSlots.binds[a].inlineBlock = true;
-              destSlots.binds[a].byteOffset = srcel.offset;
-              destSlots.binds[a].byteSize = descriptorCount;
-            }
-            else if(descriptorType == DescriptorSlotType::StorageBuffer ||
-                    descriptorType == DescriptorSlotType::StorageBufferDynamic ||
-                    descriptorType == DescriptorSlotType::UniformBuffer ||
-                    descriptorType == DescriptorSlotType::UniformBufferDynamic)
-            {
-              destSlots.binds[a].viewResourceId = ResourceId();
-
-              if(srcel.resource != ResourceId())
-                destSlots.binds[a].resourceResourceId = rm->GetOriginalID(srcel.resource);
-
-              destSlots.binds[a].byteOffset = srcel.offset;
-              if(descriptorType == DescriptorSlotType::StorageBufferDynamic ||
-                 descriptorType == DescriptorSlotType::UniformBufferDynamic)
-              {
-                destSlots.binds[a].byteOffset += *srcOffset;
-                srcOffset++;
-              }
-
-              destSlots.binds[a].byteSize = srcel.GetRange();
-            }
-          }
-
-          // if no bindings were set these will still be negative. Set them to something sensible.
-          if(destSlots.firstUsedIndex < 0)
-          {
-            destSlots.firstUsedIndex = 0;
-            destSlots.lastUsedIndex = 0x7fffffff;
-          }
-        }
       }
     }
   }
@@ -2360,6 +2171,549 @@ void VulkanReplay::SavePipelineState(uint32_t eventId)
   }
 }
 
+void VulkanReplay::FillSamplerDescriptor(SamplerDescriptor &dstel, const DescriptorSetSlot &srcel)
+{
+  VulkanResourceManager *rm = m_pDriver->GetResourceManager();
+  VulkanCreationInfo &c = m_pDriver->m_CreationInfo;
+
+  if(srcel.type == DescriptorSlotType::Sampler)
+    dstel.type = DescriptorType::Sampler;
+  else if(srcel.type == DescriptorSlotType::CombinedImageSampler)
+    dstel.type = DescriptorType::ImageSampler;
+  else
+    return;
+
+  if(srcel.sampler == ResourceId())
+    return;
+
+  const VulkanCreationInfo::Sampler &sampl = c.m_Sampler[srcel.sampler];
+
+  dstel.object = rm->GetOriginalID(srcel.sampler);
+
+  // sampler info
+  dstel.filter = MakeFilter(sampl.minFilter, sampl.magFilter, sampl.mipmapMode,
+                            sampl.maxAnisotropy >= 1.0f, sampl.compareEnable, sampl.reductionMode);
+  dstel.addressU = MakeAddressMode(sampl.address[0]);
+  dstel.addressV = MakeAddressMode(sampl.address[1]);
+  dstel.addressW = MakeAddressMode(sampl.address[2]);
+  dstel.mipBias = sampl.mipLodBias;
+  dstel.maxAnisotropy = sampl.maxAnisotropy;
+  dstel.compareFunction = MakeCompareFunc(sampl.compareOp);
+  dstel.minLOD = sampl.minLod;
+  dstel.maxLOD = sampl.maxLod;
+  MakeBorderColor(sampl.borderColor, dstel.borderColorValue.floatValue);
+  dstel.borderColorType = CompType::Float;
+  dstel.unnormalized = sampl.unnormalizedCoordinates;
+  dstel.seamlessCubemaps = sampl.seamless;
+
+  // immutable samplers set the offset to non-zero so that we can check it here without knowing what
+  // layout this descriptor binding came from
+  dstel.creationTimeConstant = srcel.offset != 0;
+
+  if(sampl.ycbcr != ResourceId())
+  {
+    const VulkanCreationInfo::YCbCrSampler &ycbcr = c.m_YCbCrSampler[sampl.ycbcr];
+    dstel.ycbcrSampler = rm->GetOriginalID(sampl.ycbcr);
+
+    dstel.ycbcrModel = ycbcr.ycbcrModel;
+    dstel.ycbcrRange = ycbcr.ycbcrRange;
+    Convert(dstel.swizzle, ycbcr.componentMapping);
+    dstel.xChromaOffset = ycbcr.xChromaOffset;
+    dstel.yChromaOffset = ycbcr.yChromaOffset;
+    dstel.chromaFilter = ycbcr.chromaFilter;
+    dstel.forceExplicitReconstruction = ycbcr.forceExplicitReconstruction;
+  }
+  else
+  {
+    Convert(dstel.swizzle, sampl.componentMapping);
+    dstel.srgbBorder = sampl.srgbBorder;
+  }
+
+  if(sampl.customBorder)
+  {
+    if(sampl.borderColor == VK_BORDER_COLOR_INT_CUSTOM_EXT)
+    {
+      dstel.borderColorValue.uintValue = sampl.customBorderColor.uint32;
+      dstel.borderColorType = CompType::UInt;
+    }
+    else
+    {
+      dstel.borderColorValue.floatValue = sampl.customBorderColor.float32;
+    }
+  }
+}
+
+void VulkanReplay::FillDescriptor(Descriptor &dstel, const DescriptorSetSlot &srcel)
+{
+  DescriptorSlotType descriptorType = srcel.type;
+
+  VulkanResourceManager *rm = m_pDriver->GetResourceManager();
+  VulkanCreationInfo &c = m_pDriver->m_CreationInfo;
+
+  switch(descriptorType)
+  {
+    case DescriptorSlotType::Sampler: dstel.type = DescriptorType::Sampler; break;
+    case DescriptorSlotType::CombinedImageSampler: dstel.type = DescriptorType::ImageSampler; break;
+    case DescriptorSlotType::SampledImage: dstel.type = DescriptorType::Image; break;
+    case DescriptorSlotType::StorageImage: dstel.type = DescriptorType::ReadWriteImage; break;
+    case DescriptorSlotType::UniformTexelBuffer: dstel.type = DescriptorType::TypedBuffer; break;
+    case DescriptorSlotType::StorageTexelBuffer:
+      dstel.type = DescriptorType::ReadWriteTypedBuffer;
+      break;
+    case DescriptorSlotType::UniformBuffer: dstel.type = DescriptorType::ConstantBuffer; break;
+    case DescriptorSlotType::StorageBuffer: dstel.type = DescriptorType::ReadWriteBuffer; break;
+    case DescriptorSlotType::UniformBufferDynamic:
+      dstel.type = DescriptorType::ConstantBuffer;
+      break;
+    case DescriptorSlotType::StorageBufferDynamic:
+      dstel.type = DescriptorType::ReadWriteBuffer;
+      break;
+    case DescriptorSlotType::AccelerationStructure:
+      dstel.type = DescriptorType::AccelerationStructure;
+      break;
+    case DescriptorSlotType::InputAttachment: dstel.type = DescriptorType::Image; break;
+    case DescriptorSlotType::InlineBlock: dstel.type = DescriptorType::ConstantBuffer; break;
+    case DescriptorSlotType::Unwritten:
+    case DescriptorSlotType::Count: dstel.type = DescriptorType::Unknown; break;
+  }
+
+  // now look at the 'base' type. Sampler is excluded from these ifs
+  if(descriptorType == DescriptorSlotType::SampledImage ||
+     descriptorType == DescriptorSlotType::CombinedImageSampler ||
+     descriptorType == DescriptorSlotType::InputAttachment ||
+     descriptorType == DescriptorSlotType::StorageImage)
+  {
+    ResourceId viewid = srcel.resource;
+
+    if(descriptorType == DescriptorSlotType::CombinedImageSampler)
+    {
+      dstel.secondary = rm->GetOriginalID(srcel.sampler);
+    }
+
+    if(viewid != ResourceId())
+    {
+      dstel.view = rm->GetOriginalID(viewid);
+      dstel.resource = rm->GetOriginalID(c.m_ImageView[viewid].image);
+      dstel.format = MakeResourceFormat(c.m_ImageView[viewid].format);
+
+      Convert(dstel.swizzle, c.m_ImageView[viewid].componentMapping);
+      dstel.firstMip = c.m_ImageView[viewid].range.baseMipLevel & 0xff;
+      dstel.firstSlice = c.m_ImageView[viewid].range.baseArrayLayer & 0xffff;
+      dstel.numMips = c.m_ImageView[viewid].range.levelCount & 0xff;
+      dstel.numSlices = c.m_ImageView[viewid].range.layerCount & 0xffff;
+
+      if(c.m_ImageView[viewid].viewType == VK_IMAGE_VIEW_TYPE_3D)
+        dstel.firstSlice = dstel.numSlices = 0;
+
+      // cheeky hack, store image layout enum in byteOffset as it's not used for images
+      dstel.byteOffset = convert(srcel.imageLayout);
+
+      dstel.minLODClamp = c.m_ImageView[viewid].minLOD;
+    }
+    else
+    {
+      dstel.view = ResourceId();
+      dstel.resource = ResourceId();
+      dstel.firstMip = 0;
+      dstel.firstSlice = 0;
+      dstel.numMips = 1;
+      dstel.numSlices = 1;
+      dstel.minLODClamp = 0.0f;
+    }
+  }
+  else if(descriptorType == DescriptorSlotType::UniformTexelBuffer ||
+          descriptorType == DescriptorSlotType::StorageTexelBuffer)
+  {
+    ResourceId viewid = srcel.resource;
+
+    if(viewid != ResourceId())
+    {
+      dstel.view = rm->GetOriginalID(viewid);
+      dstel.resource = rm->GetOriginalID(c.m_BufferView[viewid].buffer);
+      dstel.byteOffset = c.m_BufferView[viewid].offset;
+      dstel.format = MakeResourceFormat(c.m_BufferView[viewid].format);
+      dstel.byteSize = c.m_BufferView[viewid].size;
+    }
+    else
+    {
+      dstel.view = ResourceId();
+      dstel.resource = ResourceId();
+      dstel.byteOffset = 0;
+      dstel.byteSize = 0;
+    }
+  }
+  else if(descriptorType == DescriptorSlotType::InlineBlock)
+  {
+    dstel.view = ResourceId();
+    dstel.resource = ResourceId();
+    dstel.byteOffset = srcel.offset;
+    dstel.byteSize = srcel.range;
+    dstel.flags = DescriptorFlags::InlineData;
+  }
+  else if(descriptorType == DescriptorSlotType::StorageBuffer ||
+          descriptorType == DescriptorSlotType::StorageBufferDynamic ||
+          descriptorType == DescriptorSlotType::UniformBuffer ||
+          descriptorType == DescriptorSlotType::UniformBufferDynamic)
+  {
+    dstel.view = ResourceId();
+
+    if(srcel.resource != ResourceId())
+      dstel.resource = rm->GetOriginalID(srcel.resource);
+
+    dstel.byteOffset = srcel.offset;
+    dstel.byteSize = srcel.GetRange();
+  }
+  else if(descriptorType == DescriptorSlotType::AccelerationStructure)
+  {
+    dstel.view = ResourceId();
+
+    if(srcel.resource != ResourceId())
+    {
+      dstel.resource = rm->GetOriginalID(srcel.resource);
+      dstel.byteSize = c.m_AccelerationStructure[srcel.resource].size;
+    }
+  }
+}
+
+rdcarray<Descriptor> VulkanReplay::GetDescriptors(ResourceId descriptorStore,
+                                                  const rdcarray<DescriptorRange> &ranges)
+{
+  if(descriptorStore == ResourceId())
+    return {};
+
+  size_t count = 0;
+  for(const DescriptorRange &r : ranges)
+    count += r.count;
+  rdcarray<Descriptor> ret;
+  ret.resize(count);
+
+  VulkanResourceManager *rm = m_pDriver->GetResourceManager();
+
+  // specialisation constants 'descriptor' stored in a pipeline
+  auto pipe = m_pDriver->m_CreationInfo.m_Pipeline.find(descriptorStore);
+  if(pipe != m_pDriver->m_CreationInfo.m_Pipeline.end())
+  {
+    // should only be one descriptor referred here, but just munge them all to be the same
+    for(Descriptor &d : ret)
+    {
+      d.type = DescriptorType::ConstantBuffer;
+      d.flags = DescriptorFlags::InlineData;
+      d.view = ResourceId();
+      d.resource = rm->GetOriginalID(descriptorStore);
+      // specialisation constants implicitly always view the whole data, the shader reflection
+      // offsets are absolute (by specialisation ID)
+      d.byteOffset = 0;
+      d.byteSize = pipe->second.virtualSpecialisationByteSize;
+    }
+
+    return ret;
+  }
+
+  // push constants 'descriptor' stored in a command buffer
+  if(WrappedVkCommandBuffer::IsAlloc(rm->GetCurrentResource(descriptorStore)))
+  {
+    const VulkanRenderState &state = m_pDriver->m_RenderState;
+
+    // should only be one descriptor referred here, but just munge them all to be the same
+    for(Descriptor &d : ret)
+    {
+      d.type = DescriptorType::ConstantBuffer;
+      d.flags = DescriptorFlags::InlineData;
+      d.view = ResourceId();
+      d.resource = rm->GetOriginalID(descriptorStore);
+      // push constants also implicitly always view the whole data, since the ranges specified in
+      // the pipeline must match offsets declared in the shader
+      d.byteOffset = 0;
+      // we don't verify that the current command buffer is the one being requested - since push
+      // constants are not valid outside of the current event. We just pretend that all push
+      // constants are the same and mutable
+      d.byteSize = state.pushConstSize;
+    }
+
+    return ret;
+  }
+
+  auto descit = m_pDriver->m_DescriptorSetState.find(descriptorStore);
+  if(descit == m_pDriver->m_DescriptorSetState.end())
+  {
+    RDCERR("Invalid/unrecognised descriptor store %s", ToStr(descriptorStore).c_str());
+    return ret;
+  }
+
+  const WrappedVulkan::DescriptorSetInfo &set = descit->second;
+
+  size_t dst = 0;
+  for(const DescriptorRange &r : ranges)
+  {
+    const DescriptorSetSlot *desc = set.data.binds.empty() ? NULL : set.data.binds[0];
+    const DescriptorSetSlot *end = desc + set.data.totalDescriptorCount();
+
+    desc += (r.offset - set.data.inlineBytes.size());
+
+    for(uint32_t i = 0; i < r.count; i++)
+    {
+      if(desc >= end)
+      {
+        // silently drop out of bounds descriptor reads
+      }
+      else if(desc->type == DescriptorSlotType::Sampler)
+      {
+        ret[dst].type = DescriptorType::Sampler;
+      }
+      else
+      {
+        FillDescriptor(ret[dst], *desc);
+
+        if(ret[dst].flags & DescriptorFlags::InlineData)
+        {
+          // inline data stored in the descriptor set
+          ret[dst].resource = rm->GetOriginalID(descriptorStore);
+        }
+      }
+
+      dst++;
+      desc++;
+    }
+  }
+
+  return ret;
+}
+
+rdcarray<SamplerDescriptor> VulkanReplay::GetSamplerDescriptors(ResourceId descriptorStore,
+                                                                const rdcarray<DescriptorRange> &ranges)
+{
+  if(descriptorStore == ResourceId())
+    return {};
+
+  size_t count = 0;
+  for(const DescriptorRange &r : ranges)
+    count += r.count;
+  rdcarray<SamplerDescriptor> ret;
+  ret.resize(count);
+
+  // specialisation constants 'descriptor' stored in a pipeline
+  if(m_pDriver->m_CreationInfo.m_Pipeline.find(descriptorStore) !=
+     m_pDriver->m_CreationInfo.m_Pipeline.end())
+  {
+    // not sampler data
+    return ret;
+  }
+
+  // push constants 'descriptor' stored in a command buffer
+  if(WrappedVkCommandBuffer::IsAlloc(GetResourceManager()->GetCurrentResource(descriptorStore)))
+  {
+    // not sampler data
+    return ret;
+  }
+
+  auto descit = m_pDriver->m_DescriptorSetState.find(descriptorStore);
+  if(descit == m_pDriver->m_DescriptorSetState.end())
+  {
+    RDCERR("Invalid/unrecognised descriptor store %s", ToStr(descriptorStore).c_str());
+    return ret;
+  }
+
+  const WrappedVulkan::DescriptorSetInfo &set = descit->second;
+
+  size_t dst = 0;
+  for(const DescriptorRange &r : ranges)
+  {
+    const DescriptorSetSlot *desc = set.data.binds.empty() ? NULL : set.data.binds[0];
+    const DescriptorSetSlot *end = desc + set.data.totalDescriptorCount();
+
+    desc += r.offset;
+
+    for(uint32_t i = 0; i < r.count; i++)
+    {
+      if(desc >= end)
+      {
+        // silently drop out of bounds descriptor reads
+      }
+      else if(desc->type == DescriptorSlotType::Sampler ||
+              desc->type == DescriptorSlotType::CombinedImageSampler)
+      {
+        FillSamplerDescriptor(ret[dst], *desc);
+      }
+
+      dst++;
+      desc++;
+    }
+  }
+
+  return ret;
+}
+
+rdcarray<DescriptorAccess> VulkanReplay::GetDescriptorAccess(uint32_t eventId)
+{
+  VulkanResourceManager *rm = m_pDriver->GetResourceManager();
+
+  const VulkanRenderState &state = m_pDriver->m_RenderState;
+
+  rdcarray<DescriptorAccess> ret;
+
+  if(state.graphics.pipeline != ResourceId())
+    ret.append(m_pDriver->m_CreationInfo.m_Pipeline[state.graphics.pipeline].staticDescriptorAccess);
+
+  if(state.compute.pipeline != ResourceId())
+    ret.append(m_pDriver->m_CreationInfo.m_Pipeline[state.compute.pipeline].staticDescriptorAccess);
+
+  for(DescriptorAccess &access : ret)
+  {
+    uint32_t bindset = (uint32_t)access.byteSize;
+    access.byteSize = 1;
+    if(access.descriptorStore == m_pDriver->m_CreationInfo.pushConstantDescriptorStorage)
+    {
+      access.descriptorStore = m_pDriver->GetPushConstantCommandBuffer();
+    }
+    else if(access.descriptorStore == ResourceId())
+    {
+      const rdcarray<VulkanStatePipeline::DescriptorAndOffsets> &descSets =
+          access.stage == ShaderStage::Compute ? state.compute.descSets : state.graphics.descSets;
+
+      if(bindset >= descSets.size())
+      {
+        RDCERR("Unbound descriptor set referenced in static usage");
+      }
+      else
+      {
+        access.descriptorStore = rm->GetOriginalID(descSets[bindset].descSet);
+      }
+    }
+
+    if(access.descriptorStore == ResourceId())
+      access = DescriptorAccess();
+  }
+
+  const VKDynamicShaderFeedback &usage = m_BindlessFeedback.Usage[eventId];
+
+  if(usage.valid)
+    ret.append(usage.access);
+
+  return ret;
+}
+
+rdcarray<DescriptorLogicalLocation> VulkanReplay::GetDescriptorLocations(
+    ResourceId descriptorStore, const rdcarray<DescriptorRange> &ranges)
+{
+  rdcarray<DescriptorLogicalLocation> ret;
+
+  size_t count = 0;
+  for(const DescriptorRange &r : ranges)
+    count += r.count;
+  ret.resize(count);
+
+  // specialisation constants 'descriptor' stored in a pipeline
+  auto pipe = m_pDriver->m_CreationInfo.m_Pipeline.find(descriptorStore);
+  if(pipe != m_pDriver->m_CreationInfo.m_Pipeline.end())
+  {
+    // should only be one descriptor referred here, but just munge them all to be the same
+    for(DescriptorLogicalLocation &d : ret)
+    {
+      d.category = DescriptorCategory::ConstantBlock;
+      d.fixedBindNumber = ~0U - 2;
+      d.logicalBindName = "Specialization";
+    }
+
+    return ret;
+  }
+
+  VulkanResourceManager *rm = m_pDriver->GetResourceManager();
+
+  // push constants 'descriptor' stored in a command buffer
+  if(WrappedVkCommandBuffer::IsAlloc(rm->GetCurrentResource(descriptorStore)))
+  {
+    // should only be one descriptor referred here, but just munge them all to be the same
+    for(DescriptorLogicalLocation &d : ret)
+    {
+      d.category = DescriptorCategory::ConstantBlock;
+      d.fixedBindNumber = ~0U - 1;
+      d.logicalBindName = "Push constants";
+    }
+
+    return ret;
+  }
+
+  auto descit = m_pDriver->m_DescriptorSetState.find(descriptorStore);
+  if(descit == m_pDriver->m_DescriptorSetState.end())
+  {
+    RDCERR("Invalid/unrecognised descriptor store %s", ToStr(descriptorStore).c_str());
+    return ret;
+  }
+
+  const WrappedVulkan::DescriptorSetInfo &descState = descit->second;
+  uint32_t varDescCount = descState.data.variableDescriptorCount;
+
+  const DescSetLayout &descLayout = m_pDriver->m_CreationInfo.m_DescSetLayout[descState.layout];
+
+  size_t dst = 0;
+  for(const DescriptorRange &r : ranges)
+  {
+    uint32_t descriptorOffset = r.offset;
+
+    const DescSetLayout::Binding *bind = descLayout.bindings.data();
+    const DescSetLayout::Binding *firstBind = bind;
+    const DescSetLayout::Binding *lastBind = bind + descLayout.bindings.size();
+
+    for(uint32_t i = 0; i < r.count; i++, dst++, descriptorOffset++)
+    {
+      while(bind < lastBind &&
+            descLayout.inlineByteSize + bind->elemOffset + bind->GetDescriptorCount(varDescCount) <=
+                descriptorOffset)
+        bind++;
+
+      if(bind >= lastBind)
+      {
+        RDCERR("Ran off end of descriptor layout looking for matching offset");
+        break;
+      }
+
+      DescriptorLogicalLocation &d = ret[dst];
+
+      const DescriptorSetSlot *slot = descState.data.binds[0] + descriptorOffset;
+
+      switch(slot->type)
+      {
+        case DescriptorSlotType::Sampler: d.category = DescriptorCategory::Sampler; break;
+        case DescriptorSlotType::UniformBuffer:
+        case DescriptorSlotType::InlineBlock:
+        case DescriptorSlotType::UniformBufferDynamic:
+        case DescriptorSlotType::SampledImage:
+        case DescriptorSlotType::CombinedImageSampler:
+        case DescriptorSlotType::UniformTexelBuffer:
+        case DescriptorSlotType::InputAttachment:
+        case DescriptorSlotType::AccelerationStructure:
+          d.category = DescriptorCategory::ReadOnlyResource;
+          break;
+        case DescriptorSlotType::StorageBuffer:
+        case DescriptorSlotType::StorageBufferDynamic:
+        case DescriptorSlotType::StorageImage:
+        case DescriptorSlotType::StorageTexelBuffer:
+          d.category = DescriptorCategory::ReadWriteResource;
+          break;
+        case DescriptorSlotType::Unwritten:
+        case DescriptorSlotType::Count: d.category = DescriptorCategory::Unknown; break;
+      }
+
+      if(bind->stageFlags == VK_SHADER_STAGE_ALL)
+        d.stageMask = ShaderStageMask::All;
+      else
+        d.stageMask = (ShaderStageMask)bind->stageFlags;
+      // we only have one bind number, for simplicity, so we put the bind here and omit the array
+      // element entirely. Users that want to decode this are expected to either be aware of arrays
+      // and determine that contiguous identical bind numbers are arrays, or display with the
+      // logical name string below
+      d.fixedBindNumber = uint32_t(bind - firstBind);
+      if(bind->descriptorCount > 1 && bind->layoutDescType != VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
+        d.logicalBindName = StringFormat::Fmt("%zu[%u]", size_t(bind - firstBind),
+                                              descriptorOffset - bind->elemOffset);
+      else
+        d.logicalBindName = StringFormat::Fmt("%zu", size_t(bind - firstBind));
+    }
+  }
+
+  return ret;
+}
+
 void VulkanReplay::FillCBufferVariables(ResourceId pipeline, ResourceId shader, ShaderStage stage,
                                         rdcstr entryPoint, uint32_t cbufSlot,
                                         rdcarray<ShaderVariable> &outvars, const bytebuf &data)
@@ -2373,7 +2727,6 @@ void VulkanReplay::FillCBufferVariables(ResourceId pipeline, ResourceId shader, 
   }
 
   ShaderReflection &refl = *it->second.GetReflection(stage, entryPoint, pipeline).refl;
-  ShaderBindpointMapping &mapping = it->second.GetReflection(stage, entryPoint, pipeline).mapping;
 
   if(cbufSlot >= (uint32_t)refl.constantBlocks.count())
   {
@@ -2389,27 +2742,26 @@ void VulkanReplay::FillCBufferVariables(ResourceId pipeline, ResourceId shader, 
         (refl.stage == ShaderStage::Compute) ? m_pDriver->m_RenderState.compute.descSets
                                              : m_pDriver->m_RenderState.graphics.descSets;
 
-    Bindpoint bind = mapping.constantBlocks[c.bindPoint];
-
-    if(bind.bindset < descSets.count())
+    if(c.fixedBindSetOrSpace < descSets.size())
     {
-      ResourceId set = descSets[bind.bindset].descSet;
+      ResourceId set = descSets[c.fixedBindSetOrSpace].descSet;
 
       const WrappedVulkan::DescriptorSetInfo &setData = m_pDriver->m_DescriptorSetState[set];
 
       ResourceId layoutId = setData.layout;
 
-      if(bind.bind < m_pDriver->m_CreationInfo.m_DescSetLayout[layoutId].bindings.count())
+      if(c.fixedBindNumber < m_pDriver->m_CreationInfo.m_DescSetLayout[layoutId].bindings.size())
       {
         const DescSetLayout::Binding &layoutBind =
-            m_pDriver->m_CreationInfo.m_DescSetLayout[layoutId].bindings[bind.bind];
+            m_pDriver->m_CreationInfo.m_DescSetLayout[layoutId].bindings[c.fixedBindNumber];
 
         if(layoutBind.layoutDescType == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
         {
           bytebuf inlineData;
-          inlineData.assign(setData.data.inlineBytes.data() + setData.data.binds[bind.bind]->offset,
-                            layoutBind.variableSize ? setData.data.variableDescriptorCount
-                                                    : layoutBind.descriptorCount);
+          inlineData.assign(
+              setData.data.inlineBytes.data() + setData.data.binds[c.fixedBindNumber]->offset,
+              layoutBind.variableSize ? setData.data.variableDescriptorCount
+                                      : layoutBind.descriptorCount);
           StandardFillCBufferVariables(refl.resourceId, c.variables, outvars, inlineData);
           return;
         }
@@ -2421,7 +2773,7 @@ void VulkanReplay::FillCBufferVariables(ResourceId pipeline, ResourceId shader, 
   else
   {
     // specialised path to display specialization constants
-    if(mapping.constantBlocks[c.bindPoint].bindset == SpecializationConstantBindSet)
+    if(c.compileConstants)
     {
       auto pipeIt = m_pDriver->m_CreationInfo.m_Pipeline.find(pipeline);
 

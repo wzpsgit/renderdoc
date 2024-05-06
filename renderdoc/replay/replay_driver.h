@@ -140,6 +140,8 @@ public:
 
   virtual rdcarray<ResourceDescription> GetResources() = 0;
 
+  virtual rdcarray<DescriptorStoreDescription> GetDescriptorStores() = 0;
+
   virtual rdcarray<BufferDescription> GetBuffers() = 0;
   virtual BufferDescription GetBuffer(ResourceId id) = 0;
 
@@ -161,6 +163,14 @@ public:
   virtual void SetPipelineStates(D3D11Pipe::State *d3d11, D3D12Pipe::State *d3d12,
                                  GLPipe::State *gl, VKPipe::State *vk) = 0;
   virtual void SavePipelineState(uint32_t eventId) = 0;
+
+  virtual rdcarray<Descriptor> GetDescriptors(ResourceId descriptorStore,
+                                              const rdcarray<DescriptorRange> &ranges) = 0;
+  virtual rdcarray<SamplerDescriptor> GetSamplerDescriptors(
+      ResourceId descriptorStore, const rdcarray<DescriptorRange> &ranges) = 0;
+  virtual rdcarray<DescriptorAccess> GetDescriptorAccess(uint32_t eventId) = 0;
+  virtual rdcarray<DescriptorLogicalLocation> GetDescriptorLocations(
+      ResourceId descriptorStore, const rdcarray<DescriptorRange> &ranges) = 0;
 
   virtual FrameRecord GetFrameRecord() = 0;
 

@@ -23,6 +23,7 @@
  ******************************************************************************/
 
 #include "../vk_core.h"
+#include "../vk_replay.h"
 #include "core/settings.h"
 
 RDOC_DEBUG_CONFIG(bool, Vulkan_Debug_AllowDescriptorSetReuse, true,
@@ -153,6 +154,25 @@ VkWriteDescriptorSet WrappedVulkan::UnwrapInfo(const VkWriteDescriptorSet *write
       imInfos[j].imageLayout = ret.pImageInfo[j].imageLayout;
     }
     ret.pImageInfo = imInfos;
+  }
+  else if(ret.descriptorType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+  {
+    byte *asDescMemory = GetTempMemory(sizeof(VkWriteDescriptorSetAccelerationStructureKHR) +
+                                       (sizeof(VkAccelerationStructureKHR) * ret.descriptorCount));
+    VkAccelerationStructureKHR *unwrappedASs =
+        (VkAccelerationStructureKHR *)(asDescMemory +
+                                       sizeof(VkWriteDescriptorSetAccelerationStructureKHR));
+    VkWriteDescriptorSetAccelerationStructureKHR *asWrite =
+        (VkWriteDescriptorSetAccelerationStructureKHR *)memcpy(
+            asDescMemory, ret.pNext, sizeof(VkWriteDescriptorSetAccelerationStructureKHR));
+
+    for(uint32_t j = 0; j < ret.descriptorCount; j++)
+    {
+      unwrappedASs[j] = Unwrap(asWrite->pAccelerationStructures[j]);
+    }
+    asWrite->pAccelerationStructures = unwrappedASs;
+
+    ret.pNext = asWrite;
   }
   else
   {
@@ -469,11 +489,11 @@ bool WrappedVulkan::Serialise_vkAllocateDescriptorSets(SerialiserType &ser, VkDe
     // if we got here we must have succeeded
     RDCASSERTEQUAL(ret, VK_SUCCESS);
 
+    ResourceId layoutId = GetResID(AllocateInfo.pSetLayouts[0]);
+
     {
       ResourceId live = GetResourceManager()->WrapResource(Unwrap(device), descset);
       GetResourceManager()->AddLiveResource(DescriptorSet, descset);
-
-      ResourceId layoutId = GetResID(AllocateInfo.pSetLayouts[0]);
 
       // this is stored in the resource record on capture, we need to be able to look to up
       m_DescriptorSetState[live].layout = layoutId;
@@ -502,10 +522,19 @@ bool WrappedVulkan::Serialise_vkAllocateDescriptorSets(SerialiserType &ser, VkDe
                                                                    variableDescriptorAlloc);
     }
 
-    AddResource(DescriptorSet, ResourceType::ShaderBinding, "Descriptor Set");
+    AddResource(DescriptorSet, ResourceType::DescriptorStore, "Descriptor Set");
     DerivedResource(device, DescriptorSet);
     DerivedResource(AllocateInfo.pSetLayouts[0], DescriptorSet);
     DerivedResource(AllocateInfo.descriptorPool, DescriptorSet);
+
+    DescriptorStoreDescription desc;
+    desc.resourceId = DescriptorSet;
+    desc.descriptorByteSize = 1;
+    // descriptors are stored after all the inline bytes
+    desc.firstDescriptorOffset = m_CreationInfo.m_DescSetLayout[layoutId].inlineByteSize;
+    desc.descriptorCount =
+        (uint32_t)m_DescriptorSetState[GetResID(descset)].data.totalDescriptorCount();
+    GetReplay()->RegisterDescriptorStore(desc);
   }
 
   return true;
@@ -822,6 +851,17 @@ void WrappedVulkan::ReplayDescriptorSetWrite(VkDevice device, const VkWriteDescr
         valid &= (writeDesc.pBufferInfo[i].buffer != VK_NULL_HANDLE);
       break;
     }
+    case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+    {
+      const VkWriteDescriptorSetAccelerationStructureKHR *asDesc =
+          (const VkWriteDescriptorSetAccelerationStructureKHR *)FindNextStruct(
+              &writeDesc, VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+      for(uint32_t i = 0; !NULLDescriptorsAllowed() && i < writeDesc.descriptorCount; i++)
+      {
+        valid &= (asDesc->pAccelerationStructures[i] != VK_NULL_HANDLE);
+      }
+      break;
+    }
     case VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK: break;
     default: RDCERR("Unexpected descriptor type %d", writeDesc.descriptorType);
   }
@@ -906,6 +946,8 @@ void WrappedVulkan::ReplayDescriptorSetWrite(VkDevice device, const VkWriteDescr
       }
       else
       {
+        VkWriteDescriptorSetAccelerationStructureKHR *asDesc = NULL;
+
         for(uint32_t d = 0; d < writeDesc.descriptorCount; d++, curIdx++)
         {
           // allow consecutive descriptor bind updates. See vkUpdateDescriptorSets for more
@@ -924,7 +966,19 @@ void WrappedVulkan::ReplayDescriptorSetWrite(VkDevice device, const VkWriteDescr
             }
           }
 
-          (*bind)[curIdx].SetBuffer(writeDesc.descriptorType, writeDesc.pBufferInfo[d]);
+          if(writeDesc.descriptorType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+          {
+            if(!asDesc)
+              asDesc = (VkWriteDescriptorSetAccelerationStructureKHR *)FindNextStruct(
+                  &writeDesc, VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+
+            (*bind)[curIdx].SetAccelerationStructure(writeDesc.descriptorType,
+                                                     asDesc->pAccelerationStructures[d]);
+          }
+          else
+          {
+            (*bind)[curIdx].SetBuffer(writeDesc.descriptorType, writeDesc.pBufferInfo[d]);
+          }
         }
       }
     }
@@ -1049,14 +1103,29 @@ void WrappedVulkan::vkUpdateDescriptorSets(VkDevice device, uint32_t writeCount,
   // we don't implement this into an UnwrapInfo because it's awkward to have this unique case of
   // two parallel struct arrays, and also we don't need to unwrap it on replay in the same way
   {
-    // need to count up number of descriptor infos, to be able to alloc enough space
+    // need to count up number of descriptor infos and acceleration structures, to be able to alloc
+    // enough space
     uint32_t numInfos = 0;
+    uint32_t numASDescriptors = 0;
+    uint32_t numASs = 0;
     for(uint32_t i = 0; i < writeCount; i++)
-      numInfos += pDescriptorWrites[i].descriptorCount;
+    {
+      if(pDescriptorWrites[i].descriptorType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+      {
+        ++numASDescriptors;
+        numASs += pDescriptorWrites[i].descriptorCount;
+      }
+      else
+      {
+        numInfos += pDescriptorWrites[i].descriptorCount;
+      }
+    }
 
-    byte *memory = GetTempMemory(sizeof(VkDescriptorBufferInfo) * numInfos +
-                                 sizeof(VkWriteDescriptorSet) * writeCount +
-                                 sizeof(VkCopyDescriptorSet) * copyCount);
+    byte *memory = GetTempMemory(
+        sizeof(VkDescriptorBufferInfo) * numInfos + sizeof(VkWriteDescriptorSet) * writeCount +
+        sizeof(VkCopyDescriptorSet) * copyCount +
+        sizeof(VkWriteDescriptorSetAccelerationStructureKHR) * numASDescriptors +
+        sizeof(VkAccelerationStructureKHR) * numASs);
 
     RDCCOMPILE_ASSERT(sizeof(VkDescriptorBufferInfo) >= sizeof(VkDescriptorImageInfo),
                       "Descriptor structs sizes are unexpected, ensure largest size is used");
@@ -1064,6 +1133,10 @@ void WrappedVulkan::vkUpdateDescriptorSets(VkDevice device, uint32_t writeCount,
     VkWriteDescriptorSet *unwrappedWrites = (VkWriteDescriptorSet *)memory;
     VkCopyDescriptorSet *unwrappedCopies = (VkCopyDescriptorSet *)(unwrappedWrites + writeCount);
     VkDescriptorBufferInfo *nextDescriptors = (VkDescriptorBufferInfo *)(unwrappedCopies + copyCount);
+    VkWriteDescriptorSetAccelerationStructureKHR *nextASDescriptors =
+        (VkWriteDescriptorSetAccelerationStructureKHR *)(nextDescriptors + numInfos);
+    VkAccelerationStructureKHR *unwrappedASs =
+        (VkAccelerationStructureKHR *)(nextASDescriptors + numASDescriptors);
 
     for(uint32_t i = 0; i < writeCount; i++)
     {
@@ -1098,7 +1171,6 @@ void WrappedVulkan::vkUpdateDescriptorSets(VkDevice device, uint32_t writeCount,
       VkDescriptorBufferInfo *bufInfos = nextDescriptors;
       VkDescriptorImageInfo *imInfos = (VkDescriptorImageInfo *)bufInfos;
       VkBufferView *bufViews = (VkBufferView *)bufInfos;
-      nextDescriptors += pDescriptorWrites[i].descriptorCount;
 
       RDCCOMPILE_ASSERT(sizeof(VkDescriptorBufferInfo) >= sizeof(VkDescriptorImageInfo),
                         "Structure sizes mean not enough space is allocated for write data");
@@ -1143,6 +1215,27 @@ void WrappedVulkan::vkUpdateDescriptorSets(VkDevice device, uint32_t writeCount,
       {
         // nothing to unwrap, the next chain contains the data which we can leave as-is
       }
+      else if(pDescriptorWrites[i].descriptorType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+      {
+        VkWriteDescriptorSetAccelerationStructureKHR *asWrite =
+            (VkWriteDescriptorSetAccelerationStructureKHR *)FindNextStruct(
+                &pDescriptorWrites[i],
+                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+        asWrite = (VkWriteDescriptorSetAccelerationStructureKHR *)memcpy(
+            nextASDescriptors, asWrite, sizeof(VkWriteDescriptorSetAccelerationStructureKHR));
+
+        VkAccelerationStructureKHR *base = unwrappedASs;
+        for(uint32_t j = 0; j < pDescriptorWrites[i].descriptorCount; j++)
+        {
+          base[j] = Unwrap(asWrite->pAccelerationStructures[j]);
+        }
+        asWrite->pAccelerationStructures = base;
+
+        unwrappedWrites[i].pNext = asWrite;
+
+        ++nextASDescriptors;
+        unwrappedASs += pDescriptorWrites[i].descriptorCount;
+      }
       else
       {
         unwrappedWrites[i].pBufferInfo = bufInfos;
@@ -1157,6 +1250,12 @@ void WrappedVulkan::vkUpdateDescriptorSets(VkDevice device, uint32_t writeCount,
             bufInfos[j].range = VK_WHOLE_SIZE;
           }
         }
+      }
+
+      // Increment nextDescriptors (a.k.a. bufInfos)
+      if(pDescriptorWrites[i].descriptorType != VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+      {
+        nextDescriptors += pDescriptorWrites[i].descriptorCount;
       }
     }
 
@@ -1201,6 +1300,19 @@ void WrappedVulkan::vkUpdateDescriptorSets(VkDevice device, uint32_t writeCount,
       {
         GetResourceManager()->MarkResourceFrameReferenced(GetResID(pDescriptorWrites[i].dstSet),
                                                           eFrameRef_PartialWrite);
+
+        if(pDescriptorWrites[i].descriptorType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+        {
+          VkWriteDescriptorSetAccelerationStructureKHR *asWrite =
+              (VkWriteDescriptorSetAccelerationStructureKHR *)FindNextStruct(
+                  &pDescriptorWrites[i],
+                  VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+          for(uint32_t j = 0; j < pDescriptorWrites[i].descriptorCount; j++)
+          {
+            const ResourceId id = GetResID(asWrite->pAccelerationStructures[j]);
+            GetResourceManager()->MarkResourceFrameReferenced(id, eFrameRef_Read);
+          }
+        }
       }
 
       for(uint32_t i = 0; i < copyCount; i++)
@@ -1216,6 +1328,19 @@ void WrappedVulkan::vkUpdateDescriptorSets(VkDevice device, uint32_t writeCount,
                                                           eFrameRef_PartialWrite);
         GetResourceManager()->MarkResourceFrameReferenced(GetResID(pDescriptorCopies[i].srcSet),
                                                           eFrameRef_Read);
+
+        if(pDescriptorWrites[i].descriptorType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+        {
+          VkWriteDescriptorSetAccelerationStructureKHR *asWrite =
+              (VkWriteDescriptorSetAccelerationStructureKHR *)FindNextStruct(
+                  &pDescriptorCopies[i],
+                  VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+          for(uint32_t j = 0; j < pDescriptorCopies[i].descriptorCount; j++)
+          {
+            GetResourceManager()->MarkResourceFrameReferenced(
+                GetResID(asWrite->pAccelerationStructures[j]), eFrameRef_Read);
+          }
+        }
 
         ResourceId id = GetResID(pDescriptorCopies[i].srcSet);
         VkResourceRecord *record = GetRecord(pDescriptorCopies[i].srcSet);
@@ -1321,6 +1446,14 @@ void WrappedVulkan::vkUpdateDescriptorSets(VkDevice device, uint32_t writeCount,
 
           // break now because the descriptorCount is not the number of descriptors
           break;
+        }
+        else if(descWrite.descriptorType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+        {
+          VkWriteDescriptorSetAccelerationStructureKHR *asWrite =
+              (VkWriteDescriptorSetAccelerationStructureKHR *)FindNextStruct(
+                  &descWrite, VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+          bind.SetAccelerationStructure(descWrite.descriptorType,
+                                        asWrite->pAccelerationStructures[d]);
         }
         else
         {
@@ -1604,6 +1737,20 @@ void WrappedVulkan::vkUpdateDescriptorSetWithTemplate(
         // memcpy the data
         memcpy(dst, src, entry.descriptorCount);
       }
+      else if(entry.descriptorType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+      {
+        for(uint32_t d = 0; d < entry.descriptorCount; d++)
+        {
+          memcpy(dst, src, sizeof(VkAccelerationStructureKHR));
+
+          VkAccelerationStructureKHR *as = (VkAccelerationStructureKHR *)dst;
+
+          *as = Unwrap(*as);
+
+          dst += entry.stride;
+          src += entry.stride;
+        }
+      }
       else
       {
         for(uint32_t d = 0; d < entry.descriptorCount; d++)
@@ -1720,6 +1867,11 @@ void WrappedVulkan::vkUpdateDescriptorSetWithTemplate(
 
           // break now because the descriptorCount is not the number of descriptors
           break;
+        }
+        else if(entry.descriptorType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+        {
+          bind.SetAccelerationStructure(entry.descriptorType,
+                                        *(const VkAccelerationStructureKHR *)src);
         }
         else
         {

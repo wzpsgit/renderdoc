@@ -439,9 +439,6 @@ struct OpSwitch64
 
 };    // namespace rdcspv
 
-static const uint32_t SpecializationConstantBindSet = 1234567;
-static const uint32_t PushConstantBindSet = 1234568;
-
 struct SpecConstant
 {
   SpecConstant() = default;
@@ -453,7 +450,7 @@ struct SpecConstant
 
 DECLARE_STRINGISE_TYPE(rdcspv::Id);
 
-enum class ShaderStage : uint32_t;
+enum class ShaderStage : uint8_t;
 enum class ShaderBuiltin : uint32_t;
 
 ShaderStage MakeShaderStage(rdcspv::ExecutionModel model);

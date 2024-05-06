@@ -157,6 +157,8 @@ public:
   ResourceDescription &GetResourceDesc(ResourceId id);
   rdcarray<ResourceDescription> GetResources();
 
+  rdcarray<DescriptorStoreDescription> GetDescriptorStores() { return {}; }
+
   rdcarray<BufferDescription> GetBuffers();
   BufferDescription GetBuffer(ResourceId id);
 
@@ -182,6 +184,13 @@ public:
   }
   ShaderDebugging &GetShaderDebuggingData() { return m_ShaderDebug; }
   void SavePipelineState(uint32_t eventId);
+  rdcarray<Descriptor> GetDescriptors(ResourceId descriptorStore,
+                                      const rdcarray<DescriptorRange> &ranges);
+  rdcarray<SamplerDescriptor> GetSamplerDescriptors(ResourceId descriptorStore,
+                                                    const rdcarray<DescriptorRange> &ranges);
+  rdcarray<DescriptorAccess> GetDescriptorAccess(uint32_t eventId);
+  rdcarray<DescriptorLogicalLocation> GetDescriptorLocations(ResourceId descriptorStore,
+                                                             const rdcarray<DescriptorRange> &ranges);
   void FreeTargetResource(ResourceId id);
   void FreeCustomShader(ResourceId id);
 

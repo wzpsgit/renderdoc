@@ -53,61 +53,80 @@ struct PointerVal
 
 DECLARE_STRINGISE_TYPE(PointerVal);
 
-DOCUMENT("References a particular element in a :class:`Bindpoint`.");
-struct BindpointIndex
+struct DescriptorAccess;
+
+DOCUMENT(R"(References a particular individual binding element in a shader interface.
+
+This is the shader interface side of a :class:`DescriptorAccess` and so can be compared to one to
+check if an access refers to a given index or not.
+
+The context of which shader reflection this index refers to must be provided to properly interpret
+this information, as it is relative to a particular :class:`ShaderReflection`.
+)");
+struct ShaderBindIndex
 {
   DOCUMENT("");
-  BindpointIndex()
+  ShaderBindIndex()
   {
-    bindset = 0;
-    bind = 0;
-    arrayIndex = 0;
+    category = DescriptorCategory::Unknown;
+    index = 0;
+    arrayElement = 0;
   }
-  BindpointIndex(const BindpointIndex &) = default;
-  BindpointIndex &operator=(const BindpointIndex &) = default;
+  ShaderBindIndex(const ShaderBindIndex &) = default;
+  ShaderBindIndex &operator=(const ShaderBindIndex &) = default;
 
-  BindpointIndex(int32_t s, int32_t b)
+  ShaderBindIndex(DescriptorCategory category, uint32_t index, uint32_t arrayElement)
+      : category(category), index(index), arrayElement(arrayElement)
   {
-    bindset = s;
-    bind = b;
-    arrayIndex = 0;
   }
-  BindpointIndex(int32_t s, int32_t b, uint32_t a)
+  ShaderBindIndex(DescriptorCategory category, uint32_t index) : ShaderBindIndex(category, index, 0)
   {
-    bindset = s;
-    bind = b;
-    arrayIndex = a;
+  }
+  ShaderBindIndex(const DescriptorAccess &access);
+
+  bool operator<(const ShaderBindIndex &o) const
+  {
+    if(!(category == o.category))
+      return category < o.category;
+    if(!(index == o.index))
+      return index < o.index;
+    return arrayElement < o.arrayElement;
+  }
+  bool operator>(const ShaderBindIndex &o) const
+  {
+    if(!(category == o.category))
+      return category > o.category;
+    if(!(index == o.index))
+      return index > o.index;
+    return arrayElement > o.arrayElement;
+  }
+  bool operator==(const ShaderBindIndex &o) const
+  {
+    return category == o.category && index == o.index && arrayElement == o.arrayElement;
   }
 
-  bool operator<(const BindpointIndex &o) const
-  {
-    if(!(bindset == o.bindset))
-      return bindset < o.bindset;
-    if(!(bind == o.bind))
-      return bind < o.bind;
-    return arrayIndex < o.arrayIndex;
-  }
-  bool operator>(const BindpointIndex &o) const
-  {
-    if(!(bindset == o.bindset))
-      return bindset > o.bindset;
-    if(!(bind == o.bind))
-      return bind > o.bind;
-    return arrayIndex > o.arrayIndex;
-  }
-  bool operator==(const BindpointIndex &o) const
-  {
-    return bindset == o.bindset && bind == o.bind && arrayIndex == o.arrayIndex;
-  }
-  DOCUMENT("The binding set.");
-  int32_t bindset;
-  DOCUMENT("The binding index.");
-  int32_t bind;
-  DOCUMENT("If this is an arrayed binding, the element in the array being referenced.");
-  uint32_t arrayIndex;
+  DOCUMENT(R"(The type of binding this refers to, with each category referring to a different
+shader interface in the :data:`ShaderReflection`.
+
+:type: DescriptorCategory
+)");
+  DescriptorCategory category;
+
+  DOCUMENT(R"(The index within the given :data:`category` for the binding.
+
+:type: int
+)");
+  uint32_t index;
+
+  DOCUMENT(R"(If the binding identified by :data:`category` and :data:`index` is arrayed, this
+identifies the particular array index being referred to.
+
+:type: int
+)");
+  uint32_t arrayElement;
 };
 
-DECLARE_REFLECTION_STRUCT(BindpointIndex);
+DECLARE_REFLECTION_STRUCT(ShaderBindIndex);
 
 #if !defined(SWIG)
 // similarly these need to be pre-declared for use in rdhalf
@@ -385,35 +404,33 @@ manually, but since it is common this helper is provided.
     return {value.u64v[0], pointerShader, uint32_t(value.u64v[1] & 0xFFFFFFFF)};
   }
 
-  DOCUMENT(R"(Utility function for setting a bindpoint reference.
+  DOCUMENT(R"(Utility function for setting a reference to a shader binding.
 
-See :class:`ShaderBindpointMapping` for the details of how bindpoints are interpreted. The type of
-binding is given by the :data:`type` member.
+The :class:`ShaderBindIndex` uniquely refers to a given shader binding in one of the shader interfaces
+(constant blocks, samplers, read-only and read-write resources) and if necessary the element within
+an arrayed binding.
 
-:param int bindset: The bind set.
-:param int bind: The bind itself.
-:param int arrayIndex: The array index, if the bind is an array. If it isn't an array this should be
-  set to 0.
+:param ShaderBindIndex idx: The index of the bind being referred to.
 )");
-  inline void SetBinding(int32_t bindset, int32_t bind, uint32_t arrayIndex)
+  inline void SetBindIndex(const ShaderBindIndex &idx)
   {
-    value.s32v[0] = bindset;
-    value.s32v[1] = bind;
-    value.u32v[2] = arrayIndex;
+    value.u32v[0] = (uint32_t)idx.category;
+    value.u32v[1] = idx.index;
+    value.u32v[2] = idx.arrayElement;
   }
 
-  DOCUMENT(R"(Utility function for getting the bindpoint referenced by this variable.
+  DOCUMENT(R"(Utility function for getting a shader binding referenced by this variable.
 
 .. note::
 
   The return value is undefined if this variable is not a binding reference.
 
-:return: A :class:`BindpointIndex` with the binding referenced.
-:rtype: BindpointIndex
+:return: A :class:`ShaderBindIndex` with the binding referenced.
+:rtype: ShaderBindIndex
 )");
-  inline BindpointIndex GetBinding() const
+  inline ShaderBindIndex GetBindIndex() const
   {
-    return BindpointIndex(value.s32v[0], value.s32v[1], value.u32v[2]);
+    return ShaderBindIndex((DescriptorCategory)value.u32v[0], value.u32v[1], value.u32v[2]);
   }
 };
 
@@ -794,7 +811,7 @@ struct ShaderDebugTrace
   DOCUMENT(R"(Constant buffer backed variables for this shader.
 
 Each entry in this list corresponds to a constant block with the same index in the
-:data:`ShaderBindpointMapping.constantBlocks` list, which can be used to look up the metadata.
+:data:`ShaderReflection.constantBlocks` list, which can be used to look up the metadata.
 
 Depending on the underlying shader representation, the constant block may retain any structure or
 it may have been vectorised and flattened.
@@ -806,7 +823,7 @@ it may have been vectorised and flattened.
   DOCUMENT(R"(The read-only resource variables for this shader.
 
 The 'value' of the variable is always a single unsigned integer, which is the bindpoint - an index
-into the :data:`ShaderBindpointMapping.readOnlyResources` list, which can be used to look up the
+into the :data:`ShaderReflection.readOnlyResources` list, which can be used to look up the
 other metadata as well as find the binding from the pipeline state.
 
 :type: List[ShaderVariable]
@@ -816,7 +833,7 @@ other metadata as well as find the binding from the pipeline state.
   DOCUMENT(R"(The read-write resource variables for this shader.
 
 The 'value' of the variable is always a single unsigned integer, which is the bindpoint - an index
-into the :data:`ShaderBindpointMapping.readWriteResources` list, which can be used to look up the
+into the :data:`ShaderReflection.readWriteResources` list, which can be used to look up the
 other metadata as well as find the binding from the pipeline state.
 
 :type: List[ShaderVariable]
@@ -826,7 +843,7 @@ other metadata as well as find the binding from the pipeline state.
   DOCUMENT(R"(The sampler variables for this shader.
 
 The 'value' of the variable is always a single unsigned integer, which is the bindpoint - an index
-into the :data:`ShaderBindpointMapping.samplers` list, which can be used to look up the
+into the :data:`ShaderReflection.samplers` list, which can be used to look up the
 other metadata as well as find the binding from the pipeline state.
 
 :type: List[ShaderVariable]
@@ -1142,7 +1159,8 @@ struct ConstantBlock
 
   bool operator==(const ConstantBlock &o) const
   {
-    return name == o.name && variables == o.variables && bindPoint == o.bindPoint &&
+    return name == o.name && variables == o.variables &&
+           fixedBindSetOrSpace == o.fixedBindSetOrSpace && bufferBacked == o.bufferBacked &&
            byteSize == o.byteSize && bufferBacked == o.bufferBacked &&
            inlineDataBytes == o.inlineDataBytes && compileConstants == o.compileConstants;
   }
@@ -1150,10 +1168,10 @@ struct ConstantBlock
   {
     if(!(name == o.name))
       return name < o.name;
-    if(!(variables == o.variables))
-      return variables < o.variables;
-    if(!(bindPoint == o.bindPoint))
-      return bindPoint < o.bindPoint;
+    if(!(fixedBindNumber == o.fixedBindNumber))
+      return fixedBindNumber < o.fixedBindNumber;
+    if(!(fixedBindSetOrSpace == o.fixedBindSetOrSpace))
+      return fixedBindSetOrSpace < o.fixedBindSetOrSpace;
     if(!(byteSize == o.byteSize))
       return byteSize < o.byteSize;
     if(!(bufferBacked == o.bufferBacked))
@@ -1162,6 +1180,8 @@ struct ConstantBlock
       return inlineDataBytes < o.inlineDataBytes;
     if(!(compileConstants == o.compileConstants))
       return compileConstants < o.compileConstants;
+    if(!(variables == o.variables))
+      return variables < o.variables;
     return false;
   }
   DOCUMENT("The name of this constant block, may be empty on some APIs.");
@@ -1171,10 +1191,48 @@ struct ConstantBlock
 :type: List[ShaderConstant]
 )");
   rdcarray<ShaderConstant> variables;
-  DOCUMENT(R"(The bindpoint for this block. This is an index in the
-:data:`ShaderBindpointMapping.constantBlocks` list.
+
+  DOCUMENT(R"(The fixed binding number for this binding. The interpretation of this is API-specific
+and it is provided purely for informational purposes and has no bearing on how data is accessed or
+described. Similarly some bindings don't have a fixed bind number and the value here should not be
+relied on.
+
+For OpenGL only, this value is not used as bindings are dynamic and cannot be determined by the
+shader reflection. Bindings must be determined only by the descriptor mapped to.
+
+Generally speaking sorting by this number will give a reasonable ordering by binding if it exists.
+
+.. note::
+  Because this number is API-specific, there is no guarantee that it will be unique across all
+  resources, though generally it will be unique within all binds of the same type. It should be used
+  only within contexts that can interpret it API-specifically, or else for purely
+  informational/non-semantic purposes like sorting.
+
+:type: int
 )");
-  int32_t bindPoint = 0;
+  uint32_t fixedBindNumber = 0;
+
+  DOCUMENT(R"(The fixed binding set or space for this binding. This is API-specific, on Vulkan this
+gives the set and on D3D12 this gives the register space.
+It is provided purely for informational purposes and has no bearing on how data is accessed or
+described.
+
+Generally speaking sorting by this number before :data:`fixedBindNumber` will give a reasonable
+ordering by binding if it exists.
+
+:type: int
+)");
+  uint32_t fixedBindSetOrSpace = 0;
+
+  DOCUMENT(R"(If this binding is natively arrayed, how large is the array size. If not arrayed, this
+will be set to 1.
+
+This value may be set to a very large number if the array is unbounded in the shader.
+
+:type: int
+)");
+  uint32_t bindArraySize = 1;
+
   DOCUMENT("The total number of bytes consumed by all of the constants contained in this block.");
   uint32_t byteSize = 0;
   DOCUMENT(R"(``True`` if the contents are stored in a buffer of memory. If not then they are set by
@@ -1205,23 +1263,64 @@ struct ShaderSampler
 
   bool operator==(const ShaderSampler &o) const
   {
-    return name == o.name && bindPoint == o.bindPoint;
+    return name == o.name && fixedBindNumber == o.fixedBindNumber &&
+           fixedBindSetOrSpace == o.fixedBindSetOrSpace && bindArraySize == o.bindArraySize;
   }
   bool operator<(const ShaderSampler &o) const
   {
     if(!(name == o.name))
       return name < o.name;
-    if(!(bindPoint == o.bindPoint))
-      return bindPoint < o.bindPoint;
+    if(!(fixedBindNumber == o.fixedBindNumber))
+      return fixedBindNumber < o.fixedBindNumber;
+    if(!(fixedBindSetOrSpace == o.fixedBindSetOrSpace))
+      return fixedBindSetOrSpace < o.fixedBindSetOrSpace;
+    if(!(bindArraySize == o.bindArraySize))
+      return bindArraySize < o.bindArraySize;
     return false;
   }
   DOCUMENT("The name of this sampler.");
   rdcstr name;
 
-  DOCUMENT(R"(The bindpoint for this block. This is an index in either the
-:data:`ShaderBindpointMapping.samplers` list.
+  DOCUMENT(R"(The fixed binding number for this binding. The interpretation of this is API-specific
+and it is provided purely for informational purposes and has no bearing on how data is accessed or
+described. Similarly some bindings don't have a fixed bind number and the value here should not be
+relied on.
+
+For OpenGL only, this value is not used as bindings are dynamic and cannot be determined by the
+shader reflection. Bindings must be determined only by the descriptor mapped to.
+
+Generally speaking sorting by this number will give a reasonable ordering by binding if it exists.
+
+.. note::
+  Because this number is API-specific, there is no guarantee that it will be unique across all
+  resources, though generally it will be unique within all binds of the same type. It should be used
+  only within contexts that can interpret it API-specifically, or else for purely
+  informational/non-semantic purposes like sorting.
+
+:type: int
 )");
-  int32_t bindPoint;
+  uint32_t fixedBindNumber = 0;
+
+  DOCUMENT(R"(The fixed binding set or space for this binding. This is API-specific, on Vulkan this
+gives the set and on D3D12 this gives the register space.
+It is provided purely for informational purposes and has no bearing on how data is accessed or
+described.
+
+Generally speaking sorting by this number before :data:`fixedBindNumber` will give a reasonable
+ordering by binding if it exists.
+
+:type: int
+)");
+  uint32_t fixedBindSetOrSpace = 0;
+
+  DOCUMENT(R"(If this binding is natively arrayed, how large is the array size. If not arrayed, this
+will be set to 1.
+
+This value may be set to a very large number if the array is unbounded in the shader.
+
+:type: int
+)");
+  uint32_t bindArraySize = 1;
 };
 
 DECLARE_REFLECTION_STRUCT(ShaderSampler);
@@ -1241,27 +1340,43 @@ struct ShaderResource
 
   bool operator==(const ShaderResource &o) const
   {
-    return resType == o.resType && name == o.name && variableType == o.variableType &&
-           bindPoint == o.bindPoint && isTexture == o.isTexture && isReadOnly == o.isReadOnly;
+    return textureType == o.textureType && name == o.name && variableType == o.variableType &&
+           fixedBindNumber == o.fixedBindNumber && fixedBindSetOrSpace == o.fixedBindSetOrSpace &&
+           isTexture == o.isTexture && hasSampler == o.hasSampler &&
+           isInputAttachment == o.isInputAttachment && isReadOnly == o.isReadOnly;
   }
   bool operator<(const ShaderResource &o) const
   {
-    if(!(resType == o.resType))
-      return resType < o.resType;
+    if(!(textureType == o.textureType))
+      return textureType < o.textureType;
     if(!(name == o.name))
       return name < o.name;
     if(!(variableType == o.variableType))
       return variableType < o.variableType;
-    if(!(bindPoint == o.bindPoint))
-      return bindPoint < o.bindPoint;
+    if(!(fixedBindSetOrSpace == o.fixedBindSetOrSpace))
+      return fixedBindSetOrSpace < o.fixedBindSetOrSpace;
     if(!(isTexture == o.isTexture))
       return isTexture < o.isTexture;
+    if(!(hasSampler == o.hasSampler))
+      return hasSampler < o.hasSampler;
+    if(!(isInputAttachment == o.isInputAttachment))
+      return isInputAttachment < o.isInputAttachment;
     if(!(isReadOnly == o.isReadOnly))
       return isReadOnly < o.isReadOnly;
     return false;
   }
-  DOCUMENT("The :class:`TextureType` that describes the type of this resource.");
-  TextureType resType;
+
+  DOCUMENT(R"(The :class:`TextureType` that describes the type of this resource.
+
+:type: TextureType
+)");
+  TextureType textureType;
+
+  DOCUMENT(R"(The :class:`DescriptorType` which this resource expects to access.
+
+:type: DescriptorType
+)");
+  DescriptorType descriptorType;
 
   DOCUMENT("The name of this resource.");
   rdcstr name;
@@ -1272,14 +1387,53 @@ struct ShaderResource
 )");
   ShaderConstantType variableType;
 
-  DOCUMENT(R"(The bindpoint for this block. This is an index in either the
-:data:`ShaderBindpointMapping.readOnlyResources` list or
-:data:`ShaderBindpointMapping.readWriteResources` list as appropriate (see :data:`isReadOnly`).
+  DOCUMENT(R"(The fixed binding number for this binding. The interpretation of this is API-specific
+and it is provided purely for informational purposes and has no bearing on how data is accessed or
+described. Similarly some bindings don't have a fixed bind number and the value here should not be
+relied on.
+
+For OpenGL only, this value is not used as bindings are dynamic and cannot be determined by the
+shader reflection. Bindings must be determined only by the descriptor mapped to.
+
+Generally speaking sorting by this number will give a reasonable ordering by binding if it exists.
+
+.. note::
+  Because this number is API-specific, there is no guarantee that it will be unique across all
+  resources, though generally it will be unique within all binds of the same type. It should be used
+  only within contexts that can interpret it API-specifically, or else for purely
+  informational/non-semantic purposes like sorting.
+
+:type: int
 )");
-  int32_t bindPoint;
+  uint32_t fixedBindNumber = 0;
+
+  DOCUMENT(R"(The fixed binding set or space for this binding. This is API-specific, on Vulkan this
+gives the set and on D3D12 this gives the register space.
+It is provided purely for informational purposes and has no bearing on how data is accessed or
+described.
+
+Generally speaking sorting by this number before :data:`fixedBindNumber` will give a reasonable
+ordering by binding if it exists.
+
+:type: int
+)");
+  uint32_t fixedBindSetOrSpace = 0;
+
+  DOCUMENT(R"(If this binding is natively arrayed, how large is the array size. If not arrayed, this
+will be set to 1.
+
+This value may be set to a very large number if the array is unbounded in the shader.
+
+:type: int
+)");
+  uint32_t bindArraySize = 1;
 
   DOCUMENT("``True`` if this resource is a texture, otherwise it is a buffer.");
   bool isTexture;
+  DOCUMENT("``True`` if this texture resource has a sampler as well.");
+  bool hasSampler = false;
+  DOCUMENT("``True`` if this texture resource is a subpass input attachment.");
+  bool isInputAttachment = false;
   DOCUMENT(R"(``True`` if this resource is available to the shader for reading only, otherwise it is
 able to be read from and written to arbitrarily.
 )");
@@ -1497,9 +1651,7 @@ DECLARE_REFLECTION_STRUCT(ShaderDebugInfo);
 
 DOCUMENT(R"(The reflection and metadata fully describing a shader.
 
-The information in this structure is API agnostic, and is matched up against a
-:class:`ShaderBindpointMapping` instance to map the information here to the API's binding points
-and resource binding scheme.
+The information in this structure is API agnostic.
 )");
 struct ShaderReflection
 {
@@ -1601,143 +1753,26 @@ input payload (for mesh shaders)
 :type: ConstantBlock
 )");
   ConstantBlock taskPayload;
+
+  DOCUMENT(R"(The block layout of the ray payload.
+
+Only relevant for raytracing shaders, this gives the payload accessible for read and write by ray
+evaluation during the processing of the ray
+
+:type: ConstantBlock
+)");
+  ConstantBlock rayPayload;
+
+  DOCUMENT(R"(The block layout of the ray attributes structure.
+
+Only relevant for intersection shaders and closest/any hit shaders, this gives
+the attributes structure produced by a custom intersection shader which is available by hit shaders,
+or else the built-in structure if no intersection shader was used and a triangle intersection is
+reported.
+
+:type: ConstantBlock
+)");
+  ConstantBlock rayAttributes;
 };
 
 DECLARE_REFLECTION_STRUCT(ShaderReflection);
-
-DOCUMENT(R"(Declares the binding information for a single resource binding.
-
-See :class:`ShaderBindpointMapping` for how this mapping works in detail.
-)");
-struct Bindpoint
-{
-  DOCUMENT("");
-  Bindpoint()
-  {
-    bindset = 0;
-    bind = 0;
-    used = false;
-    arraySize = 1;
-  }
-  Bindpoint(const Bindpoint &) = default;
-  Bindpoint &operator=(const Bindpoint &) = default;
-
-  Bindpoint(int32_t s, int32_t b)
-  {
-    bindset = s;
-    bind = b;
-    used = false;
-    arraySize = 1;
-  }
-  // construct out of an index, useful for searching bindpoint lists (since we only compare by
-  // bindset and bind)
-  Bindpoint(const BindpointIndex &idx)
-  {
-    bindset = idx.bindset;
-    bind = idx.bind;
-    used = false;
-    arraySize = 1;
-  }
-
-  bool operator<(const Bindpoint &o) const
-  {
-    if(!(bindset == o.bindset))
-      return bindset < o.bindset;
-    return bind < o.bind;
-  }
-  bool operator==(const Bindpoint &o) const { return bindset == o.bindset && bind == o.bind; }
-  DOCUMENT("The binding set.");
-  int32_t bindset;
-  DOCUMENT("The binding index.");
-  int32_t bind;
-  DOCUMENT("If this is an arrayed binding, the number of elements in the array.");
-  uint32_t arraySize;
-  DOCUMENT(
-      "``True`` if the shader actually uses this resource, otherwise it's declared but unused.");
-  bool used;
-};
-
-DECLARE_REFLECTION_STRUCT(Bindpoint);
-
-DOCUMENT(R"(This structure goes hand in hand with :class:`ShaderReflection` to determine how to map
-from bindpoint indices in the resource lists there to API-specific binding points. The ``bindPoint``
-member in :class:`ShaderResource` or :class:`ConstantBlock` refers to an index in these associated
-lists, which then map potentially sparsely and potentially in different orders to the appropriate
-API registers, indices, or slots.
-
-API specific details:
-
-* Direct3D11 - All :data:`Bindpoint.bindset` values are 0 as D3D11 has no notion of sets, and the
-  only namespacing that exists is by shader stage and object type. Mostly this already exists with
-  the constant block, read only and read write resource lists.
-
-  :data:`Bindpoint.arraySize` is likewise unused as D3D11 doesn't have arrayed resource bindings.
-
-  :data:`Bindpoint.bind` refers to the register/slot binding within the appropriate type (SRVs for
-  read-only resources, UAV for read-write resources, samplers/constant buffers in each type).
-
-* OpenGL - Similarly to D3D11, :data:`Bindpoint.bindset` and :data:`Bindpoint.arraySize` are
-  unused as OpenGL does not have true binding sets or array resource binds.
-
-  For OpenGL there may be many more duplicate :class:`Bindpoint` objects as the
-  :data:`Bindpoint.bind` refers to the index in the type-specific list, which is much more
-  granular on OpenGL. E.g. ``0`` may refer to images, storage buffers, and atomic buffers all within
-  the :data:`readWriteResources` list. The index is the uniform value of the binding. Since no
-  objects are namespaced by shader stage, the same value in two shaders refers to the same binding.
-
-* Direct3D12 - Since D3D12 doesn't have true resource arrays (they are linearised into sequential
-  registers) :data:`Bindpoint.arraySize` is not used.
-
-  :data:`Bindpoint.bindset` corresponds to register spaces, with :data:`Bindpoint.bind` then
-  mapping to the register within that space. The root signature then maps these registers to
-  descriptors.
-
-* Vulkan - For Vulkan :data:`Bindpoint.bindset` corresponds to the index of the descriptor set,
-  and :data:`Bindpoint.bind` refers to the index of the descriptor within that set.
-  :data:`Bindpoint.arraySize` also is used as descriptors in Vulkan can be true arrays, bound all
-  at once to a single binding.
-)");
-struct ShaderBindpointMapping
-{
-  DOCUMENT("");
-  ShaderBindpointMapping() = default;
-  ShaderBindpointMapping(const ShaderBindpointMapping &) = default;
-  ShaderBindpointMapping &operator=(const ShaderBindpointMapping &) = default;
-
-  DOCUMENT(R"(This maps input attributes as a simple swizzle on the
-:data:`ShaderReflection.inputSignature` indices for APIs where this mapping is mutable at runtime.
-
-:type: List[int]
-)");
-  rdcarray<int32_t> inputAttributes;
-
-  DOCUMENT(R"(Provides a list of :class:`Bindpoint` entries for remapping the
-:data:`ShaderReflection.constantBlocks` list.
-
-:type: List[Bindpoint]
-)");
-  rdcarray<Bindpoint> constantBlocks;
-
-  DOCUMENT(R"(Provides a list of :class:`Bindpoint` entries for remapping the
-:data:`ShaderReflection.samplers` list.
-
-:type: List[Bindpoint]
-)");
-  rdcarray<Bindpoint> samplers;
-
-  DOCUMENT(R"(Provides a list of :class:`Bindpoint` entries for remapping the
-:data:`ShaderReflection.readOnlyResources` list.
-
-:type: List[Bindpoint]
-)");
-  rdcarray<Bindpoint> readOnlyResources;
-
-  DOCUMENT(R"(Provides a list of :class:`Bindpoint` entries for remapping the
-:data:`ShaderReflection.readWriteResources` list.
-
-:type: List[Bindpoint]
-)");
-  rdcarray<Bindpoint> readWriteResources;
-};
-
-DECLARE_REFLECTION_STRUCT(ShaderBindpointMapping);

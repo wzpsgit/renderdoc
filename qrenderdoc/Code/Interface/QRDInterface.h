@@ -1271,6 +1271,25 @@ protected:
 
 DECLARE_REFLECTION_STRUCT(IShaderMessageViewer);
 
+DOCUMENT("A descriptor viewer window.");
+struct IDescriptorViewer
+{
+  DOCUMENT(R"(Retrieves the PySide2 QWidget for this :class:`DescriptorViewer` if PySide2 is available, or otherwise
+returns a unique opaque pointer that can be passed back to any RenderDoc functions expecting a
+QWidget.
+
+:return: Return the widget handle, either a PySide2 handle or an opaque handle.
+:rtype: QWidget
+)");
+  virtual QWidget *Widget() = 0;
+
+protected:
+  IDescriptorViewer() = default;
+  ~IDescriptorViewer() = default;
+};
+
+DECLARE_REFLECTION_STRUCT(IDescriptorViewer);
+
 DOCUMENT("A pixel history window.");
 struct IPixelHistoryView
 {
@@ -2141,6 +2160,15 @@ considered out of date
 )");
   virtual const rdcarray<BufferDescription> &GetBuffers() const = 0;
 
+  DOCUMENT(R"(Retrieve the information about a particular descriptor store.
+
+:param renderdoc.ResourceId id: The ID of the buffer to query about.
+:return: The information about a descriptor store, or ``None`` if the ID does not correspond to a
+  descriptor store.
+:rtype: renderdoc.DescriptorStoreDescription
+)");
+  virtual DescriptorStoreDescription *GetDescriptorStore(ResourceId id) = 0;
+
   DOCUMENT(R"(Retrieve the information about an action at a given
 :data:`eventId <renderdoc.APIEvent.eventId>`.
 
@@ -2550,7 +2578,6 @@ place if needed.
   DOCUMENT(R"(Show a new :class:`ShaderViewer` window, showing a read-only view of a debug trace
 through the execution of a given shader.
 
-:param renderdoc.ShaderBindpointMapping bind: The bindpoint mapping for the shader to view.
 :param renderdoc.ShaderReflection shader: The reflection data for the shader to view.
 :param renderdoc.ResourceId pipeline: The pipeline state object, if applicable, that this shader is
   bound to.
@@ -2560,8 +2587,7 @@ through the execution of a given shader.
 :return: The new :class:`ShaderViewer` window opened, but not shown.
 :rtype: ShaderViewer
 )");
-  virtual IShaderViewer *DebugShader(const ShaderBindpointMapping *bind,
-                                     const ShaderReflection *shader, ResourceId pipeline,
+  virtual IShaderViewer *DebugShader(const ShaderReflection *shader, ResourceId pipeline,
                                      ShaderDebugTrace *trace, const rdcstr &debugContext) = 0;
 
   DOCUMENT(R"(Show a new :class:`ShaderViewer` window, showing a read-only view of a given shader.
@@ -2581,6 +2607,34 @@ through the execution of a given shader.
 :rtype: ShaderMessageViewer
 )");
   virtual IShaderMessageViewer *ViewShaderMessages(ShaderStageMask stages) = 0;
+
+  DOCUMENT(R"(Show a new :class:`DescriptorViewer` window, showing the full raw contents of a
+descriptor store.
+
+:param renderdoc.ResourceId id: The ID of the descriptor store to fetch data from.
+:return: The new :class:`DescriptorViewer` window opened, but not shown.
+:rtype: DescriptorViewer
+)");
+  virtual IDescriptorViewer *ViewDescriptorStore(ResourceId id) = 0;
+
+  DOCUMENT(R"(Show a new :class:`DescriptorViewer` window, showing contents of an arbitrary list of
+descriptors.
+
+The descriptor lists should be in parallel, with identical sizes. If a non-sampler descriptor is
+to be displayed, the corresponding sampler descriptor should be uninitialised and vice-versa. If
+the lists are not the same length, only indices up to the minimum of the two lengths will be used.
+
+This function should not be used to view the entirety of a descriptor store - in that case the
+:func:`ViewDescriptorStore` function will be more efficient.
+
+:param List[renderdoc.Descriptor] descriptors: The list of descriptors to process and show.
+:param List[renderdoc.SamplerDescriptor] samplerDescriptors: The list of sampler descriptors to process and
+  show.
+:return: The new :class:`DescriptorViewer` window opened, but not shown.
+:rtype: DescriptorViewer
+)");
+  virtual IDescriptorViewer *ViewDescriptors(const rdcarray<Descriptor> &descriptors,
+                                             const rdcarray<SamplerDescriptor> &samplerDescriptors) = 0;
 
   DOCUMENT(R"(Show a new :class:`BufferViewer` window, showing a read-only view of buffer data.
 

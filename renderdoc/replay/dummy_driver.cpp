@@ -32,6 +32,7 @@ DummyDriver::DummyDriver(IReplayDriver *original, const rdcarray<ShaderReflectio
 
   m_Props = original->GetAPIProperties();
   m_Resources = original->GetResources();
+  m_DescriptorStores = original->GetDescriptorStores();
   m_Buffers = original->GetBuffers();
   m_Textures = original->GetTextures();
   m_FrameRecord = original->GetFrameRecord();
@@ -68,6 +69,11 @@ APIProperties DummyDriver::GetAPIProperties()
 rdcarray<ResourceDescription> DummyDriver::GetResources()
 {
   return m_Resources;
+}
+
+rdcarray<DescriptorStoreDescription> DummyDriver::GetDescriptorStores()
+{
+  return m_DescriptorStores;
 }
 
 rdcarray<BufferDescription> DummyDriver::GetBuffers()
@@ -141,6 +147,39 @@ void DummyDriver::SetPipelineStates(D3D11Pipe::State *d3d11, D3D12Pipe::State *d
 
 void DummyDriver::SavePipelineState(uint32_t eventId)
 {
+}
+
+rdcarray<Descriptor> DummyDriver::GetDescriptors(ResourceId descriptorStore,
+                                                 const rdcarray<DescriptorRange> &ranges)
+{
+  size_t count = 0;
+  for(const DescriptorRange &r : ranges)
+    count += r.count;
+  rdcarray<Descriptor> ret;
+  ret.resize(count);
+  return ret;
+}
+
+rdcarray<SamplerDescriptor> DummyDriver::GetSamplerDescriptors(ResourceId descriptorStore,
+                                                               const rdcarray<DescriptorRange> &ranges)
+{
+  size_t count = 0;
+  for(const DescriptorRange &r : ranges)
+    count += r.count;
+  rdcarray<SamplerDescriptor> ret;
+  ret.resize(count);
+  return ret;
+}
+
+rdcarray<DescriptorAccess> DummyDriver::GetDescriptorAccess(uint32_t eventId)
+{
+  return {};
+}
+
+rdcarray<DescriptorLogicalLocation> DummyDriver::GetDescriptorLocations(
+    ResourceId descriptorStore, const rdcarray<DescriptorRange> &ranges)
+{
+  return {};
 }
 
 FrameRecord DummyDriver::GetFrameRecord()

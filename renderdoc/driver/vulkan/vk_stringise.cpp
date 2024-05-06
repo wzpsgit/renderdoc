@@ -28,7 +28,7 @@
 template <>
 rdcstr DoStringise(const VulkanChunk &el)
 {
-  RDCCOMPILE_ASSERT((uint32_t)VulkanChunk::Max == 1207, "Chunks changed without updating names");
+  RDCCOMPILE_ASSERT((uint32_t)VulkanChunk::Max == 1209, "Chunks changed without updating names");
 
   BEGIN_ENUM_STRINGISE(VulkanChunk)
   {
@@ -239,6 +239,8 @@ rdcstr DoStringise(const VulkanChunk &el)
     STRINGISE_ENUM_CLASS(vkCmdCopyAccelerationStructureToMemoryKHR)
     STRINGISE_ENUM_CLASS(vkCmdCopyMemoryToAccelerationStructureKHR)
     STRINGISE_ENUM_CLASS(vkCreateAccelerationStructureKHR)
+    STRINGISE_ENUM_CLASS(vkCmdBindShadersEXT)
+    STRINGISE_ENUM_CLASS(vkCreateShadersEXT)
     STRINGISE_ENUM_CLASS_NAMED(Max, "Max Chunk");
   }
   END_ENUM_STRINGISE()
@@ -280,6 +282,7 @@ rdcstr DoStringise(const VkResourceType &el)
     STRINGISE_ENUM(eResDescUpdateTemplate)
     STRINGISE_ENUM(eResSamplerConversion)
     STRINGISE_ENUM(eResAccelerationStructureKHR)
+    STRINGISE_ENUM(eResShaderEXT)
   }
   END_ENUM_STRINGISE();
 }
@@ -3882,6 +3885,33 @@ rdcstr DoStringise(const VkPresentScalingFlagBitsEXT &el)
     STRINGISE_BITFIELD_BIT(VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT);
     STRINGISE_BITFIELD_BIT(VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_EXT);
     STRINGISE_BITFIELD_BIT(VK_PRESENT_SCALING_STRETCH_BIT_EXT);
+  }
+  END_BITFIELD_STRINGISE();
+}
+
+template <>
+rdcstr DoStringise(const VkShaderCodeTypeEXT &el)
+{
+  BEGIN_ENUM_STRINGISE(VkShaderCodeTypeEXT);
+  {
+    STRINGISE_ENUM(VK_SHADER_CODE_TYPE_BINARY_EXT);
+    STRINGISE_ENUM(VK_SHADER_CODE_TYPE_SPIRV_EXT);
+  }
+  END_ENUM_STRINGISE();
+}
+
+template <>
+rdcstr DoStringise(const VkShaderCreateFlagBitsEXT &el)
+{
+  BEGIN_BITFIELD_STRINGISE(VkShaderCreateFlagBitsEXT);
+  {
+    STRINGISE_BITFIELD_BIT(VK_SHADER_CREATE_LINK_STAGE_BIT_EXT);
+    STRINGISE_BITFIELD_BIT(VK_SHADER_CREATE_ALLOW_VARYING_SUBGROUP_SIZE_BIT_EXT);
+    STRINGISE_BITFIELD_BIT(VK_SHADER_CREATE_REQUIRE_FULL_SUBGROUPS_BIT_EXT);
+    STRINGISE_BITFIELD_BIT(VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT);
+    STRINGISE_BITFIELD_BIT(VK_SHADER_CREATE_DISPATCH_BASE_BIT_EXT);
+    STRINGISE_BITFIELD_BIT(VK_SHADER_CREATE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_EXT);
+    STRINGISE_BITFIELD_BIT(VK_SHADER_CREATE_FRAGMENT_DENSITY_MAP_ATTACHMENT_BIT_EXT);
   }
   END_BITFIELD_STRINGISE();
 }

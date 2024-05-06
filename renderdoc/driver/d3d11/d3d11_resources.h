@@ -978,13 +978,7 @@ public:
   {
   public:
     ShaderEntry() : m_DXBCFile(NULL) {}
-    ShaderEntry(WrappedID3D11Device *device, ResourceId id, const byte *code, size_t codeLen)
-    {
-      m_ID = id;
-      m_Bytecode.assign(code, codeLen);
-      m_DXBCFile = NULL;
-      m_Details = new ShaderReflection;
-    }
+    ShaderEntry(WrappedID3D11Device *device, ResourceId id, const byte *code, size_t codeLen);
     ~ShaderEntry()
     {
       m_Bytecode.clear();
@@ -1016,12 +1010,12 @@ public:
       return *m_Details;
     }
 
-    const ShaderBindpointMapping &GetMapping()
+    const rdcarray<DescriptorAccess> &GetDescriptorAccess()
     {
       if(!m_Built && GetDXBC() != NULL)
         BuildReflection();
       m_Built = true;
-      return m_Mapping;
+      return m_Access;
     }
 
   private:
@@ -1036,10 +1030,11 @@ public:
 
     bytebuf m_Bytecode;
 
+    ResourceId m_DescriptorStore;
     bool m_Built = false;
     DXBC::DXBCContainer *m_DXBCFile;
     ShaderReflection *m_Details;
-    ShaderBindpointMapping m_Mapping;
+    rdcarray<DescriptorAccess> m_Access;
 
     friend class WrappedShader;
   };
@@ -1089,10 +1084,10 @@ public:
     SCOPED_LOCK(m_ShaderListLock);
     return m_ShaderList[m_ID]->GetDetails();
   }
-  const ShaderBindpointMapping &GetMapping()
+  const rdcarray<DescriptorAccess> &GetDescriptorAccess()
   {
     SCOPED_LOCK(m_ShaderListLock);
-    return m_ShaderList[m_ID]->GetMapping();
+    return m_ShaderList[m_ID]->GetDescriptorAccess();
   }
 
   static void GetReflections(rdcarray<ShaderReflection *> &refls)

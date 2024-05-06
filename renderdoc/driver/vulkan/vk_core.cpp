@@ -147,6 +147,7 @@ WrappedVulkan::WrappedVulkan()
   m_SetDeviceLoaderData = NULL;
 
   m_ResourceManager = new VulkanResourceManager(m_State, this);
+  m_ASManager = new VulkanAccelerationStructureManager(this);
 
   m_Instance = VK_NULL_HANDLE;
   m_PhysicalDevice = VK_NULL_HANDLE;
@@ -167,6 +168,8 @@ WrappedVulkan::WrappedVulkan()
     m_FrameCaptureRecord = NULL;
 
     ResourceIDGen::SetReplayResourceIDs();
+
+    m_CreationInfo.pushConstantDescriptorStorage = ResourceIDGen::GetNewUniqueID();
   }
 }
 
@@ -191,6 +194,8 @@ WrappedVulkan::~WrappedVulkan()
   m_ResourceManager->ClearWithoutReleasing();
   SAFE_DELETE(m_ResourceManager);
 
+  SAFE_DELETE(m_ASManager);
+
   SAFE_DELETE(m_FrameReader);
 
   for(size_t i = 0; i < m_ThreadSerialisers.size(); i++)
@@ -200,6 +205,12 @@ WrappedVulkan::~WrappedVulkan()
   {
     delete[] m_ThreadTempMem[i]->memory;
     delete m_ThreadTempMem[i];
+  }
+
+  for(size_t i = 0; i < m_Partial.commandTree.size(); i++)
+  {
+    m_Partial.commandTree[i]->DeleteChildren();
+    delete m_Partial.commandTree[i];
   }
 
   delete m_Replay;
@@ -1111,6 +1122,10 @@ static const VkExtensionProperties supportedExtensions[] = {
         VK_EXT_MUTABLE_DESCRIPTOR_TYPE_SPEC_VERSION,
     },
     {
+        VK_EXT_NESTED_COMMAND_BUFFER_EXTENSION_NAME,
+        VK_EXT_NESTED_COMMAND_BUFFER_SPEC_VERSION,
+    },
+    {
         VK_EXT_NON_SEAMLESS_CUBE_MAP_EXTENSION_NAME,
         VK_EXT_NON_SEAMLESS_CUBE_MAP_SPEC_VERSION,
     },
@@ -1948,6 +1963,35 @@ VkResult WrappedVulkan::FilterDeviceExtensionProperties(VkPhysicalDevice physDev
         return true;
       }
 
+      if(!strcmp(ext.extensionName, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME))
+      {
+        // require GPDP2
+        if(instDevInfo->ext_KHR_get_physical_device_properties2)
+        {
+          VkPhysicalDeviceAccelerationStructureFeaturesKHR accStruct = {
+              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+          VkPhysicalDeviceFeatures2 base = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+          base.pNext = &accStruct;
+          ObjDisp(physDev)->GetPhysicalDeviceFeatures2(Unwrap(physDev), &base);
+
+          if(accStruct.accelerationStructureCaptureReplay)
+          {
+            // supported, don't remove
+            return false;
+          }
+          else if(!filterWarned)
+          {
+            RDCWARN(
+                "VkPhysicalDeviceAccelerationStructureFeaturesKHR."
+                "accelerationStructureCaptureReplay "
+                "is false, can't support capture of VK_KHR_acceleration_structure");
+          }
+        }
+
+        // if it wasn't supported, remove the extension
+        return true;
+      }
+
       // not an extension with conditional support, don't remove
       return false;
     });
@@ -2191,7 +2235,7 @@ void WrappedVulkan::StartFrameCapture(DeviceOwnedWindow devWnd)
     // reference the buffer
     GetResourceManager()->MarkResourceFrameReferenced((*it)->GetResourceID(), eFrameRef_Read);
     // and its backing memory
-    GetResourceManager()->MarkMemoryFrameReferenced((*it)->baseResource, (*it)->memOffset,
+    GetResourceManager()->MarkMemoryFrameReferenced((*it)->baseResourceMem, (*it)->memOffset,
                                                     (*it)->memSize, eFrameRef_ReadBeforeWrite);
   }
 }
@@ -2464,10 +2508,13 @@ bool WrappedVulkan::EndFrameCapture(DeviceOwnedWindow devWnd)
       SubmitAndFlushExtQueue(swapQueueIndex);
     }
 
+    const VkDeviceSize alignedSize =
+        AlignUp(readbackMem.size, GetDeviceProps().limits.nonCoherentAtomSize);
+
     // map memory and readback
     byte *pData = NULL;
-    vkr = vt->MapMemory(Unwrap(device), Unwrap(readbackMem.mem), readbackMem.offs, readbackMem.size,
-                        0, (void **)&pData);
+    vkr = vt->MapMemory(Unwrap(device), Unwrap(readbackMem.mem), readbackMem.offs, alignedSize, 0,
+                        (void **)&pData);
     CheckVkResult(vkr);
     RDCASSERT(pData != NULL);
 
@@ -2480,7 +2527,7 @@ bool WrappedVulkan::EndFrameCapture(DeviceOwnedWindow devWnd)
         NULL,
         Unwrap(readbackMem.mem),
         readbackMem.offs,
-        readbackMem.size,
+        alignedSize,
     };
 
     vkr = vt->InvalidateMappedMemoryRanges(Unwrap(device), 1, &range);
@@ -4010,6 +4057,11 @@ bool WrappedVulkan::ProcessChunk(ReadSerialiser &ser, VulkanChunk chunk)
     case VulkanChunk::vkCreateAccelerationStructureKHR:
       return Serialise_vkCreateAccelerationStructureKHR(ser, VK_NULL_HANDLE, NULL, NULL, NULL);
 
+    case VulkanChunk::vkCmdBindShadersEXT:
+      return Serialise_vkCmdBindShadersEXT(ser, VK_NULL_HANDLE, 0, NULL, NULL);
+    case VulkanChunk::vkCreateShadersEXT:
+      return Serialise_vkCreateShadersEXT(ser, VK_NULL_HANDLE, 0, NULL, NULL, NULL);
+
     // chunks that are reserved but not yet serialised
     case VulkanChunk::vkResetCommandPool:
     case VulkanChunk::vkCreateDepthTargetView:
@@ -4166,8 +4218,7 @@ void WrappedVulkan::ReplayLog(uint32_t startEventID, uint32_t endEventID, Replay
   {
     if(!partial)
     {
-      m_Partial[Primary].Reset();
-      m_Partial[Secondary].Reset();
+      m_Partial.Reset();
       m_RenderState = VulkanRenderState();
       for(auto it = m_BakedCmdBufferInfo.begin(); it != m_BakedCmdBufferInfo.end(); it++)
         it->second.state = VulkanRenderState();
@@ -4180,7 +4231,7 @@ void WrappedVulkan::ReplayLog(uint32_t startEventID, uint32_t endEventID, Replay
 
     VkResult vkr = VK_SUCCESS;
 
-    bool rpWasActive[2] = {};
+    rdcarray<CommandBufferNode> cacheNodes = m_Partial.partialStack;
 
     // we'll need our own command buffer if we're replaying just a subsection
     // of events within a single command buffer record - always if it's only
@@ -4209,10 +4260,9 @@ void WrappedVulkan::ReplayLog(uint32_t startEventID, uint32_t endEventID, Replay
       m_RenderState.subpassContents = VK_SUBPASS_CONTENTS_INLINE;
       m_RenderState.dynamicRendering.flags &= ~VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT;
 
-      rpWasActive[Primary] = m_Partial[Primary].renderPassActive;
-      rpWasActive[Secondary] = m_Partial[Secondary].renderPassActive;
+      bool rpActive = IsPartialRenderPassActive();
 
-      if(rpWasActive[Primary] || rpWasActive[Secondary])
+      if(rpActive)
       {
         const ActionDescription *action = GetAction(endEventID);
 
@@ -4292,14 +4342,13 @@ void WrappedVulkan::ReplayLog(uint32_t startEventID, uint32_t endEventID, Replay
       // even if it wasn't before (if the above event was a CmdBeginRenderPass).
       // If we began our own custom single-action loadrp, and it was ended by a CmdEndRenderPass,
       // we need to reverse the virtual transitions we did above, as it won't happen otherwise
-      if(m_Partial[Primary].renderPassActive || m_Partial[Secondary].renderPassActive)
+      if(IsPartialRenderPassActive())
         m_RenderState.EndRenderPass(cmd);
 
       // we might have replayed a CmdBeginRenderPass or CmdEndRenderPass,
       // but we want to keep the partial replay data state intact, so restore
       // whether or not a render pass was active.
-      m_Partial[Primary].renderPassActive = rpWasActive[Primary];
-      m_Partial[Secondary].renderPassActive = rpWasActive[Secondary];
+      m_Partial.partialStack = cacheNodes;
 
       ObjDisp(cmd)->EndCommandBuffer(Unwrap(cmd));
 
@@ -4779,6 +4828,108 @@ const VkFormatProperties &WrappedVulkan::GetFormatProperties(VkFormat f)
   return m_PhysicalDeviceData.fmtProps[f];
 }
 
+bool WrappedVulkan::IsCommandBufferPartial(ResourceId cmdId)
+{
+  for(const CommandBufferNode &cmdNode : m_Partial.partialStack)
+  {
+    // a given command buffer should appear at most once in the partial stack.
+    if(cmdNode.cmdId == cmdId)
+      return true;
+  }
+
+  return false;
+}
+
+bool WrappedVulkan::IsCommandBufferPartialPrimary(ResourceId cmdId)
+{
+  if(m_Partial.partialStack.empty())
+    return false;
+
+  return (m_Partial.partialStack.front().cmdId == cmdId) &&
+         (m_BakedCmdBufferInfo[cmdId].level == VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+}
+
+void WrappedVulkan::SetPartialStack(const CommandBufferNode *targetNode, uint32_t curEvent)
+{
+  // If a command buffer is in the partial stack, it is either a parent of the deepest command buffer
+  // we have seen in this active replay, or it is the deepest.  Either way, don't change the stack.
+  if(IsCommandBufferPartial(targetNode->cmdId))
+    return;
+
+  BuildPartialStackUpToTarget(targetNode->rootNode, targetNode, curEvent);
+}
+
+void WrappedVulkan::BuildPartialStackUpToTarget(const CommandBufferNode *curNode,
+                                                const CommandBufferNode *targetNode,
+                                                uint32_t curEvent)
+{
+  // If the command node is not already in the list, add it
+  // We add a copy instead of the original so renderPassActive can be modified and cached freely
+  if(!IsCommandBufferPartial(curNode->cmdId))
+    m_Partial.partialStack.push_back(*curNode);
+
+  if(curNode->cmdId == targetNode->cmdId)
+    return;
+
+  // We need to recurse the chain of command submits that are currently partial until we hit the target
+  for(const CommandBufferNode *cmdNode : curNode->childCmdNodes)
+  {
+    if(IsEventInCommandBuffer(cmdNode, curEvent, m_BakedCmdBufferInfo[cmdNode->cmdId].eventCount))
+    {
+      BuildPartialStackUpToTarget(cmdNode, targetNode, curEvent);
+    }
+  }
+}
+
+bool WrappedVulkan::IsEventInCommandBuffer(const CommandBufferNode *cmdNode, uint32_t ev,
+                                           uint32_t eventCount)
+{
+  return RDCMAX(1U, cmdNode->beginEvent) - 1 <= ev && ev < (cmdNode->beginEvent + eventCount);
+}
+
+bool WrappedVulkan::IsCommandBufferDeepestPartial(ResourceId cmdId)
+{
+  if(m_Partial.partialStack.empty())
+    return false;
+
+  return m_Partial.partialStack.back().cmdId == cmdId;
+}
+
+WrappedVulkan::CommandBufferNode *WrappedVulkan::GetCommandBufferPartialSubmission(ResourceId cmdId)
+{
+  for(CommandBufferNode &cmdNode : m_Partial.partialStack)
+  {
+    if(cmdNode.cmdId == cmdId)
+      return &cmdNode;
+  }
+
+  return NULL;
+}
+
+bool WrappedVulkan::IsPartialRenderPassActive()
+{
+  for(const CommandBufferNode &cmdNode : m_Partial.partialStack)
+  {
+    if(cmdNode.renderPassActive)
+      return true;
+  }
+
+  return false;
+}
+
+bool WrappedVulkan::ShouldUpdateRenderpassActive(ResourceId cmdId, bool dynamicRendering)
+{
+  if(m_OutsideCmdBuffer != VK_NULL_HANDLE)
+    return true;
+
+  // If we're opening or closing a dynamic renderpass, this can happen in any command buffer primary or secondary
+  if(dynamicRendering)
+    return IsCommandBufferPartial(cmdId);
+
+  // Otherwise we are in a non-dynamic renderpass and state should only be tracked for the primary
+  return IsCommandBufferPartialPrimary(cmdId);
+}
+
 bool WrappedVulkan::InRerecordRange(ResourceId cmdid)
 {
   // if we have an outside command buffer, assume the range is valid and we're replaying all events
@@ -4788,12 +4939,11 @@ bool WrappedVulkan::InRerecordRange(ResourceId cmdid)
 
   // if not, check if we're one of the actual partial command buffers and check to see if we're in
   // the range for their partial replay.
-  for(int p = 0; p < ePartialNum; p++)
+  for(const CommandBufferNode &cmdNode : m_Partial.partialStack)
   {
-    if(cmdid == m_Partial[p].partialParent)
+    if(cmdNode.cmdId == cmdid)
     {
-      return m_BakedCmdBufferInfo[m_Partial[p].partialParent].curEventID + m_Partial[p].baseEvent <=
-             m_LastEventID;
+      return m_BakedCmdBufferInfo[cmdid].curEventID + cmdNode.beginEvent <= m_LastEventID;
     }
   }
 
@@ -4810,45 +4960,21 @@ bool WrappedVulkan::HasRerecordCmdBuf(ResourceId cmdid)
   return m_RerecordCmds.find(cmdid) != m_RerecordCmds.end();
 }
 
-bool WrappedVulkan::ShouldUpdateRenderState(ResourceId cmdid, bool forcePrimary)
-{
-  if(m_OutsideCmdBuffer != VK_NULL_HANDLE)
-    return true;
-
-  // if forcePrimary is set we're tracking renderpass activity that only happens in the primary
-  // command buffer. So even if a secondary is partial, we still want to check it.
-  if(forcePrimary)
-    return m_Partial[Primary].partialParent == cmdid;
-
-  // otherwise, if a secondary command buffer is partial we want to *ignore* any state setting
-  // happening in the primary buffer as fortunately no state is inherited (so we don't need to
-  // worry about any state before the execute) and any state setting recorded afterwards would
-  // incorrectly override what we have.
-  if(m_Partial[Secondary].partialParent != ResourceId())
-    return cmdid == m_Partial[Secondary].partialParent;
-
-  return cmdid == m_Partial[Primary].partialParent;
-}
-
 bool WrappedVulkan::IsRenderpassOpen(ResourceId cmdid)
 {
   if(m_OutsideCmdBuffer != VK_NULL_HANDLE)
     return true;
 
-  // if not, check if we're one of the actual partial command buffers and check to see if we're in
-  // the range for their partial replay.
-  for(int p = 0; p < ePartialNum; p++)
+  for(const CommandBufferNode &cmdNode : m_Partial.partialStack)
   {
-    if(cmdid == m_Partial[p].partialParent)
-    {
+    if(cmdNode.cmdId == cmdid)
       return m_BakedCmdBufferInfo[cmdid].renderPassOpen;
-    }
   }
 
   return false;
 }
 
-VkCommandBuffer WrappedVulkan::RerecordCmdBuf(ResourceId cmdid, PartialReplayIndex partialType)
+VkCommandBuffer WrappedVulkan::RerecordCmdBuf(ResourceId cmdid)
 {
   if(m_OutsideCmdBuffer != VK_NULL_HANDLE)
     return m_OutsideCmdBuffer;
@@ -4866,9 +4992,10 @@ VkCommandBuffer WrappedVulkan::RerecordCmdBuf(ResourceId cmdid, PartialReplayInd
 
 ResourceId WrappedVulkan::GetPartialCommandBuffer()
 {
-  if(m_Partial[Secondary].partialParent != ResourceId())
-    return m_Partial[Secondary].partialParent;
-  return m_Partial[Primary].partialParent;
+  if(m_Partial.partialStack.empty())
+    return ResourceId();
+
+  return m_Partial.partialStack.back().cmdId;
 }
 
 void WrappedVulkan::AddAction(const ActionDescription &a)
@@ -5024,8 +5151,6 @@ void WrappedVulkan::AddUsage(VulkanActionTreeNode &actionNode, rdcarray<DebugMes
   //////////////////////////////
   // Shaders
 
-  static bool hugeRangeWarned = false;
-
   rdcarray<int> shaderStages;
   if(action.flags & ActionFlags::Dispatch)
   {
@@ -5051,153 +5176,27 @@ void WrappedVulkan::AddUsage(VulkanActionTreeNode &actionNode, rdcarray<DebugMes
     ResourceId origPipe = GetResourceManager()->GetOriginalID(pipe);
     ResourceId origShad = GetResourceManager()->GetOriginalID(sh.module);
 
-    // 5 is the compute shader's index (VS, TCS, TES, GS, FS, CS)
-    const rdcarray<VulkanStatePipeline::DescriptorAndOffsets> &descSets =
-        (compute ? state.compute.descSets : state.graphics.descSets);
-
-    RDCASSERT(sh.mapping);
-
-    struct ResUsageType
+    for(const ConstantBlock &constantBlock : sh.refl->constantBlocks)
     {
-      ResUsageType(rdcarray<Bindpoint> &a, ResourceUsage u) : bindmap(a), usage(u) {}
-      rdcarray<Bindpoint> &bindmap;
-      ResourceUsage usage;
-    };
+      // ignore push constants
+      if(!constantBlock.bufferBacked)
+        continue;
 
-    ResUsageType types[] = {
-        ResUsageType(sh.mapping->readOnlyResources, ResourceUsage::VS_Resource),
-        ResUsageType(sh.mapping->readWriteResources, ResourceUsage::VS_RWResource),
-        ResUsageType(sh.mapping->constantBlocks, ResourceUsage::VS_Constants),
-    };
+      AddUsageForBind(actionNode, debugMessages, constantBlock.fixedBindSetOrSpace,
+                      constantBlock.fixedBindNumber,
+                      ResourceUsage(uint32_t(ResourceUsage::VS_Constants) + shad));
+    }
 
-    DebugMessage msg;
-    msg.eventId = eid;
-    msg.category = MessageCategory::Execution;
-    msg.messageID = 0;
-    msg.source = MessageSource::IncorrectAPIUse;
-    msg.severity = MessageSeverity::High;
-
-    for(size_t t = 0; t < ARRAY_COUNT(types); t++)
+    for(const ShaderResource &res : sh.refl->readOnlyResources)
     {
-      for(size_t i = 0; i < types[t].bindmap.size(); i++)
-      {
-        if(!types[t].bindmap[i].used)
-          continue;
+      AddUsageForBind(actionNode, debugMessages, res.fixedBindSetOrSpace, res.fixedBindNumber,
+                      ResourceUsage(uint32_t(ResourceUsage::VS_Resource) + shad));
+    }
 
-        // ignore push constants
-        if(t == 2 && !sh.refl->constantBlocks[i].bufferBacked)
-          continue;
-
-        int32_t bindset = types[t].bindmap[i].bindset;
-        int32_t bind = types[t].bindmap[i].bind;
-
-        if(bindset >= (int32_t)descSets.size() || descSets[bindset].descSet == ResourceId())
-        {
-          msg.description =
-              StringFormat::Fmt("Shader referenced a descriptor set %i that was not bound", bindset);
-          debugMessages.push_back(msg);
-          continue;
-        }
-
-        DescriptorSetInfo &descset = m_DescriptorSetState[descSets[bindset].descSet];
-        DescSetLayout &layout = c.m_DescSetLayout[descset.layout];
-
-        ResourceId layoutId = GetResourceManager()->GetOriginalID(descset.layout);
-
-        if(layout.bindings.empty())
-        {
-          msg.description =
-              StringFormat::Fmt("Shader referenced a descriptor set %i that was not bound", bindset);
-          debugMessages.push_back(msg);
-          continue;
-        }
-
-        if(bind >= (int32_t)layout.bindings.size())
-        {
-          msg.description = StringFormat::Fmt(
-              "Shader referenced a bind %i in descriptor set %i that does not exist. Mismatched "
-              "descriptor set?",
-              bind, bindset);
-          debugMessages.push_back(msg);
-          continue;
-        }
-
-        // no object to mark for usage with inline blocks
-        if(layout.bindings[bind].layoutDescType == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
-          continue;
-
-        ResourceUsage usage = ResourceUsage(uint32_t(types[t].usage) + shad);
-
-        if(bind >= (int32_t)descset.data.binds.size())
-        {
-          msg.description = StringFormat::Fmt(
-              "Shader referenced a bind %i in descriptor set %i that does not exist. Mismatched "
-              "descriptor set?",
-              bind, bindset);
-          debugMessages.push_back(msg);
-          continue;
-        }
-
-        uint32_t descriptorCount = layout.bindings[bind].descriptorCount;
-        if(layout.bindings[bind].variableSize)
-          descriptorCount = descset.data.variableDescriptorCount;
-
-        if(descriptorCount > 1000)
-        {
-          if(!hugeRangeWarned)
-            RDCWARN("Skipping large, most likely 'bindless', descriptor range");
-          hugeRangeWarned = true;
-          continue;
-        }
-
-        for(uint32_t a = 0; a < descriptorCount; a++)
-        {
-          if(!descset.data.binds[bind])
-            continue;
-
-          DescriptorSetSlot &slot = descset.data.binds[bind][a];
-
-          // handled as part of the framebuffer attachments
-          if(slot.type == DescriptorSlotType::InputAttachment)
-            continue;
-
-          // ignore unwritten descriptors
-          if(slot.type == DescriptorSlotType::Unwritten)
-            continue;
-
-          // we don't mark samplers with usage
-          if(slot.type == DescriptorSlotType::Sampler)
-            continue;
-
-          ResourceId id;
-
-          switch(slot.type)
-          {
-            case DescriptorSlotType::CombinedImageSampler:
-            case DescriptorSlotType::SampledImage:
-            case DescriptorSlotType::StorageImage:
-              if(slot.resource != ResourceId())
-                id = c.m_ImageView[slot.resource].image;
-              break;
-            case DescriptorSlotType::UniformTexelBuffer:
-            case DescriptorSlotType::StorageTexelBuffer:
-              if(slot.resource != ResourceId())
-                id = c.m_BufferView[slot.resource].buffer;
-              break;
-            case DescriptorSlotType::UniformBuffer:
-            case DescriptorSlotType::UniformBufferDynamic:
-            case DescriptorSlotType::StorageBuffer:
-            case DescriptorSlotType::StorageBufferDynamic:
-              if(slot.resource != ResourceId())
-                id = slot.resource;
-              break;
-            default: RDCERR("Unexpected type %d", slot.type); break;
-          }
-
-          if(id != ResourceId())
-            actionNode.resourceUsage.push_back(make_rdcpair(id, EventUsage(eid, usage)));
-        }
-      }
+    for(const ShaderResource &res : sh.refl->readWriteResources)
+    {
+      AddUsageForBind(actionNode, debugMessages, res.fixedBindSetOrSpace, res.fixedBindNumber,
+                      ResourceUsage(uint32_t(ResourceUsage::VS_RWResource) + shad));
     }
   }
 
@@ -5206,6 +5205,134 @@ void WrappedVulkan::AddUsage(VulkanActionTreeNode &actionNode, rdcarray<DebugMes
 
   if(!(action.flags & ActionFlags::Dispatch))
     AddFramebufferUsage(actionNode, state);
+}
+
+void WrappedVulkan::AddUsageForBind(VulkanActionTreeNode &actionNode,
+                                    rdcarray<DebugMessage> &debugMessages, uint32_t bindset,
+                                    uint32_t bind, ResourceUsage usage)
+{
+  static bool hugeRangeWarned = false;
+  uint32_t eid = actionNode.action.eventId;
+
+  const VulkanRenderState &state = m_BakedCmdBufferInfo[m_LastCmdBufferID].state;
+  const rdcarray<VulkanStatePipeline::DescriptorAndOffsets> &descSets =
+      ((actionNode.action.flags & ActionFlags::Dispatch) ? state.compute.descSets
+                                                         : state.graphics.descSets);
+
+  VulkanCreationInfo &c = m_CreationInfo;
+
+  DebugMessage msg;
+  msg.eventId = eid;
+  msg.category = MessageCategory::Execution;
+  msg.messageID = 0;
+  msg.source = MessageSource::IncorrectAPIUse;
+  msg.severity = MessageSeverity::High;
+
+  if(bindset >= descSets.size() || descSets[bindset].descSet == ResourceId())
+  {
+    msg.description =
+        StringFormat::Fmt("Shader referenced a descriptor set %i that was not bound", bindset);
+    debugMessages.push_back(msg);
+    return;
+  }
+
+  DescriptorSetInfo &descset = m_DescriptorSetState[descSets[bindset].descSet];
+  DescSetLayout &layout = c.m_DescSetLayout[descset.layout];
+
+  ResourceId layoutId = GetResourceManager()->GetOriginalID(descset.layout);
+
+  if(layout.bindings.empty())
+  {
+    msg.description =
+        StringFormat::Fmt("Shader referenced a descriptor set %i that was not bound", bindset);
+    debugMessages.push_back(msg);
+    return;
+  }
+
+  if(bind >= layout.bindings.size())
+  {
+    msg.description = StringFormat::Fmt(
+        "Shader referenced a bind %i in descriptor set %i that does not exist. Mismatched "
+        "descriptor set?",
+        bind, bindset);
+    debugMessages.push_back(msg);
+    return;
+  }
+
+  // no object to mark for usage with inline blocks
+  if(layout.bindings[bind].layoutDescType == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
+    return;
+
+  if(bind >= descset.data.binds.size())
+  {
+    msg.description = StringFormat::Fmt(
+        "Shader referenced a bind %i in descriptor set %i that does not exist. Mismatched "
+        "descriptor set?",
+        bind, bindset);
+    debugMessages.push_back(msg);
+    return;
+  }
+
+  uint32_t descriptorCount = layout.bindings[bind].descriptorCount;
+  if(layout.bindings[bind].variableSize)
+    descriptorCount = descset.data.variableDescriptorCount;
+
+  if(descriptorCount > 1000)
+  {
+    if(!hugeRangeWarned)
+      RDCWARN("Skipping large, most likely 'bindless', descriptor range");
+    hugeRangeWarned = true;
+    return;
+  }
+
+  for(uint32_t a = 0; a < descriptorCount; a++)
+  {
+    if(!descset.data.binds[bind])
+      return;
+
+    DescriptorSetSlot &slot = descset.data.binds[bind][a];
+
+    // handled as part of the framebuffer attachments
+    if(slot.type == DescriptorSlotType::InputAttachment)
+      return;
+
+    // ignore unwritten descriptors
+    if(slot.type == DescriptorSlotType::Unwritten)
+      return;
+
+    // we don't mark samplers with usage
+    if(slot.type == DescriptorSlotType::Sampler)
+      return;
+
+    ResourceId id;
+
+    switch(slot.type)
+    {
+      case DescriptorSlotType::CombinedImageSampler:
+      case DescriptorSlotType::SampledImage:
+      case DescriptorSlotType::StorageImage:
+        if(slot.resource != ResourceId())
+          id = c.m_ImageView[slot.resource].image;
+        break;
+      case DescriptorSlotType::UniformTexelBuffer:
+      case DescriptorSlotType::StorageTexelBuffer:
+        if(slot.resource != ResourceId())
+          id = c.m_BufferView[slot.resource].buffer;
+        break;
+      case DescriptorSlotType::UniformBuffer:
+      case DescriptorSlotType::UniformBufferDynamic:
+      case DescriptorSlotType::StorageBuffer:
+      case DescriptorSlotType::StorageBufferDynamic:
+      case DescriptorSlotType::AccelerationStructure:
+        if(slot.resource != ResourceId())
+          id = slot.resource;
+        break;
+      default: RDCERR("Unexpected type %d", slot.type); break;
+    }
+
+    if(id != ResourceId())
+      actionNode.resourceUsage.push_back(make_rdcpair(id, EventUsage(eid, usage)));
+  }
 }
 
 void WrappedVulkan::AddFramebufferUsage(VulkanActionTreeNode &actionNode,

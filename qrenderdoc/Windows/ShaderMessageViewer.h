@@ -28,30 +28,12 @@
 #include <QStyledItemDelegate>
 #include "Code/Interface/QRDInterface.h"
 
+class ButtonDelegate;
+
 namespace Ui
 {
 class ShaderMessageViewer;
 }
-
-class ButtonDelegate : public QStyledItemDelegate
-{
-private:
-  Q_OBJECT
-
-  QModelIndex m_ClickedIndex;
-  QIcon m_Icon;
-  int m_EnableRole;
-
-public:
-  ButtonDelegate(const QIcon &icon, int enableRole, QWidget *parent);
-  void paint(QPainter *painter, const QStyleOptionViewItem &option,
-             const QModelIndex &index) const override;
-  QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override;
-  bool editorEvent(QEvent *event, QAbstractItemModel *model, const QStyleOptionViewItem &option,
-                   const QModelIndex &index) override;
-signals:
-  void messageClicked(const QModelIndex &index);
-};
 
 class ShaderMessageViewer : public QFrame, public IShaderMessageViewer, public ICaptureViewer
 {

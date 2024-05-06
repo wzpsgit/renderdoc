@@ -37,102 +37,6 @@
 static const int debuggableRole = Qt::UserRole + 1;
 static const int gotoableRole = Qt::UserRole + 2;
 
-ButtonDelegate::ButtonDelegate(const QIcon &icon, int enableRole, QWidget *parent)
-    : m_Icon(icon), m_EnableRole(enableRole), QStyledItemDelegate(parent)
-{
-}
-
-void ButtonDelegate::paint(QPainter *painter, const QStyleOptionViewItem &option,
-                           const QModelIndex &index) const
-{
-  // draw the background to get selection etc
-  QApplication::style()->drawControl(QStyle::CE_ItemViewItem, &option, painter);
-
-  QStyleOptionButton button;
-
-  QSize sz = sizeHint(option, index);
-  button.rect = option.rect;
-  button.rect.setLeft(button.rect.center().x() - sz.width() / 2);
-  button.rect.setTop(button.rect.center().y() - sz.height() / 2);
-  button.rect.setSize(sz);
-  button.icon = m_Icon;
-  button.iconSize = sz;
-
-  if(m_EnableRole == 0 || index.data(m_EnableRole).toBool())
-    button.state = QStyle::State_Enabled;
-
-  if(m_ClickedIndex == index)
-    button.state |= QStyle::State_Sunken;
-
-  QApplication::style()->drawControl(QStyle::CE_PushButton, &button, painter);
-}
-
-QSize ButtonDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const
-{
-  QStyleOptionButton button;
-  button.icon = m_Icon;
-  button.state = QStyle::State_Enabled;
-
-  return QApplication::style()->sizeFromContents(QStyle::CT_PushButton, &button,
-                                                 option.decorationSize);
-}
-
-bool ButtonDelegate::editorEvent(QEvent *event, QAbstractItemModel *model,
-                                 const QStyleOptionViewItem &option, const QModelIndex &index)
-{
-  if(event->type() == QEvent::MouseButtonPress)
-  {
-    if(m_EnableRole == 0 || index.data(m_EnableRole).toBool())
-      m_ClickedIndex = index;
-  }
-  else if(event->type() == QEvent::MouseMove)
-  {
-    QMouseEvent *e = (QMouseEvent *)event;
-
-    if(m_ClickedIndex != index || (e->buttons() & Qt::LeftButton) == 0)
-    {
-      m_ClickedIndex = QModelIndex();
-    }
-    else
-    {
-      QPoint p = e->pos();
-
-      QSize sz = option.decorationSize;
-      QRect rect = option.rect;
-      rect.setLeft(rect.center().x() - sz.width() / 2);
-      rect.setTop(rect.center().y() - sz.height() / 2);
-      rect.setSize(sz);
-
-      if(!rect.contains(p))
-      {
-        m_ClickedIndex = QModelIndex();
-      }
-    }
-  }
-  else if(event->type() == QEvent::MouseButtonRelease)
-  {
-    if(m_ClickedIndex == index && index != QModelIndex())
-    {
-      m_ClickedIndex = QModelIndex();
-
-      QMouseEvent *e = (QMouseEvent *)event;
-
-      QPoint p = e->pos();
-
-      QSize sz = option.decorationSize;
-      QRect rect = option.rect;
-      rect.setLeft(rect.center().x() - sz.width() / 2);
-      rect.setTop(rect.center().y() - sz.height() / 2);
-      rect.setSize(sz);
-
-      if(rect.contains(p))
-        emit messageClicked(index);
-    }
-  }
-
-  return true;
-}
-
 ShaderMessageViewer::ShaderMessageViewer(ICaptureContext &ctx, ShaderStageMask stages, QWidget *parent)
     : QFrame(parent), ui(new Ui::ShaderMessageViewer), m_Ctx(ctx)
 {
@@ -187,15 +91,15 @@ ShaderMessageViewer::ShaderMessageViewer(ICaptureContext &ctx, ShaderStageMask s
 
   // only display sample information if one of the targets is multisampled
   m_Multisampled = false;
-  rdcarray<BoundResource> outs = pipe.GetOutputTargets();
+  rdcarray<Descriptor> outs = pipe.GetOutputTargets();
   outs.push_back(pipe.GetDepthTarget());
   outs.push_back(pipe.GetDepthResolveTarget());
-  for(const BoundResource &o : outs)
+  for(const Descriptor &o : outs)
   {
-    if(o.resourceId == ResourceId())
+    if(o.resource == ResourceId())
       continue;
 
-    const TextureDescription *tex = m_Ctx.GetTexture(o.resourceId);
+    const TextureDescription *tex = m_Ctx.GetTexture(o.resource);
 
     if(tex->msSamp > 1)
     {
@@ -211,7 +115,8 @@ ShaderMessageViewer::ShaderMessageViewer(ICaptureContext &ctx, ShaderStageMask s
 
   int sortColumn = 0;
 
-  m_debugDelegate = new ButtonDelegate(Icons::wrench(), debuggableRole, this);
+  m_debugDelegate = new ButtonDelegate(Icons::wrench(), QString(), this);
+  m_debugDelegate->setEnableTrigger(debuggableRole, true);
 
   if(m_Action && (m_Action->flags & ActionFlags::Dispatch))
   {
@@ -248,7 +153,8 @@ ShaderMessageViewer::ShaderMessageViewer(ICaptureContext &ctx, ShaderStageMask s
       m_LayoutStage = ShaderStage::Vertex;
     }
 
-    m_gotoDelegate = new ButtonDelegate(Icons::find(), gotoableRole, this);
+    m_gotoDelegate = new ButtonDelegate(Icons::find(), QString(), this);
+    m_gotoDelegate->setEnableTrigger(gotoableRole, true);
 
     ui->messages->setItemDelegateForColumn(0, m_debugDelegate);
     ui->messages->setItemDelegateForColumn(1, m_gotoDelegate);
@@ -439,14 +345,12 @@ ShaderMessageViewer::ShaderMessageViewer(ICaptureContext &ctx, ShaderStageMask s
         return;
       }
 
-      const ShaderBindpointMapping &bindMapping =
-          m_Ctx.CurPipelineState().GetBindpointMapping(msg.stage);
       ResourceId pipeline = msg.stage == ShaderStage::Compute
                                 ? m_Ctx.CurPipelineState().GetComputePipelineObject()
                                 : m_Ctx.CurPipelineState().GetGraphicsPipelineObject();
 
       // viewer takes ownership of the trace
-      IShaderViewer *s = m_Ctx.DebugShader(&bindMapping, refl, pipeline, trace, debugContext);
+      IShaderViewer *s = m_Ctx.DebugShader(refl, pipeline, trace, debugContext);
 
       if(msg.disassemblyLine >= 0)
       {
@@ -500,10 +404,10 @@ ShaderMessageViewer::ShaderMessageViewer(ICaptureContext &ctx, ShaderStageMask s
 
         // select an actual output. Prefer the first colour output, but if there's no colour output
         // pick depth.
-        rdcarray<BoundResource> cols = m_Ctx.CurPipelineState().GetOutputTargets();
+        rdcarray<Descriptor> cols = m_Ctx.CurPipelineState().GetOutputTargets();
         bool hascol = false;
         for(size_t i = 0; i < cols.size(); i++)
-          hascol |= cols[i].resourceId != ResourceId();
+          hascol |= cols[i].resource != ResourceId();
 
         if(hascol)
           m_Ctx.GetTextureViewer()->ViewFollowedResource(FollowType::OutputColor,

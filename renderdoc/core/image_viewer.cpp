@@ -237,8 +237,8 @@ public:
                          VKPipe::State *vk)
   {
     d3d11->outputMerger.renderTargets.resize(1);
-    d3d11->outputMerger.renderTargets[0].resourceResourceId = m_TextureID;
-    d3d11->outputMerger.renderTargets[0].viewFormat = m_TexDetails.format;
+    d3d11->outputMerger.renderTargets[0].resource = m_TextureID;
+    d3d11->outputMerger.renderTargets[0].format = m_TexDetails.format;
   }
 
   // other operations are dropped/ignored, to avoid confusion
@@ -250,6 +250,7 @@ public:
   void RenderMesh(uint32_t eventId, const rdcarray<MeshFormat> &secondaryDraws, const MeshDisplay &cfg)
   {
   }
+  rdcarray<DescriptorStoreDescription> GetDescriptorStores() { return {}; }
   rdcarray<BufferDescription> GetBuffers() { return {}; }
   rdcarray<DebugMessage> GetDebugMessages() { return rdcarray<DebugMessage>(); }
   BufferDescription GetBuffer(ResourceId id)
@@ -259,6 +260,32 @@ public:
     return ret;
   }
   void SavePipelineState(uint32_t eventId) {}
+  rdcarray<Descriptor> GetDescriptors(ResourceId descriptorStore,
+                                      const rdcarray<DescriptorRange> &ranges)
+  {
+    size_t count = 0;
+    for(const DescriptorRange &r : ranges)
+      count += r.count;
+    rdcarray<Descriptor> ret;
+    ret.resize(count);
+    return ret;
+  }
+  rdcarray<SamplerDescriptor> GetSamplerDescriptors(ResourceId descriptorStore,
+                                                    const rdcarray<DescriptorRange> &ranges)
+  {
+    size_t count = 0;
+    for(const DescriptorRange &r : ranges)
+      count += r.count;
+    rdcarray<SamplerDescriptor> ret;
+    ret.resize(count);
+    return ret;
+  }
+  rdcarray<DescriptorAccess> GetDescriptorAccess(uint32_t eventId) { return {}; }
+  rdcarray<DescriptorLogicalLocation> GetDescriptorLocations(ResourceId descriptorStore,
+                                                             const rdcarray<DescriptorRange> &ranges)
+  {
+    return {};
+  }
   DriverInformation GetDriverInfo()
   {
     DriverInformation ret = {};

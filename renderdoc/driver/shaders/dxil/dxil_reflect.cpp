@@ -28,10 +28,33 @@
 
 namespace DXIL
 {
-enum class SRVUAVTag
+enum class ResourcesTag
 {
+  // SRV & UAV
   ElementType = 0,
   StructStride = 1,
+  // UAV
+  SamplerFeedbackKind = 2,
+  Atomic64Use = 3,
+
+  // CBuffer
+  IsTBufferTag = 0,
+  // Sampler
+};
+
+namespace SignatureElement
+{
+const uint32_t ID = 0;
+const uint32_t Name = 1;
+const uint32_t Type = 2;
+const uint32_t SystemValue = 3;
+const uint32_t IndexVector = 4;
+const uint32_t InterpMode = 5;
+const uint32_t Rows = 6;
+const uint32_t Cols = 7;
+const uint32_t StartRow = 8;
+const uint32_t StartCol = 9;
+const uint32_t NameValueList = 10;
 };
 
 enum class StructMemberAnnotation
@@ -46,6 +69,10 @@ enum class StructMemberAnnotation
   CompType = 7,
   Precise = 8,
   CBUsed = 9,
+  // ResourceProperties = 10,
+  // BitFields = 11,
+  FieldWidth = 12,
+  VectorSize = 13,
 };
 
 template <typename T>
@@ -124,7 +151,10 @@ struct TypeInfo
     uint8_t rows = 0, cols = 0;
     uint32_t offset;
     rdcstr name;
+    rdcstr semantic;
     ComponentType type;
+    uint32_t fieldWidth;
+    uint32_t vectorSize;
   };
 
   struct StructData
@@ -202,7 +232,9 @@ struct TypeInfo
             case StructMemberAnnotation::CBufferOffset:
               memberOut.offset = getival<uint32_t>(memberIn->children[tag + 1]);
               break;
-            case StructMemberAnnotation::SemanticString: break;
+            case StructMemberAnnotation::SemanticString:
+              memberOut.semantic = memberIn->children[tag + 1]->str;
+              break;
             case StructMemberAnnotation::InterpolationMode: break;
             case StructMemberAnnotation::FieldName:
               memberOut.name = memberIn->children[tag + 1]->str;
@@ -222,6 +254,12 @@ struct TypeInfo
                 memberOut.flags = MemberData::Flags(memberOut.flags | MemberData::CBUsed);
               break;
             }
+            case StructMemberAnnotation::FieldWidth:
+              memberOut.fieldWidth = getival<uint32_t>(memberIn->children[tag + 1]);
+              break;
+            case StructMemberAnnotation::VectorSize:
+              memberOut.vectorSize = getival<uint32_t>(memberIn->children[tag + 1]);
+              break;
             default: RDCWARN("Unexpected field tag %u", fieldTag); break;
           }
         }
@@ -229,6 +267,196 @@ struct TypeInfo
     }
   }
 };
+
+EntryPointInterface::Signature::Signature(const Metadata *signature)
+{
+  /*
+  // Extended properties
+  static const unsigned kDxilSignatureElementOutputStreamTag = 0;
+  static const unsigned kHLSignatureElementGlobalSymbolTag = 1;
+  static const unsigned kDxilSignatureElementDynIdxCompMaskTag = 2;
+  static const unsigned kDxilSignatureElementUsageCompMaskTag = 3;
+  */
+
+  name = signature->children[SignatureElement::Name]->str;
+  type = getival<ComponentType>(signature->children[SignatureElement::Type]);
+  interpolation = getival<D3D_INTERPOLATION_MODE>(signature->children[SignatureElement::InterpMode]);
+  rows = getival<uint32_t>(signature->children[SignatureElement::Rows]);
+  cols = getival<uint8_t>(signature->children[SignatureElement::Cols]);
+  startRow = getival<int32_t>(signature->children[SignatureElement::StartRow]);
+  startCol = getival<int8_t>(signature->children[SignatureElement::StartCol]);
+}
+
+EntryPointInterface::ResourceBase::ResourceBase(const Metadata *resourceBase)
+{
+  id = getival<uint32_t>(resourceBase->children[(size_t)ResField::ID]);
+  type = resourceBase->children[(size_t)ResField::VarDecl]->type;
+  name = resourceBase->children[(size_t)ResField::Name]->str;
+  space = getival<uint32_t>(resourceBase->children[(size_t)ResField::Space]);
+  regBase = getival<uint32_t>(resourceBase->children[(size_t)ResField::RegBase]);
+  regCount = getival<uint32_t>(resourceBase->children[(size_t)ResField::RegCount]);
+}
+
+EntryPointInterface::SRV::SRV(const Metadata *srv) : ResourceBase(srv)
+{
+  shape = getival<ResourceKind>(srv->children[(size_t)ResField::SRVShape]);
+  sampleCount = getival<uint32_t>(srv->children[(size_t)ResField::SRVSampleCount]);
+  const Metadata *tags = srv->children[(size_t)ResField::SRVTags];
+  for(size_t t = 0; tags && t < tags->children.size(); t += 2)
+  {
+    RDCASSERT(tags->children[t]->isConstant);
+    ResourcesTag tag = getival<ResourcesTag>(tags->children[t]);
+    switch(tag)
+    {
+      case ResourcesTag::ElementType:
+        compType = getival<ComponentType>(tags->children[t + 1]);
+        break;
+      case ResourcesTag::StructStride:
+        elementStride = getival<uint32_t>(tags->children[t + 1]);
+        break;
+      default: break;
+    }
+  }
+}
+
+EntryPointInterface::UAV::UAV(const Metadata *uav) : ResourceBase(uav)
+{
+  shape = getival<ResourceKind>(uav->children[(size_t)ResField::UAVShape]);
+  globallCoherent = (getival<uint32_t>(uav->children[(size_t)ResField::UAVGloballyCoherent]) == 1);
+  hasCounter = (getival<uint32_t>(uav->children[(size_t)ResField::UAVHiddenCounter]) == 1);
+  rasterizerOrderedView = (getival<uint32_t>(uav->children[(size_t)ResField::UAVRasterOrder]) == 1);
+  const Metadata *tags = uav->children[(size_t)ResField::UAVTags];
+  for(size_t t = 0; tags && t < tags->children.size(); t += 2)
+  {
+    RDCASSERT(tags->children[t]->isConstant);
+    ResourcesTag tag = getival<ResourcesTag>(tags->children[t]);
+    switch(tag)
+    {
+      case ResourcesTag::ElementType:
+        compType = getival<ComponentType>(tags->children[t + 1]);
+        break;
+      case ResourcesTag::StructStride:
+        elementStride = getival<uint32_t>(tags->children[t + 1]);
+        break;
+      case ResourcesTag::SamplerFeedbackKind:
+        samplerFeedback = getival<SamplerFeedbackType>(tags->children[t + 1]);
+        break;
+      case ResourcesTag::Atomic64Use:
+        atomic64Use = (getival<uint32_t>(tags->children[t + 1]) == 1);
+        break;
+      default: break;
+    }
+  }
+}
+
+EntryPointInterface::CBuffer::CBuffer(const Metadata *cbuffer) : ResourceBase(cbuffer)
+{
+  sizeInBytes = getival<uint32_t>(cbuffer->children[(size_t)ResField::CBufferByteSize]);
+  const Metadata *tags = cbuffer->children[(size_t)ResField::CBufferTags];
+  for(size_t t = 0; tags && t < tags->children.size(); t += 2)
+  {
+    RDCASSERT(tags->children[t]->isConstant);
+    ResourcesTag tag = getival<ResourcesTag>(tags->children[t]);
+    if(tag == ResourcesTag::IsTBufferTag)
+      isTBuffer = (getival<uint32_t>(tags->children[t + 1]) == 1);
+  }
+  cbufferRefl = NULL;
+}
+
+EntryPointInterface::Sampler::Sampler(const Metadata *sampler) : ResourceBase(sampler)
+{
+  samplerType = getival<SamplerKind>(sampler->children[(size_t)ResField::SamplerType]);
+}
+
+EntryPointInterface::EntryPointInterface(const Metadata *entryPoint)
+{
+  function = entryPoint->children[0]->type;
+  name = entryPoint->children[1]->str;
+
+  const Metadata *signatures = entryPoint->children[2];
+  if(signatures)
+  {
+    const Metadata *ins = signatures->children[0];
+    if(ins)
+    {
+      for(size_t i = 0; i < ins->children.size(); ++i)
+        inputs.push_back(ins->children[i]);
+    }
+    const Metadata *outs = signatures->children[1];
+    if(outs)
+    {
+      for(size_t i = 0; i < outs->children.size(); ++i)
+        outputs.push_back(outs->children[i]);
+    }
+    const Metadata *patchCons = signatures->children[2];
+    if(patchCons)
+    {
+      for(size_t i = 0; i < patchCons->children.size(); ++i)
+        patchConstants.push_back(patchCons->children[i]);
+    }
+  }
+
+  // SRVs, UAVs, CBs, Samplers
+  const Metadata *resources = entryPoint->children[3];
+  if(resources)
+  {
+    const Metadata *srvsMeta = resources->children[0];
+    if(srvsMeta)
+    {
+      for(size_t i = 0; i < srvsMeta->children.size(); ++i)
+        srvs.push_back(srvsMeta->children[i]);
+    }
+
+    const Metadata *uavsMeta = resources->children[1];
+    if(uavsMeta)
+    {
+      for(size_t i = 0; i < uavsMeta->children.size(); ++i)
+        uavs.push_back(uavsMeta->children[i]);
+    }
+    const Metadata *cbuffersMeta = resources->children[2];
+    if(cbuffersMeta)
+    {
+      for(size_t i = 0; i < cbuffersMeta->children.size(); ++i)
+        cbuffers.push_back(cbuffersMeta->children[i]);
+    }
+    const Metadata *samplersMeta = resources->children[3];
+    if(samplersMeta)
+    {
+      for(size_t i = 0; i < samplersMeta->children.size(); ++i)
+        samplers.push_back(samplersMeta->children[i]);
+    }
+  }
+  /*
+  static const unsigned kDxilShaderFlagsTag = 0;
+  static const unsigned kDxilGSStateTag = 1;
+  static const unsigned kDxilDSStateTag = 2;
+  static const unsigned kDxilHSStateTag = 3;
+  static const unsigned kDxilNumThreadsTag = 4;
+  static const unsigned kDxilAutoBindingSpaceTag = 5;
+  static const unsigned kDxilRayPayloadSizeTag = 6;
+  static const unsigned kDxilRayAttribSizeTag = 7;
+  static const unsigned kDxilShaderKindTag = 8;
+  static const unsigned kDxilMSStateTag = 9;
+  static const unsigned kDxilASStateTag = 10;
+  static const unsigned kDxilWaveSizeTag = 11;
+  static const unsigned kDxilEntryRootSigTag = 12;
+  static const unsigned kDxilNodeLaunchTypeTag = 13;
+  static const unsigned kDxilNodeIsProgramEntryTag = 14;
+  static const unsigned kDxilNodeIdTag = 15;
+  static const unsigned kDxilNodeLocalRootArgumentsTableIndexTag = 16;
+  static const unsigned kDxilShareInputOfTag = 17;
+  static const unsigned kDxilNodeDispatchGridTag = 18;
+  static const unsigned kDxilNodeMaxRecursionDepthTag = 19;
+  static const unsigned kDxilNodeInputsTag = 20;
+  static const unsigned kDxilNodeOutputsTag = 21;
+  static const unsigned kDxilNodeMaxDispatchGridTag = 22;
+  static const unsigned kDxilRangedWaveSizeTag = 23;
+  */
+  const Metadata *properties = entryPoint->children[4];
+  if(properties)
+  {
+  }
+}
 
 static DXBC::CBufferVariableType MakePayloadType(const TypeInfo &typeInfo, const Type *t)
 {
@@ -314,6 +542,18 @@ static DXBC::CBufferVariableType MakePayloadType(const TypeInfo &typeInfo, const
     RDCERR("Unexpected type %u iterating cbuffer variable type %s", t->type, t->name.c_str());
   }
   return ret;
+}
+
+void Program::FetchEntryPointInterfaces(rdcarray<EntryPointInterface> &entryPointInterfaces)
+{
+  DXMeta dx(m_NamedMeta);
+
+  entryPointInterfaces.clear();
+  if(!dx.entryPoints)
+    return;
+
+  for(size_t c = 0; c < dx.entryPoints->children.size(); ++c)
+    entryPointInterfaces.emplace_back(dx.entryPoints->children[c]);
 }
 
 void Program::FetchComputeProperties(DXBC::Reflection *reflection)
@@ -452,6 +692,175 @@ void Program::FetchComputeProperties(DXBC::Reflection *reflection)
   reflection->DispatchThreadsDimension[0] = 1;
   reflection->DispatchThreadsDimension[1] = 1;
   reflection->DispatchThreadsDimension[2] = 1;
+}
+
+void Program::FillRayPayloads(
+    Program *executable,
+    rdcflatmap<ShaderEntryPoint, rdcpair<DXBC::CBufferVariableType, DXBC::CBufferVariableType>> &rayPayloads)
+{
+  if(m_Type != DXBC::ShaderType::Library)
+    return;
+
+  DXMeta dx(m_NamedMeta);
+
+  TypeInfo typeInfo(dx.typeAnnotations);
+
+  if(dx.entryPoints)
+  {
+    for(Metadata *entry : dx.entryPoints->children)
+    {
+      if(entry->children.size() > 2 && entry->children[0] != NULL)
+      {
+        ShaderEntryPoint entryPoint;
+        entryPoint.name = entry->children[1]->str;
+
+        Metadata *tags = entry->children[4];
+
+        for(size_t i = 0; i < tags->children.size(); i += 2)
+        {
+          // 8 is the type tag
+          if(getival<uint32_t>(tags->children[i]) == 8U)
+          {
+            entryPoint.stage =
+                GetShaderStage((DXBC::ShaderType)getival<uint32_t>(tags->children[i + 1]));
+            break;
+          }
+        }
+
+        Function *ownFunc = cast<Function>(entry->children[0]->value);
+        Function *executableFunc = NULL;
+
+        // locate the function in the executable program so we can iterate instructions.
+        for(Function *f : executable->m_Functions)
+        {
+          // assume names will match
+          if(f->name == ownFunc->name)
+          {
+            executableFunc = f;
+            break;
+          }
+        }
+
+        // intersection shaders only report attributes, they do not access the ray payload
+        if(entryPoint.stage == ShaderStage::Intersection)
+        {
+          // find the reportHit and grab the type from that
+          for(const Instruction *in : executableFunc->instructions)
+          {
+            const Instruction &inst = *in;
+
+            if(inst.op == Operation::Call && inst.getFuncCall()->name.beginsWith("dx.op.reportHit"))
+            {
+              if(inst.args.size() != 4)
+              {
+                RDCERR("Unexpected number of arguments to reportHit");
+                continue;
+              }
+              const Type *executableAttrType = inst.args[3]->type;
+              if(!executableAttrType)
+              {
+                RDCERR("Unexpected untyped payload argument to reportHit");
+                continue;
+              }
+
+              RDCASSERT(executableAttrType->type == Type::Pointer);
+              executableAttrType = (Type *)executableAttrType->inner;
+
+              Type *ownAttrType = NULL;
+
+              // we have the executable type but we can't use that to look up our type info. Try to
+              // go back by name
+              for(Type *t : m_Types)
+              {
+                if(t->type == executableAttrType->type && t->name == executableAttrType->name)
+                {
+                  ownAttrType = t;
+                  break;
+                }
+              }
+
+              if(ownAttrType)
+                rayPayloads[entryPoint].second = MakePayloadType(typeInfo, ownAttrType);
+              else
+                RDCERR("Couldn't find matching attribute type for '%s' by name",
+                       executableAttrType->name.c_str());
+              break;
+            }
+          }
+        }
+        // raygen shaders only use the ray payload, not attributes
+        else if(entryPoint.stage == ShaderStage::RayGen)
+        {
+          // find the reportHit and grab the type from that
+          for(const Instruction *in : executableFunc->instructions)
+          {
+            const Instruction &inst = *in;
+
+            if(inst.op == Operation::Call && inst.getFuncCall()->name.beginsWith("dx.op.traceRay"))
+            {
+              if(inst.args.size() != 16)
+              {
+                RDCERR("Unexpected number of arguments to traceRay");
+                continue;
+              }
+              const Type *executablePayloadType = inst.args[15]->type;
+              if(!executablePayloadType)
+              {
+                RDCERR("Unexpected untyped payload argument to traceRay");
+                continue;
+              }
+
+              RDCASSERT(executablePayloadType->type == Type::Pointer);
+              executablePayloadType = (Type *)executablePayloadType->inner;
+
+              Type *ownPayloadType = NULL;
+
+              // we have the executable type but we can't use that to look up our type info. Try to
+              // go back by name
+              for(Type *t : m_Types)
+              {
+                if(t->type == executablePayloadType->type && t->name == executablePayloadType->name)
+                {
+                  ownPayloadType = t;
+                  break;
+                }
+              }
+
+              if(ownPayloadType)
+                rayPayloads[entryPoint].first = MakePayloadType(typeInfo, ownPayloadType);
+              else
+                RDCERR("Couldn't find matching payload type for '%s' by name",
+                       executablePayloadType->name.c_str());
+
+              break;
+            }
+          }
+        }
+        else if(entryPoint.stage == ShaderStage::Miss || entryPoint.stage == ShaderStage::AnyHit ||
+                entryPoint.stage == ShaderStage::ClosestHit)
+        {
+          const Type *payloadType = ownFunc->type->members[0];
+          RDCASSERT(payloadType->type == Type::Pointer);
+          payloadType = (Type *)payloadType->inner;
+
+          rdcpair<DXBC::CBufferVariableType, DXBC::CBufferVariableType> &dst =
+              rayPayloads[entryPoint];
+
+          // miss shaders only use the payload, any-hit and closest-hit use both. The first
+          // parameter is the payload, the second is the attributes
+          dst.first = MakePayloadType(typeInfo, payloadType);
+          if(entryPoint.stage != ShaderStage::Miss)
+          {
+            const Type *attrType = ownFunc->type->members[1];
+            RDCASSERT(attrType->type == Type::Pointer);
+            attrType = (Type *)attrType->inner;
+
+            dst.second = MakePayloadType(typeInfo, attrType);
+          }
+        }
+      }
+    }
+  }
 }
 
 D3D_PRIMITIVE_TOPOLOGY Program::GetOutputTopology()
@@ -824,11 +1233,11 @@ static void AddResourceBind(DXBC::Reflection *refl, const TypeInfo &typeInfo, co
   for(size_t t = 0; tags && t < tags->children.size(); t += 2)
   {
     RDCASSERT(tags->children[t]->isConstant);
-    if(getival<SRVUAVTag>(tags->children[t]) == SRVUAVTag::StructStride)
+    if(getival<ResourcesTag>(tags->children[t]) == ResourcesTag::StructStride)
     {
       structStride = getival<uint32_t>(tags->children[t + 1]);
     }
-    else if(getival<SRVUAVTag>(tags->children[t]) == SRVUAVTag::ElementType)
+    else if(getival<ResourcesTag>(tags->children[t]) == ResourcesTag::ElementType)
     {
       switch(getival<ComponentType>(tags->children[t + 1]))
       {
@@ -869,7 +1278,9 @@ static void AddResourceBind(DXBC::Reflection *refl, const TypeInfo &typeInfo, co
       defName = srv ? "SRV" : "UAV";
       break;
     case ResourceKind::RTAccelerationStructure:
-      RDCWARN("CS or PS with RT use, not reflected");
+      bind.type = ShaderInputBind::TYPE_RTAS;
+      defName = "RaytracingAccelerationStructure";
+      bind.dimension = ShaderInputBind::DIM_RTAS;
       break;
     case ResourceKind::Texture1D:
       bind.type = srv ? ShaderInputBind::TYPE_TEXTURE : ShaderInputBind::TYPE_UAV_RWTYPED;
@@ -989,6 +1400,42 @@ static void AddResourceBind(DXBC::Reflection *refl, const TypeInfo &typeInfo, co
     refl->SRVs.push_back(bind);
   else
     refl->UAVs.push_back(bind);
+}
+
+rdcarray<ShaderEntryPoint> Program::GetEntryPoints()
+{
+  rdcarray<ShaderEntryPoint> ret;
+
+  DXMeta dx(m_NamedMeta);
+
+  if(dx.entryPoints)
+  {
+    for(Metadata *entry : dx.entryPoints->children)
+    {
+      if(entry->children.size() > 2 && entry->children[0] != NULL)
+      {
+        ShaderEntryPoint entryPoint;
+        entryPoint.name = entry->children[1]->str;
+
+        Metadata *tags = entry->children[4];
+
+        for(size_t i = 0; i < tags->children.size(); i += 2)
+        {
+          // 8 is the type tag
+          if(getival<uint32_t>(tags->children[i]) == 8U)
+          {
+            entryPoint.stage =
+                GetShaderStage((DXBC::ShaderType)getival<uint32_t>(tags->children[i + 1]));
+            break;
+          }
+        }
+
+        ret.push_back(entryPoint);
+      }
+    }
+  }
+
+  return ret;
 }
 
 DXBC::Reflection *Program::GetReflection()

@@ -142,7 +142,7 @@ static ShaderConstant MakeConstantBufferVariable(bool cbufferPacking, const DXBC
 
 static void MakeResourceList(bool srv, DXBC::DXBCContainer *dxbc,
                              const rdcarray<DXBC::ShaderInputBind> &in,
-                             rdcarray<Bindpoint> &mapping, rdcarray<ShaderResource> &refl)
+                             rdcarray<ShaderResource> &refl)
 {
   for(size_t i = 0; i < in.size(); i++)
   {
@@ -155,36 +155,49 @@ static void MakeResourceList(bool srv, DXBC::DXBCContainer *dxbc,
                       r.type == DXBC::ShaderInputBind::TYPE_UAV_RWTYPED) &&
                      r.dimension != DXBC::ShaderInputBind::DIM_UNKNOWN &&
                      r.dimension != DXBC::ShaderInputBind::DIM_BUFFER &&
-                     r.dimension != DXBC::ShaderInputBind::DIM_BUFFEREX);
+                     r.dimension != DXBC::ShaderInputBind::DIM_BUFFEREX &&
+                     r.dimension != DXBC::ShaderInputBind::DIM_RTAS);
     res.isReadOnly = srv;
 
     switch(r.dimension)
     {
       default:
-      case DXBC::ShaderInputBind::DIM_UNKNOWN: res.resType = TextureType::Unknown; break;
+      case DXBC::ShaderInputBind::DIM_UNKNOWN: res.textureType = TextureType::Unknown; break;
       case DXBC::ShaderInputBind::DIM_BUFFER:
-      case DXBC::ShaderInputBind::DIM_BUFFEREX: res.resType = TextureType::Buffer; break;
-      case DXBC::ShaderInputBind::DIM_TEXTURE1D: res.resType = TextureType::Texture1D; break;
+      case DXBC::ShaderInputBind::DIM_BUFFEREX:
+      case DXBC::ShaderInputBind::DIM_RTAS: res.textureType = TextureType::Buffer; break;
+      case DXBC::ShaderInputBind::DIM_TEXTURE1D: res.textureType = TextureType::Texture1D; break;
       case DXBC::ShaderInputBind::DIM_TEXTURE1DARRAY:
-        res.resType = TextureType::Texture1DArray;
+        res.textureType = TextureType::Texture1DArray;
         break;
-      case DXBC::ShaderInputBind::DIM_TEXTURE2D: res.resType = TextureType::Texture2D; break;
+      case DXBC::ShaderInputBind::DIM_TEXTURE2D: res.textureType = TextureType::Texture2D; break;
       case DXBC::ShaderInputBind::DIM_TEXTURE2DARRAY:
-        res.resType = TextureType::Texture2DArray;
+        res.textureType = TextureType::Texture2DArray;
         break;
-      case DXBC::ShaderInputBind::DIM_TEXTURE2DMS: res.resType = TextureType::Texture2DMS; break;
+      case DXBC::ShaderInputBind::DIM_TEXTURE2DMS:
+        res.textureType = TextureType::Texture2DMS;
+        break;
       case DXBC::ShaderInputBind::DIM_TEXTURE2DMSARRAY:
-        res.resType = TextureType::Texture2DMSArray;
+        res.textureType = TextureType::Texture2DMSArray;
         break;
-      case DXBC::ShaderInputBind::DIM_TEXTURE3D: res.resType = TextureType::Texture3D; break;
-      case DXBC::ShaderInputBind::DIM_TEXTURECUBE: res.resType = TextureType::TextureCube; break;
+      case DXBC::ShaderInputBind::DIM_TEXTURE3D: res.textureType = TextureType::Texture3D; break;
+      case DXBC::ShaderInputBind::DIM_TEXTURECUBE:
+        res.textureType = TextureType::TextureCube;
+        break;
       case DXBC::ShaderInputBind::DIM_TEXTURECUBEARRAY:
-        res.resType = TextureType::TextureCubeArray;
+        res.textureType = TextureType::TextureCubeArray;
         break;
     }
 
-    if(r.type == DXBC::ShaderInputBind::TYPE_BYTEADDRESS ||
-       r.type == DXBC::ShaderInputBind::TYPE_UAV_RWBYTEADDRESS)
+    if(r.type == DXBC::ShaderInputBind::TYPE_RTAS)
+    {
+      res.variableType.rows = res.variableType.columns = 1;
+      res.variableType.elements = 1;
+      res.variableType.baseType = VarType::Unknown;
+      res.variableType.name = "RaytracingAccelerationStructure";
+    }
+    else if(r.type == DXBC::ShaderInputBind::TYPE_BYTEADDRESS ||
+            r.type == DXBC::ShaderInputBind::TYPE_UAV_RWBYTEADDRESS)
     {
       res.variableType.rows = res.variableType.columns = 1;
       res.variableType.elements = 1;
@@ -250,21 +263,38 @@ static void MakeResourceList(bool srv, DXBC::DXBCContainer *dxbc,
       }
     }
 
-    res.bindPoint = (int32_t)i;
+    res.fixedBindNumber = r.reg;
+    res.fixedBindSetOrSpace = r.space;
+    res.bindArraySize = r.bindCount == 0 ? ~0U : r.bindCount;
 
-    Bindpoint map;
-    map.arraySize = r.bindCount == 0 ? ~0U : r.bindCount;
-    map.bindset = r.space;
-    map.bind = r.reg;
-    map.used = true;
+    if(r.type == DXBC::ShaderInputBind::TYPE_RTAS)
+    {
+      res.descriptorType = DescriptorType::AccelerationStructure;
+    }
+    else if(res.isReadOnly)
+    {
+      res.descriptorType = DescriptorType::Image;
+      if(!res.isTexture)
+        res.descriptorType = (r.type == DXBC::ShaderInputBind::TYPE_TBUFFER ||
+                              r.type == DXBC::ShaderInputBind::TYPE_TEXTURE)
+                                 ? DescriptorType::TypedBuffer
+                                 : DescriptorType::Buffer;
+    }
+    else
+    {
+      res.descriptorType = DescriptorType::ReadWriteImage;
+      if(!res.isTexture)
+        res.descriptorType = r.type == DXBC::ShaderInputBind::TYPE_UAV_RWTYPED
+                                 ? DescriptorType::ReadWriteTypedBuffer
+                                 : DescriptorType::ReadWriteBuffer;
+    }
 
-    mapping[i] = map;
     refl[i] = res;
   }
 }
 
-void MakeShaderReflection(DXBC::DXBCContainer *dxbc, ShaderReflection *refl,
-                          ShaderBindpointMapping *mapping)
+void MakeShaderReflection(DXBC::DXBCContainer *dxbc, const ShaderEntryPoint &entry,
+                          ShaderReflection *refl)
 {
   if(dxbc == NULL || !RenderDoc::Inst().IsReplayApp())
     return;
@@ -279,6 +309,7 @@ void MakeShaderReflection(DXBC::DXBCContainer *dxbc, ShaderReflection *refl,
     case DXBC::ShaderType::Compute: refl->stage = ShaderStage::Compute; break;
     case DXBC::ShaderType::Amplification: refl->stage = ShaderStage::Amplification; break;
     case DXBC::ShaderType::Mesh: refl->stage = ShaderStage::Mesh; break;
+    case DXBC::ShaderType::Library: refl->stage = entry.stage; break;
     default:
       RDCERR("Unexpected DXBC shader type %u", dxbc->m_Type);
       refl->stage = ShaderStage::Vertex;
@@ -289,8 +320,6 @@ void MakeShaderReflection(DXBC::DXBCContainer *dxbc, ShaderReflection *refl,
 
   if(dxbc->GetDebugInfo())
   {
-    refl->debugInfo.entrySourceName = refl->entryPoint = dxbc->GetDebugInfo()->GetEntryFunction();
-
     refl->debugInfo.encoding = ShaderEncoding::HLSL;
 
     refl->debugInfo.sourceDebugInformation = true;
@@ -301,9 +330,22 @@ void MakeShaderReflection(DXBC::DXBCContainer *dxbc, ShaderReflection *refl,
 
     dxbc->GetDebugInfo()->GetLineInfo(~0U, ~0U, refl->debugInfo.entryLocation);
 
-    rdcstr entry = dxbc->GetDebugInfo()->GetEntryFunction();
-    if(entry.empty())
-      entry = "main";
+    rdcstr entryFunc = entry.name;
+    if(entryFunc.empty())
+      entryFunc = dxbc->GetDebugInfo()->GetEntryFunction();
+    if(entryFunc.empty())
+      entryFunc = "main";
+
+    refl->debugInfo.entrySourceName = refl->entryPoint = entryFunc;
+
+    // demangle DXIL source names for display
+    if(refl->debugInfo.entrySourceName.size() > 2 && refl->debugInfo.entrySourceName[0] == '\x1' &&
+       refl->debugInfo.entrySourceName[1] == '?')
+    {
+      int idx = refl->debugInfo.entrySourceName.indexOf('@');
+      if(idx > 2)
+        refl->debugInfo.entrySourceName = refl->debugInfo.entrySourceName.substr(2, idx - 2);
+    }
 
     // assume the debug info put the file with the entry point at the start. SDBG seems to do this
     // by default, and SPDB has an extra sorting step that probably maybe possibly does this.
@@ -320,6 +362,7 @@ void MakeShaderReflection(DXBC::DXBCContainer *dxbc, ShaderReflection *refl,
       case DXBC::ShaderType::Hull: profile = "hs"; break;
       case DXBC::ShaderType::Domain: profile = "ds"; break;
       case DXBC::ShaderType::Compute: profile = "cs"; break;
+      case DXBC::ShaderType::Library: profile = "lib"; break;
       default: profile = "xx"; break;
     }
     profile += StringFormat::Fmt("_%u_%u", dxbc->m_Version.Major, dxbc->m_Version.Minor);
@@ -383,11 +426,6 @@ void MakeShaderReflection(DXBC::DXBCContainer *dxbc, ShaderReflection *refl,
     default: refl->outputTopology = Topology::Unknown; break;
   }
 
-  mapping->inputAttributes.resize(D3Dx_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT);
-  for(int s = 0; s < D3Dx_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT; s++)
-    mapping->inputAttributes[s] = s;
-
-  mapping->constantBlocks.resize(dxbcRefl->CBuffers.size());
   refl->constantBlocks.resize(dxbcRefl->CBuffers.size());
   for(size_t i = 0; i < dxbcRefl->CBuffers.size(); i++)
   {
@@ -396,15 +434,10 @@ void MakeShaderReflection(DXBC::DXBCContainer *dxbc, ShaderReflection *refl,
     cb.name = dxbcRefl->CBuffers[i].name;
     cb.bufferBacked = true;
     cb.byteSize = dxbcRefl->CBuffers[i].descriptor.byteSize;
-    cb.bindPoint = (int32_t)i;
 
-    Bindpoint map;
-    map.arraySize = dxbcRefl->CBuffers[i].bindCount;
-    map.bindset = dxbcRefl->CBuffers[i].space;
-    map.bind = dxbcRefl->CBuffers[i].reg;
-    map.used = true;
-
-    mapping->constantBlocks[i] = map;
+    cb.fixedBindNumber = dxbcRefl->CBuffers[i].reg;
+    cb.fixedBindSetOrSpace = dxbcRefl->CBuffers[i].space;
+    cb.bindArraySize = dxbcRefl->CBuffers[i].bindCount;
 
     cb.variables.reserve(dxbcRefl->CBuffers[i].variables.size());
     for(size_t v = 0; v < dxbcRefl->CBuffers[i].variables.size(); v++)
@@ -415,32 +448,23 @@ void MakeShaderReflection(DXBC::DXBCContainer *dxbc, ShaderReflection *refl,
     FixupEmptyStructs(cb.variables);
   }
 
-  mapping->samplers.resize(dxbcRefl->Samplers.size());
   refl->samplers.resize(dxbcRefl->Samplers.size());
   for(size_t i = 0; i < dxbcRefl->Samplers.size(); i++)
   {
     ShaderSampler &s = refl->samplers[i];
 
     s.name = dxbcRefl->Samplers[i].name;
-    s.bindPoint = (int32_t)i;
 
-    Bindpoint map;
-    map.arraySize = 1;
-    map.bindset = dxbcRefl->Samplers[i].space;
-    map.bind = dxbcRefl->Samplers[i].reg;
-    map.used = true;
-
-    mapping->samplers[i] = map;
+    s.fixedBindNumber = dxbcRefl->Samplers[i].reg;
+    s.fixedBindSetOrSpace = dxbcRefl->Samplers[i].space;
+    s.bindArraySize = dxbcRefl->Samplers[i].bindCount;
   }
 
-  mapping->readOnlyResources.resize(dxbcRefl->SRVs.size());
   refl->readOnlyResources.resize(dxbcRefl->SRVs.size());
-  MakeResourceList(true, dxbc, dxbcRefl->SRVs, mapping->readOnlyResources, refl->readOnlyResources);
+  MakeResourceList(true, dxbc, dxbcRefl->SRVs, refl->readOnlyResources);
 
-  mapping->readWriteResources.resize(dxbcRefl->UAVs.size());
   refl->readWriteResources.resize(dxbcRefl->UAVs.size());
-  MakeResourceList(false, dxbc, dxbcRefl->UAVs, mapping->readWriteResources,
-                   refl->readWriteResources);
+  MakeResourceList(false, dxbc, dxbcRefl->UAVs, refl->readWriteResources);
 
   uint32_t numInterfaces = 0;
   for(size_t i = 0; i < dxbcRefl->Interfaces.variables.size(); i++)
@@ -458,5 +482,25 @@ void MakeShaderReflection(DXBC::DXBCContainer *dxbc, ShaderReflection *refl,
   {
     refl->taskPayload.variables.push_back(
         MakeConstantBufferVariable(false, dxbcRefl->TaskPayload.members[v]));
+  }
+
+  DXBC::CBufferVariableType RayPayload = dxbc->GetRayPayload(entry);
+  DXBC::CBufferVariableType RayAttributes = dxbc->GetRayAttributes(entry);
+
+  refl->rayPayload.bufferBacked = false;
+  refl->rayPayload.name = RayPayload.name;
+  refl->rayPayload.variables.reserve(RayPayload.members.size());
+  for(size_t v = 0; v < RayPayload.members.size(); v++)
+  {
+    refl->rayPayload.variables.push_back(MakeConstantBufferVariable(false, RayPayload.members[v]));
+  }
+
+  refl->rayAttributes.bufferBacked = false;
+  refl->rayAttributes.name = RayAttributes.name;
+  refl->rayAttributes.variables.reserve(RayAttributes.members.size());
+  for(size_t v = 0; v < RayAttributes.members.size(); v++)
+  {
+    refl->rayAttributes.variables.push_back(
+        MakeConstantBufferVariable(false, RayAttributes.members[v]));
   }
 }

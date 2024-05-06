@@ -65,6 +65,13 @@ rdcstr WrappedID3D12Device::GetChunkName(uint32_t idx)
   return ToStr((D3D12Chunk)idx);
 }
 
+D3D12ShaderCache *WrappedID3D12Device::GetShaderCache()
+{
+  if(m_ShaderCache == NULL)
+    m_ShaderCache = new D3D12ShaderCache(this);
+  return m_ShaderCache;
+}
+
 D3D12DebugManager *WrappedID3D12Device::GetDebugManager()
 {
   return m_Replay->GetDebugManager();
@@ -504,6 +511,7 @@ BOOL STDMETHODCALLTYPE WrappedAGS12::ExtensionsSupported()
 WrappedID3D12Device::WrappedID3D12Device(ID3D12Device *realDevice, D3D12InitParams params,
                                          bool enabledDebugLayer)
     : m_RefCounter(realDevice, false),
+      m_DevConfig(realDevice, this),
       m_SoftRefCounter(NULL, false),
       m_pDevice(realDevice),
       m_debugLayerEnabled(enabledDebugLayer),
@@ -527,6 +535,7 @@ WrappedID3D12Device::WrappedID3D12Device(ID3D12Device *realDevice, D3D12InitPara
   RDCEraseEl(m_D3D12Opts1);
   RDCEraseEl(m_D3D12Opts2);
   RDCEraseEl(m_D3D12Opts3);
+  RDCEraseEl(m_D3D12Opts5);
   RDCEraseEl(m_D3D12Opts6);
   RDCEraseEl(m_D3D12Opts7);
   RDCEraseEl(m_D3D12Opts9);
@@ -596,6 +605,10 @@ WrappedID3D12Device::WrappedID3D12Device(ID3D12Device *realDevice, D3D12InitPara
                                         sizeof(m_D3D12Opts3));
     if(hr != S_OK)
       RDCEraseEl(m_D3D12Opts3);
+    hr = m_pDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &m_D3D12Opts5,
+                                        sizeof(m_D3D12Opts5));
+    if(hr != S_OK)
+      RDCEraseEl(m_D3D12Opts5);
     hr = m_pDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS6, &m_D3D12Opts6,
                                         sizeof(m_D3D12Opts6));
     if(hr != S_OK)
@@ -1216,6 +1229,17 @@ HRESULT WrappedID3D12Device::QueryInterface(REFIID riid, void **ppvObject)
     {
       return E_NOINTERFACE;
     }
+  }
+  else if(riid == __uuidof(ID3D12DeviceConfiguration))
+  {
+    if(m_DevConfig.IsValid())
+    {
+      *ppvObject = (ID3D12DeviceConfiguration *)&m_DevConfig;
+      AddRef();
+      return S_OK;
+    }
+
+    return E_NOINTERFACE;
   }
   else if(riid == __uuidof(ID3D12DeviceDownlevel))
   {
@@ -2623,6 +2647,11 @@ void WrappedID3D12Device::StartFrameCapture(DeviceOwnedWindow devWnd)
   }
 
   GetResourceManager()->MarkResourceFrameReferenced(m_ResourceID, eFrameRef_Read);
+
+  rdcarray<D3D12ResourceRecord *> forced = GetForcedReferences();
+
+  for(auto it = forced.begin(); it != forced.end(); ++it)
+    GetResourceManager()->MarkResourceFrameReferenced((*it)->GetResourceID(), eFrameRef_Read);
 }
 
 bool WrappedID3D12Device::EndFrameCapture(DeviceOwnedWindow devWnd)
@@ -2667,6 +2696,19 @@ bool WrappedID3D12Device::EndFrameCapture(DeviceOwnedWindow devWnd)
     backbuffer = (ID3D12Resource *)swapper->GetBackbuffers()[swapper->GetLastPresentedBuffer()];
 
   rdcarray<WrappedID3D12CommandQueue *> queues;
+
+  // There is no easy way to mark resource referenced in the AS input and the dispatch tables.
+  // We could be more selective and only force-reference acceleration structure buffers - resources
+  // in the AS state - but this would not include scratch buffers (which could be done by hand) and
+  // build input buffers (which can't).
+  // we don't do this with the forced reference system as we want this to be retroactive - only
+  // after seeing an AS build do we mark all buffers referenced but buffers could be created before
+  // an AS is built.
+  CaptureOptions opts = RenderDoc::Inst().GetCaptureOptions();
+  if(!opts.refAllResources && m_HaveSeenASBuild)
+  {
+    WrappedID3D12Resource::MarkAllBufferResourceFrameReferenced(GetResourceManager());
+  }
 
   // transition back to IDLE and readback initial states atomically
   {
@@ -3104,6 +3146,8 @@ void WrappedID3D12Device::UploadBLASBufferAddresses()
     }
   }
 
+  m_blasAddressCount = (uint32_t)blasAddressPair.size();
+
   uint64_t requiredSize = blasAddressPair.size() * sizeof(BlasAddressPair);
 
   D3D12_RESOURCE_DESC addressBufferResDesc;
@@ -3186,6 +3230,11 @@ void WrappedID3D12Device::ReleaseResource(ID3D12DeviceChild *res)
   {
     SCOPED_LOCK(m_ResourceStatesLock);
     m_ResourceStates.erase(id);
+  }
+
+  {
+    SCOPED_LOCK(m_ForcedReferencesLock);
+    m_ForcedReferences.removeOne(GetRecord(res));
   }
 
   {
@@ -3617,6 +3666,70 @@ void WrappedID3D12Device::SetName(ID3D12DeviceChild *pResource, const char *Name
 }
 
 template <typename SerialiserType>
+bool WrappedID3D12Device::Serialise_CreateAS(
+    SerialiserType &ser, ID3D12Resource *pResource, UINT64 resourceOffset,
+    const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO &preBldInfo,
+    D3D12AccelerationStructure *as)
+{
+  SERIALISE_ELEMENT(pResource);
+  SERIALISE_ELEMENT(resourceOffset);
+  SERIALISE_ELEMENT(preBldInfo);
+  SERIALISE_ELEMENT_LOCAL(asId, as->GetResourceID());
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading() && pResource)
+  {
+    WrappedID3D12Resource *asbWrappedResource = (WrappedID3D12Resource *)pResource;
+    D3D12AccelerationStructure *accStructAtOffset = NULL;
+    if(asbWrappedResource->CreateAccStruct(resourceOffset, preBldInfo, &accStructAtOffset))
+    {
+      GetResourceManager()->AddLiveResource(asId, accStructAtOffset);
+
+      AddResource(asId, ResourceType::AccelerationStructure, "Acceleration Structure");
+      // ignored if there's no heap
+      DerivedResource(pResource, asId);
+    }
+    else
+    {
+      SET_ERROR_RESULT(m_FailedReplayResult, ResultCode::APIReplayFailed,
+                       "Couldn't recreate acceleration structure object");
+      return false;
+    }
+  }
+
+  return true;
+}
+
+template bool WrappedID3D12Device::Serialise_CreateAS(
+    ReadSerialiser &ser, ID3D12Resource *pResource, UINT64 resourceOffset,
+    const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO &preBldInfo,
+    D3D12AccelerationStructure *as);
+template bool WrappedID3D12Device::Serialise_CreateAS(
+    WriteSerialiser &ser, ID3D12Resource *pResource, UINT64 resourceOffset,
+    const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO &preBldInfo,
+    D3D12AccelerationStructure *as);
+
+void WrappedID3D12Device::CreateAS(ID3D12Resource *pResource, UINT64 resourceOffset,
+                                   const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO &preBldInfo,
+                                   D3D12AccelerationStructure *as)
+{
+  if(IsCaptureMode(m_State))
+  {
+    D3D12ResourceRecord *record = as->GetResourceRecord();
+
+    m_HaveSeenASBuild = true;
+
+    {
+      WriteSerialiser &ser = GetThreadSerialiser();
+      SCOPED_SERIALISE_CHUNK(D3D12Chunk::CreateAS);
+      Serialise_CreateAS(ser, pResource, resourceOffset, preBldInfo, as);
+      record->AddChunk(scope.Get());
+    }
+  }
+}
+
+template <typename SerialiserType>
 bool WrappedID3D12Device::Serialise_SetShaderExtUAV(SerialiserType &ser, GPUVendor vendor,
                                                     uint32_t reg, uint32_t space, bool global)
 {
@@ -4022,8 +4135,7 @@ void WrappedID3D12Device::CreateInternalResources()
 
   m_GPUSyncCounter = 0;
 
-  if(m_ShaderCache == NULL)
-    m_ShaderCache = new D3D12ShaderCache(this);
+  GetShaderCache()->SetDevConfiguration(m_Replay->GetDevConfiguration());
 
   if(m_TextRenderer == NULL)
     m_TextRenderer = new D3D12TextRenderer(this);
@@ -4346,6 +4458,7 @@ bool WrappedID3D12Device::ProcessChunk(ReadSerialiser &ser, D3D12Chunk context)
       return Serialise_CreateStateObject(ser, NULL, IID(), NULL);
     case D3D12Chunk::Device_AddToStateObject:
       return Serialise_AddToStateObject(ser, NULL, NULL, IID(), NULL);
+    case D3D12Chunk::CreateAS: return Serialise_CreateAS(ser, NULL, 0, {}, NULL);
 
     // in order to get a warning if we miss a case, we explicitly handle the list/queue chunks here.
     // If we actually encounter one it's an error (we should hit CaptureBegin first and switch to
@@ -4843,6 +4956,16 @@ void WrappedID3D12Device::ReplayLog(uint32_t startEventID, uint32_t endEventID,
 
     ExecuteLists();
     FlushLists(true);
+
+    // clear any previous ray dispatch references
+    D3D12CommandData &cmd = *m_Queue->GetCommandData();
+
+    for(PatchedRayDispatch::Resources &r : cmd.m_RayDispatches)
+    {
+      r.lookupBuffer->Release();
+      r.patchScratchBuffer->Release();
+    }
+    cmd.m_RayDispatches.clear();
 
     if(HasFatalError())
       return;

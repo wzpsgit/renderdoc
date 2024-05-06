@@ -123,6 +123,37 @@ const PipeState &ReplayController::GetPipelineState()
   return m_PipeState;
 }
 
+rdcarray<Descriptor> ReplayController::GetDescriptors(ResourceId descriptorStore,
+                                                      const rdcarray<DescriptorRange> &ranges)
+{
+  CHECK_REPLAY_THREAD();
+
+  return m_pDevice->GetDescriptors(m_pDevice->GetLiveID(descriptorStore), ranges);
+}
+
+const rdcarray<DescriptorAccess> &ReplayController::GetDescriptorAccess()
+{
+  CHECK_REPLAY_THREAD();
+
+  return m_PipeState.GetDescriptorAccess();
+}
+
+rdcarray<DescriptorLogicalLocation> ReplayController::GetDescriptorLocations(
+    ResourceId descriptorStore, const rdcarray<DescriptorRange> &ranges)
+{
+  CHECK_REPLAY_THREAD();
+
+  return m_pDevice->GetDescriptorLocations(m_pDevice->GetLiveID(descriptorStore), ranges);
+}
+
+rdcarray<SamplerDescriptor> ReplayController::GetSamplerDescriptors(
+    ResourceId descriptorStore, const rdcarray<DescriptorRange> &ranges)
+{
+  CHECK_REPLAY_THREAD();
+
+  return m_pDevice->GetSamplerDescriptors(m_pDevice->GetLiveID(descriptorStore), ranges);
+}
+
 rdcarray<rdcstr> ReplayController::GetDisassemblyTargets(bool withPipeline)
 {
   CHECK_REPLAY_THREAD();
@@ -216,6 +247,10 @@ bool ReplayController::PassEquivalent(const ActionDescription &a, const ActionDe
 
   // don't group actions and compute executes
   if((a.flags & ActionFlags::Dispatch) != (b.flags & ActionFlags::Dispatch))
+    return false;
+
+  // don't group anything with raytracing either
+  if((a.flags & ActionFlags::DispatchRay) != (b.flags & ActionFlags::DispatchRay))
     return false;
 
   // don't group present with anything
@@ -369,6 +404,8 @@ void ReplayController::AddFakeMarkers()
       mark.customName = StringFormat::Fmt("Copy/Clear Pass #%d", copypassID++);
     else if(actions[refaction].flags & ActionFlags::Dispatch)
       mark.customName = StringFormat::Fmt("Compute Pass #%d", computepassID++);
+    else if(actions[refaction].flags & ActionFlags::DispatchRay)
+      mark.customName = StringFormat::Fmt("Raytracing Pass #%d", computepassID++);
     else if(maxOutCount == 0)
       mark.customName = StringFormat::Fmt("Depth-only Pass #%d", depthpassID++);
     else if(minOutCount == maxOutCount)
@@ -448,6 +485,13 @@ const rdcarray<BufferDescription> &ReplayController::GetBuffers()
   CHECK_REPLAY_THREAD();
 
   return m_Buffers;
+}
+
+const rdcarray<DescriptorStoreDescription> &ReplayController::GetDescriptorStores()
+{
+  CHECK_REPLAY_THREAD();
+
+  return m_DescriptorStores;
 }
 
 const rdcarray<TextureDescription> &ReplayController::GetTextures()
@@ -2176,6 +2220,8 @@ RDResult ReplayController::PostCreateInit(IReplayDriver *device, RDCFile *rdc)
   FatalErrorCheck();
   m_Resources = m_pDevice->GetResources();
   FatalErrorCheck();
+  m_DescriptorStores = m_pDevice->GetDescriptorStores();
+  FatalErrorCheck();
 
   m_FrameRecord = m_pDevice->GetFrameRecord();
   FatalErrorCheck();
@@ -2226,4 +2272,51 @@ void ReplayController::FetchPipelineState(uint32_t eventId)
     m_PipeState.SetState(&m_GLPipelineState);
   else if(m_APIProps.pipelineType == GraphicsAPI::Vulkan)
     m_PipeState.SetState(&m_VulkanPipelineState);
+
+  rdcarray<DescriptorAccess> access = m_pDevice->GetDescriptorAccess(eventId);
+  rdcarray<Descriptor> descs;
+  rdcarray<SamplerDescriptor> samps;
+  descs.reserve(access.size());
+  samps.reserve(access.size());
+
+  // we could collate ranges by descriptor store, but in practice we don't expect descriptors to be
+  // scattered across multiple stores. So to keep the code simple for now we do a linear sweep
+  ResourceId store;
+  rdcarray<DescriptorRange> ranges;
+
+  for(const DescriptorAccess &acc : access)
+  {
+    if(acc.descriptorStore != store)
+    {
+      if(store != ResourceId())
+      {
+        descs.append(m_pDevice->GetDescriptors(store, ranges));
+        samps.append(m_pDevice->GetSamplerDescriptors(store, ranges));
+      }
+
+      store = m_pDevice->GetLiveID(acc.descriptorStore);
+      ranges.clear();
+    }
+
+    // if the last range is contiguous with this access, append this access as a new range to query
+    if(!ranges.empty() && ranges.back().descriptorSize == acc.byteSize &&
+       ranges.back().offset + ranges.back().descriptorSize == acc.byteOffset)
+    {
+      ranges.back().count++;
+      continue;
+    }
+
+    DescriptorRange range;
+    range.offset = acc.byteOffset;
+    range.descriptorSize = acc.byteSize;
+    ranges.push_back(range);
+  }
+
+  if(store != ResourceId())
+  {
+    descs.append(m_pDevice->GetDescriptors(store, ranges));
+    samps.append(m_pDevice->GetSamplerDescriptors(store, ranges));
+  }
+
+  m_PipeState.SetDescriptorAccess(std::move(access), std::move(descs), std::move(samps));
 }

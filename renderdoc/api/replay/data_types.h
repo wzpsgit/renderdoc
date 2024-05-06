@@ -596,6 +596,50 @@ typically it is one parent to many derived.
 
 DECLARE_REFLECTION_STRUCT(ResourceDescription);
 
+DOCUMENT("A description of a descriptor store.");
+struct DescriptorStoreDescription
+{
+  DOCUMENT("");
+  DescriptorStoreDescription() = default;
+  DescriptorStoreDescription(const DescriptorStoreDescription &) = default;
+  DescriptorStoreDescription &operator=(const DescriptorStoreDescription &) = default;
+
+  bool operator==(const DescriptorStoreDescription &o) const { return resourceId == o.resourceId; }
+  bool operator<(const DescriptorStoreDescription &o) const
+  {
+    if(!(resourceId == o.resourceId))
+      return resourceId < o.resourceId;
+    return false;
+  }
+
+  DOCUMENT(R"(The unique :class:`ResourceId` that identifies this descriptor store.
+
+:type: ResourceId
+)");
+  ResourceId resourceId;
+
+  DOCUMENT(R"(For descriptor stores which contain desriptors all of identical size, the size of each
+descriptor. Descriptors are assumed to be tightly packed so stride is equal to size.
+
+:type: int
+)");
+  uint32_t descriptorByteSize = 1;
+
+  DOCUMENT(R"(The byte offset within the store to the first descriptor.
+
+:type: int
+)");
+  uint32_t firstDescriptorOffset = 0;
+
+  DOCUMENT(R"(The number of descriptors within this storage object.
+
+:type: int
+)");
+  uint32_t descriptorCount = 0;
+};
+
+DECLARE_REFLECTION_STRUCT(DescriptorStoreDescription);
+
 DOCUMENT("A description of a buffer resource.");
 struct BufferDescription
 {
@@ -1791,12 +1835,6 @@ different to the above, and lets the UI make decisions e.g. to flip rendering of
 with software rendering, or with some functionality disabled due to lack of support.
 )");
   bool degraded = false;
-
-  DOCUMENT(R"(``True`` if the driver mutates shader reflection structures from event to event.
-Currently this is only true for OpenGL where the superfluous indirect in the binding model must be
-worked around by re-sorting bindings.
-)");
-  bool shadersMutable = false;
 
   DOCUMENT("(``True`` if the API supports shader debugging.");
   bool shaderDebugging = false;

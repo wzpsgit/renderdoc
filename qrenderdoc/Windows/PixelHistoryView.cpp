@@ -58,8 +58,8 @@ public:
     m_IsSint = (compType == CompType::SInt);
     m_IsFloat = (!m_IsUint && !m_IsSint);
 
-    if(compType == CompType::Depth)
-      m_IsDepth = true;
+    m_IsDepth =
+        (m_Tex->creationFlags & TextureCategory::DepthTarget) || (compType == CompType::Depth);
 
     switch(m_Tex->format.type)
     {
@@ -822,12 +822,10 @@ void PixelHistoryView::startDebug(EventTag tag)
     return;
   }
 
-  const ShaderBindpointMapping &bindMapping =
-      m_Ctx.CurPipelineState().GetBindpointMapping(ShaderStage::Pixel);
   ResourceId pipeline = m_Ctx.CurPipelineState().GetGraphicsPipelineObject();
 
   // viewer takes ownership of the trace
-  IShaderViewer *s = m_Ctx.DebugShader(&bindMapping, shaderDetails, pipeline, trace, debugContext);
+  IShaderViewer *s = m_Ctx.DebugShader(shaderDetails, pipeline, trace, debugContext);
 
   m_Ctx.AddDockWindow(s->Widget(), DockReference::MainToolArea, NULL);
 }

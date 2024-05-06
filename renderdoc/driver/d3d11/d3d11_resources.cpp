@@ -77,14 +77,73 @@ const GUID RENDERDOC_DeleteSelf = {
     {0x91, 0x8a, 0xd6, 0x64, 0x56, 0x7c, 0xdd, 0x40},
 };
 
+WrappedShader::ShaderEntry::ShaderEntry(WrappedID3D11Device *device, ResourceId id,
+                                        const byte *code, size_t codeLen)
+{
+  m_ID = id;
+  m_Bytecode.assign(code, codeLen);
+  m_DXBCFile = NULL;
+  m_Details = new ShaderReflection;
+  m_DescriptorStore = device->GetImmediateContext()->GetDescriptorsID();
+}
+
 void WrappedShader::ShaderEntry::BuildReflection()
 {
   RDCCOMPILE_ASSERT(
       D3Dx_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT == D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT,
       "Mismatched vertex input count");
 
-  MakeShaderReflection(m_DXBCFile, m_Details, &m_Mapping);
+  MakeShaderReflection(m_DXBCFile, {}, m_Details);
   m_Details->resourceId = m_ID;
+
+  DescriptorAccess access;
+  access.descriptorStore = m_DescriptorStore;
+  access.stage = m_Details->stage;
+  access.byteSize = 1;
+
+  m_Access.reserve(m_Details->constantBlocks.size() + m_Details->samplers.size() +
+                   m_Details->readOnlyResources.size() + m_Details->readWriteResources.size());
+
+  RDCASSERT(m_Details->constantBlocks.size() < 0xffff, m_Details->constantBlocks.size());
+  for(uint16_t i = 0; i < m_Details->constantBlocks.size(); i++)
+  {
+    access.type = DescriptorType::ConstantBuffer;
+    access.index = i;
+    access.byteOffset = EncodeD3D11DescriptorIndex(
+        {access.stage, D3D11DescriptorMapping::CBs, m_Details->constantBlocks[i].fixedBindNumber});
+    m_Access.push_back(access);
+  }
+
+  RDCASSERT(m_Details->samplers.size() < 0xffff, m_Details->samplers.size());
+  for(uint16_t i = 0; i < m_Details->samplers.size(); i++)
+  {
+    access.type = DescriptorType::Sampler;
+    access.index = i;
+    access.byteOffset = EncodeD3D11DescriptorIndex(
+        {access.stage, D3D11DescriptorMapping::Samplers, m_Details->samplers[i].fixedBindNumber});
+    m_Access.push_back(access);
+  }
+
+  RDCASSERT(m_Details->readOnlyResources.size() < 0xffff, m_Details->readOnlyResources.size());
+  for(uint16_t i = 0; i < m_Details->readOnlyResources.size(); i++)
+  {
+    access.type = m_Details->readOnlyResources[i].descriptorType;
+    access.index = i;
+    access.byteOffset = EncodeD3D11DescriptorIndex({access.stage, D3D11DescriptorMapping::SRVs,
+                                                    m_Details->readOnlyResources[i].fixedBindNumber});
+    m_Access.push_back(access);
+  }
+
+  RDCASSERT(m_Details->readWriteResources.size() < 0xffff, m_Details->readWriteResources.size());
+  for(uint16_t i = 0; i < m_Details->readWriteResources.size(); i++)
+  {
+    access.type = m_Details->readWriteResources[i].descriptorType;
+    access.index = i;
+    access.byteOffset =
+        EncodeD3D11DescriptorIndex({access.stage, D3D11DescriptorMapping::UAVs,
+                                    m_Details->readWriteResources[i].fixedBindNumber});
+    m_Access.push_back(access);
+  }
 }
 
 UINT GetSubresourceCount(ID3D11Resource *res)

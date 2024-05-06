@@ -1270,317 +1270,323 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
     res.variableType.arrayByteStride = 0;
     res.variableType.matrixByteStride = 0;
 
+    res.descriptorType = DescriptorType::ImageSampler;
+
     // float samplers
     if(values[0] == eGL_SAMPLER_BUFFER)
     {
-      res.resType = TextureType::Buffer;
+      res.textureType = TextureType::Buffer;
       res.variableType.name = "samplerBuffer";
       res.variableType.baseType = VarType::Float;
+      res.descriptorType = DescriptorType::TypedBuffer;
     }
     else if(values[0] == eGL_SAMPLER_1D)
     {
-      res.resType = TextureType::Texture1D;
+      res.textureType = TextureType::Texture1D;
       res.variableType.name = "sampler1D";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_1D_ARRAY)
     {
-      res.resType = TextureType::Texture1DArray;
+      res.textureType = TextureType::Texture1DArray;
       res.variableType.name = "sampler1DArray";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_1D_SHADOW)
     {
-      res.resType = TextureType::Texture1D;
+      res.textureType = TextureType::Texture1D;
       res.variableType.name = "sampler1DShadow";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_1D_ARRAY_SHADOW)
     {
-      res.resType = TextureType::Texture1DArray;
+      res.textureType = TextureType::Texture1DArray;
       res.variableType.name = "sampler1DArrayShadow";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_2D)
     {
-      res.resType = TextureType::Texture2D;
+      res.textureType = TextureType::Texture2D;
       res.variableType.name = "sampler2D";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_2D_ARRAY)
     {
-      res.resType = TextureType::Texture2DArray;
+      res.textureType = TextureType::Texture2DArray;
       res.variableType.name = "sampler2DArray";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_2D_SHADOW)
     {
-      res.resType = TextureType::Texture2D;
+      res.textureType = TextureType::Texture2D;
       res.variableType.name = "sampler2DShadow";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_2D_ARRAY_SHADOW)
     {
-      res.resType = TextureType::Texture2DArray;
+      res.textureType = TextureType::Texture2DArray;
       res.variableType.name = "sampler2DArrayShadow";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_2D_RECT)
     {
-      res.resType = TextureType::TextureRect;
+      res.textureType = TextureType::TextureRect;
       res.variableType.name = "sampler2DRect";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_2D_RECT_SHADOW)
     {
-      res.resType = TextureType::TextureRect;
+      res.textureType = TextureType::TextureRect;
       res.variableType.name = "sampler2DRectShadow";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_3D)
     {
-      res.resType = TextureType::Texture3D;
+      res.textureType = TextureType::Texture3D;
       res.variableType.name = "sampler3D";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_CUBE)
     {
-      res.resType = TextureType::TextureCube;
+      res.textureType = TextureType::TextureCube;
       res.variableType.name = "samplerCube";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_CUBE_SHADOW)
     {
-      res.resType = TextureType::TextureCube;
+      res.textureType = TextureType::TextureCube;
       res.variableType.name = "samplerCubeShadow";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_CUBE_MAP_ARRAY)
     {
-      res.resType = TextureType::TextureCubeArray;
+      res.textureType = TextureType::TextureCubeArray;
       res.variableType.name = "samplerCubeArray";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_2D_MULTISAMPLE)
     {
-      res.resType = TextureType::Texture2DMS;
+      res.textureType = TextureType::Texture2DMS;
       res.variableType.name = "sampler2DMS";
       res.variableType.baseType = VarType::Float;
     }
     else if(values[0] == eGL_SAMPLER_2D_MULTISAMPLE_ARRAY)
     {
-      res.resType = TextureType::Texture2DMSArray;
+      res.textureType = TextureType::Texture2DMSArray;
       res.variableType.name = "sampler2DMSArray";
       res.variableType.baseType = VarType::Float;
     }
     // int samplers
     else if(values[0] == eGL_INT_SAMPLER_BUFFER)
     {
-      res.resType = TextureType::Buffer;
+      res.textureType = TextureType::Buffer;
       res.variableType.name = "isamplerBuffer";
       res.variableType.baseType = VarType::SInt;
+      res.descriptorType = DescriptorType::TypedBuffer;
     }
     else if(values[0] == eGL_INT_SAMPLER_1D)
     {
-      res.resType = TextureType::Texture1D;
+      res.textureType = TextureType::Texture1D;
       res.variableType.name = "isampler1D";
       res.variableType.baseType = VarType::SInt;
     }
     else if(values[0] == eGL_INT_SAMPLER_1D_ARRAY)
     {
-      res.resType = TextureType::Texture1DArray;
+      res.textureType = TextureType::Texture1DArray;
       res.variableType.name = "isampler1DArray";
       res.variableType.baseType = VarType::SInt;
     }
     else if(values[0] == eGL_INT_SAMPLER_2D)
     {
-      res.resType = TextureType::Texture2D;
+      res.textureType = TextureType::Texture2D;
       res.variableType.name = "isampler2D";
       res.variableType.baseType = VarType::SInt;
     }
     else if(values[0] == eGL_INT_SAMPLER_2D_ARRAY)
     {
-      res.resType = TextureType::Texture2DArray;
+      res.textureType = TextureType::Texture2DArray;
       res.variableType.name = "isampler2DArray";
       res.variableType.baseType = VarType::SInt;
     }
     else if(values[0] == eGL_INT_SAMPLER_2D_RECT)
     {
-      res.resType = TextureType::TextureRect;
+      res.textureType = TextureType::TextureRect;
       res.variableType.name = "isampler2DRect";
       res.variableType.baseType = VarType::SInt;
     }
     else if(values[0] == eGL_INT_SAMPLER_3D)
     {
-      res.resType = TextureType::Texture3D;
+      res.textureType = TextureType::Texture3D;
       res.variableType.name = "isampler3D";
       res.variableType.baseType = VarType::SInt;
     }
     else if(values[0] == eGL_INT_SAMPLER_CUBE)
     {
-      res.resType = TextureType::TextureCube;
+      res.textureType = TextureType::TextureCube;
       res.variableType.name = "isamplerCube";
       res.variableType.baseType = VarType::SInt;
     }
     else if(values[0] == eGL_INT_SAMPLER_CUBE_MAP_ARRAY)
     {
-      res.resType = TextureType::TextureCubeArray;
+      res.textureType = TextureType::TextureCubeArray;
       res.variableType.name = "isamplerCubeArray";
       res.variableType.baseType = VarType::SInt;
     }
     else if(values[0] == eGL_INT_SAMPLER_2D_MULTISAMPLE)
     {
-      res.resType = TextureType::Texture2DMS;
+      res.textureType = TextureType::Texture2DMS;
       res.variableType.name = "isampler2DMS";
       res.variableType.baseType = VarType::SInt;
     }
     else if(values[0] == eGL_INT_SAMPLER_2D_MULTISAMPLE_ARRAY)
     {
-      res.resType = TextureType::Texture2DMSArray;
+      res.textureType = TextureType::Texture2DMSArray;
       res.variableType.name = "isampler2DMSArray";
       res.variableType.baseType = VarType::SInt;
     }
     // unsigned int samplers
     else if(values[0] == eGL_UNSIGNED_INT_SAMPLER_BUFFER)
     {
-      res.resType = TextureType::Buffer;
+      res.textureType = TextureType::Buffer;
       res.variableType.name = "usamplerBuffer";
       res.variableType.baseType = VarType::UInt;
+      res.descriptorType = DescriptorType::TypedBuffer;
     }
     else if(values[0] == eGL_UNSIGNED_INT_SAMPLER_1D)
     {
-      res.resType = TextureType::Texture1D;
+      res.textureType = TextureType::Texture1D;
       res.variableType.name = "usampler1D";
       res.variableType.baseType = VarType::UInt;
     }
     else if(values[0] == eGL_UNSIGNED_INT_SAMPLER_1D_ARRAY)
     {
-      res.resType = TextureType::Texture1DArray;
+      res.textureType = TextureType::Texture1DArray;
       res.variableType.name = "usampler1DArray";
       res.variableType.baseType = VarType::UInt;
     }
     else if(values[0] == eGL_UNSIGNED_INT_SAMPLER_2D)
     {
-      res.resType = TextureType::Texture2D;
+      res.textureType = TextureType::Texture2D;
       res.variableType.name = "usampler2D";
       res.variableType.baseType = VarType::UInt;
     }
     else if(values[0] == eGL_UNSIGNED_INT_SAMPLER_2D_ARRAY)
     {
-      res.resType = TextureType::Texture2DArray;
+      res.textureType = TextureType::Texture2DArray;
       res.variableType.name = "usampler2DArray";
       res.variableType.baseType = VarType::UInt;
     }
     else if(values[0] == eGL_UNSIGNED_INT_SAMPLER_2D_RECT)
     {
-      res.resType = TextureType::TextureRect;
+      res.textureType = TextureType::TextureRect;
       res.variableType.name = "usampler2DRect";
       res.variableType.baseType = VarType::UInt;
     }
     else if(values[0] == eGL_UNSIGNED_INT_SAMPLER_3D)
     {
-      res.resType = TextureType::Texture3D;
+      res.textureType = TextureType::Texture3D;
       res.variableType.name = "usampler3D";
       res.variableType.baseType = VarType::UInt;
     }
     else if(values[0] == eGL_UNSIGNED_INT_SAMPLER_CUBE)
     {
-      res.resType = TextureType::TextureCube;
+      res.textureType = TextureType::TextureCube;
       res.variableType.name = "usamplerCube";
       res.variableType.baseType = VarType::UInt;
     }
     else if(values[0] == eGL_UNSIGNED_INT_SAMPLER_CUBE_MAP_ARRAY)
     {
-      res.resType = TextureType::TextureCubeArray;
+      res.textureType = TextureType::TextureCubeArray;
       res.variableType.name = "usamplerCubeArray";
       res.variableType.baseType = VarType::UInt;
     }
     else if(values[0] == eGL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE)
     {
-      res.resType = TextureType::Texture2DMS;
+      res.textureType = TextureType::Texture2DMS;
       res.variableType.name = "usampler2DMS";
       res.variableType.baseType = VarType::UInt;
     }
     else if(values[0] == eGL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE_ARRAY)
     {
-      res.resType = TextureType::Texture2DMSArray;
+      res.textureType = TextureType::Texture2DMSArray;
       res.variableType.name = "usampler2DMSArray";
       res.variableType.baseType = VarType::UInt;
     }
     // float images
     else if(values[0] == eGL_IMAGE_BUFFER)
     {
-      res.resType = TextureType::Buffer;
+      res.textureType = TextureType::Buffer;
       res.variableType.name = "imageBuffer";
       res.variableType.baseType = VarType::Float;
       res.isReadOnly = false;
+      res.descriptorType = DescriptorType::ReadWriteTypedBuffer;
     }
     else if(values[0] == eGL_IMAGE_1D)
     {
-      res.resType = TextureType::Texture1D;
+      res.textureType = TextureType::Texture1D;
       res.variableType.name = "image1D";
       res.variableType.baseType = VarType::Float;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_IMAGE_1D_ARRAY)
     {
-      res.resType = TextureType::Texture1DArray;
+      res.textureType = TextureType::Texture1DArray;
       res.variableType.name = "image1DArray";
       res.variableType.baseType = VarType::Float;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_IMAGE_2D)
     {
-      res.resType = TextureType::Texture2D;
+      res.textureType = TextureType::Texture2D;
       res.variableType.name = "image2D";
       res.variableType.baseType = VarType::Float;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_IMAGE_2D_ARRAY)
     {
-      res.resType = TextureType::Texture2DArray;
+      res.textureType = TextureType::Texture2DArray;
       res.variableType.name = "image2DArray";
       res.variableType.baseType = VarType::Float;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_IMAGE_2D_RECT)
     {
-      res.resType = TextureType::TextureRect;
+      res.textureType = TextureType::TextureRect;
       res.variableType.name = "image2DRect";
       res.variableType.baseType = VarType::Float;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_IMAGE_3D)
     {
-      res.resType = TextureType::Texture3D;
+      res.textureType = TextureType::Texture3D;
       res.variableType.name = "image3D";
       res.variableType.baseType = VarType::Float;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_IMAGE_CUBE)
     {
-      res.resType = TextureType::TextureCube;
+      res.textureType = TextureType::TextureCube;
       res.variableType.name = "imageCube";
       res.variableType.baseType = VarType::Float;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_IMAGE_CUBE_MAP_ARRAY)
     {
-      res.resType = TextureType::TextureCubeArray;
+      res.textureType = TextureType::TextureCubeArray;
       res.variableType.name = "imageCubeArray";
       res.variableType.baseType = VarType::Float;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_IMAGE_2D_MULTISAMPLE)
     {
-      res.resType = TextureType::Texture2DMS;
+      res.textureType = TextureType::Texture2DMS;
       res.variableType.name = "image2DMS";
       res.variableType.baseType = VarType::Float;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_IMAGE_2D_MULTISAMPLE_ARRAY)
     {
-      res.resType = TextureType::Texture2DMSArray;
+      res.textureType = TextureType::Texture2DMSArray;
       res.variableType.name = "image2DMSArray";
       res.variableType.baseType = VarType::Float;
       res.isReadOnly = false;
@@ -1588,77 +1594,78 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
     // int images
     else if(values[0] == eGL_INT_IMAGE_BUFFER)
     {
-      res.resType = TextureType::Buffer;
+      res.textureType = TextureType::Buffer;
       res.variableType.name = "iimageBuffer";
       res.variableType.baseType = VarType::SInt;
       res.isReadOnly = false;
+      res.descriptorType = DescriptorType::ReadWriteTypedBuffer;
     }
     else if(values[0] == eGL_INT_IMAGE_1D)
     {
-      res.resType = TextureType::Texture1D;
+      res.textureType = TextureType::Texture1D;
       res.variableType.name = "iimage1D";
       res.variableType.baseType = VarType::SInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_INT_IMAGE_1D_ARRAY)
     {
-      res.resType = TextureType::Texture1DArray;
+      res.textureType = TextureType::Texture1DArray;
       res.variableType.name = "iimage1DArray";
       res.variableType.baseType = VarType::SInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_INT_IMAGE_2D)
     {
-      res.resType = TextureType::Texture2D;
+      res.textureType = TextureType::Texture2D;
       res.variableType.name = "iimage2D";
       res.variableType.baseType = VarType::SInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_INT_IMAGE_2D_ARRAY)
     {
-      res.resType = TextureType::Texture2DArray;
+      res.textureType = TextureType::Texture2DArray;
       res.variableType.name = "iimage2DArray";
       res.variableType.baseType = VarType::SInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_INT_IMAGE_2D_RECT)
     {
-      res.resType = TextureType::TextureRect;
+      res.textureType = TextureType::TextureRect;
       res.variableType.name = "iimage2DRect";
       res.variableType.baseType = VarType::SInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_INT_IMAGE_3D)
     {
-      res.resType = TextureType::Texture3D;
+      res.textureType = TextureType::Texture3D;
       res.variableType.name = "iimage3D";
       res.variableType.baseType = VarType::SInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_INT_IMAGE_CUBE)
     {
-      res.resType = TextureType::TextureCube;
+      res.textureType = TextureType::TextureCube;
       res.variableType.name = "iimageCube";
       res.variableType.baseType = VarType::SInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_INT_IMAGE_CUBE_MAP_ARRAY)
     {
-      res.resType = TextureType::TextureCubeArray;
+      res.textureType = TextureType::TextureCubeArray;
       res.variableType.name = "iimageCubeArray";
       res.variableType.baseType = VarType::SInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_INT_IMAGE_2D_MULTISAMPLE)
     {
-      res.resType = TextureType::Texture2DMS;
+      res.textureType = TextureType::Texture2DMS;
       res.variableType.name = "iimage2DMS";
       res.variableType.baseType = VarType::SInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_INT_IMAGE_2D_MULTISAMPLE_ARRAY)
     {
-      res.resType = TextureType::Texture2DMSArray;
+      res.textureType = TextureType::Texture2DMSArray;
       res.variableType.name = "iimage2DMSArray";
       res.variableType.baseType = VarType::SInt;
       res.isReadOnly = false;
@@ -1666,77 +1673,78 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
     // unsigned int images
     else if(values[0] == eGL_UNSIGNED_INT_IMAGE_BUFFER)
     {
-      res.resType = TextureType::Buffer;
+      res.textureType = TextureType::Buffer;
       res.variableType.name = "uimageBuffer";
       res.variableType.baseType = VarType::UInt;
       res.isReadOnly = false;
+      res.descriptorType = DescriptorType::ReadWriteTypedBuffer;
     }
     else if(values[0] == eGL_UNSIGNED_INT_IMAGE_1D)
     {
-      res.resType = TextureType::Texture1D;
+      res.textureType = TextureType::Texture1D;
       res.variableType.name = "uimage1D";
       res.variableType.baseType = VarType::UInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_UNSIGNED_INT_IMAGE_1D_ARRAY)
     {
-      res.resType = TextureType::Texture1DArray;
+      res.textureType = TextureType::Texture1DArray;
       res.variableType.name = "uimage1DArray";
       res.variableType.baseType = VarType::UInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_UNSIGNED_INT_IMAGE_2D)
     {
-      res.resType = TextureType::Texture2D;
+      res.textureType = TextureType::Texture2D;
       res.variableType.name = "uimage2D";
       res.variableType.baseType = VarType::UInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_UNSIGNED_INT_IMAGE_2D_ARRAY)
     {
-      res.resType = TextureType::Texture2DArray;
+      res.textureType = TextureType::Texture2DArray;
       res.variableType.name = "uimage2DArray";
       res.variableType.baseType = VarType::UInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_UNSIGNED_INT_IMAGE_2D_RECT)
     {
-      res.resType = TextureType::TextureRect;
+      res.textureType = TextureType::TextureRect;
       res.variableType.name = "uimage2DRect";
       res.variableType.baseType = VarType::UInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_UNSIGNED_INT_IMAGE_3D)
     {
-      res.resType = TextureType::Texture3D;
+      res.textureType = TextureType::Texture3D;
       res.variableType.name = "uimage3D";
       res.variableType.baseType = VarType::UInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_UNSIGNED_INT_IMAGE_CUBE)
     {
-      res.resType = TextureType::TextureCube;
+      res.textureType = TextureType::TextureCube;
       res.variableType.name = "uimageCube";
       res.variableType.baseType = VarType::UInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_UNSIGNED_INT_IMAGE_CUBE_MAP_ARRAY)
     {
-      res.resType = TextureType::TextureCubeArray;
+      res.textureType = TextureType::TextureCubeArray;
       res.variableType.name = "uimageCubeArray";
       res.variableType.baseType = VarType::UInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_UNSIGNED_INT_IMAGE_2D_MULTISAMPLE)
     {
-      res.resType = TextureType::Texture2DMS;
+      res.textureType = TextureType::Texture2DMS;
       res.variableType.name = "uimage2DMS";
       res.variableType.baseType = VarType::UInt;
       res.isReadOnly = false;
     }
     else if(values[0] == eGL_UNSIGNED_INT_IMAGE_2D_MULTISAMPLE_ARRAY)
     {
-      res.resType = TextureType::Texture2DMSArray;
+      res.textureType = TextureType::Texture2DMSArray;
       res.variableType.name = "uimage2DMSArray";
       res.variableType.baseType = VarType::UInt;
       res.isReadOnly = false;
@@ -1744,18 +1752,24 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
     // atomic counter
     else if(values[0] == eGL_UNSIGNED_INT_ATOMIC_COUNTER)
     {
-      res.resType = TextureType::Buffer;
+      res.textureType = TextureType::Buffer;
       res.variableType.name = "atomic_uint";
       res.variableType.baseType = VarType::UInt;
       res.isReadOnly = false;
       res.isTexture = false;
       res.variableType.columns = 1;
+      res.descriptorType = DescriptorType::ReadWriteBuffer;
     }
     else
     {
       // not a sampler
       continue;
     }
+
+    if(!res.isReadOnly && res.textureType == TextureType::Buffer)
+      res.descriptorType = DescriptorType::ReadWriteImage;
+
+    res.hasSampler = res.isReadOnly;
 
     char *namebuf = new char[values[1] + 1];
     GL.glGetProgramResourceName(sepProg, eGL_UNIFORM, u, values[1], NULL, namebuf);
@@ -1769,7 +1783,6 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
 
     rdcarray<ShaderResource> &reslist = (res.isReadOnly ? roresources : rwresources);
 
-    res.bindPoint = (int32_t)reslist.size();
     reslist.push_back(res);
 
     // array of samplers
@@ -1780,7 +1793,6 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
       {
         rdcstr arrname = StringFormat::Fmt("%s[%d]", name.c_str(), i);
 
-        res.bindPoint = (int32_t)reslist.size();
         res.name = arrname;
 
         reslist.push_back(res);
@@ -1788,7 +1800,7 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
     }
   }
 
-  rdcarray<int32_t> ssbos;
+  rdcarray<size_t> ssbos;
   uint32_t ssboMembers = 0;
 
   GLint numSSBOs = 0;
@@ -1808,7 +1820,7 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
       ShaderResource res;
       res.isReadOnly = false;
       res.isTexture = false;
-      res.resType = TextureType::Buffer;
+      res.textureType = TextureType::Buffer;
       res.variableType.rows = 0;
       res.variableType.columns = 0;
       res.variableType.elements = 1;
@@ -1816,8 +1828,8 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
       res.variableType.matrixByteStride = 0;
       res.variableType.name = "buffer";
       res.variableType.baseType = VarType::UInt;
-      res.bindPoint = (int32_t)rwresources.size();
       res.name = nm;
+      res.descriptorType = DescriptorType::ReadWriteBuffer;
 
       GLint numMembers = 0;
 
@@ -1840,8 +1852,8 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
         }
       }
 
+      ssbos.push_back(rwresources.size());
       rwresources.push_back(res);
-      ssbos.push_back(res.bindPoint);
 
       // only count members from the first array index
       if(!isArray || arrayIdx == 0)
@@ -1978,7 +1990,6 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
         ConstantBlock cblock;
         cblock.name = uboNames[i];
         cblock.bufferBacked = true;
-        cblock.bindPoint = (int32_t)refl.constantBlocks.size();
 
         GLenum bufSize = eGL_BUFFER_DATA_SIZE;
         GL.glGetProgramResourceiv(sepProg, eGL_UNIFORM_BLOCK, i, 1, &bufSize, 1, NULL,
@@ -2002,7 +2013,6 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
     ConstantBlock globals;
     globals.name = "$Globals";
     globals.bufferBacked = false;
-    globals.bindPoint = (int32_t)refl.constantBlocks.size();
 
     // global uniforms have no defined order, location will be per implementation, so sort instead
     // alphabetically
@@ -2392,15 +2402,62 @@ void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &ref
   // TODO: fill in Interfaces with shader subroutines?
 }
 
-void GetBindpointMapping(GLuint curProg, int shadIdx, const ShaderReflection *refl,
-                         ShaderBindpointMapping &mapping)
+void EvaluateVertexAttributeBinds(GLuint curProg, const ShaderReflection *refl, bool spirv,
+                                  rdcarray<int32_t> &vertexAttrBindings)
 {
+  GLint numVAttribBindings = 16;
+  GL.glGetIntegerv(eGL_MAX_VERTEX_ATTRIBS, &numVAttribBindings);
+
+  vertexAttrBindings.resize(numVAttribBindings);
+  for(int32_t i = 0; i < numVAttribBindings; i++)
+    vertexAttrBindings[i] = -1;
+
   if(!refl)
-  {
-    mapping = ShaderBindpointMapping();
     return;
+
+  if(spirv)
+  {
+    for(size_t i = 0; i < refl->inputSignature.size(); i++)
+      if(refl->inputSignature[i].systemValue == ShaderBuiltin::Undefined)
+
+        return;
   }
 
+  for(int32_t i = 0; i < refl->inputSignature.count(); i++)
+  {
+    // skip system inputs, as some drivers will return a location for them
+    if(refl->inputSignature[i].systemValue != ShaderBuiltin::Undefined)
+      continue;
+
+    // SPIR-V has fixed bindings
+    if(spirv)
+    {
+      vertexAttrBindings[refl->inputSignature[i].regIndex] = (int32_t)i;
+      continue;
+    }
+
+    int32_t matrixRow = 0;
+    rdcstr varName = refl->inputSignature[i].varName;
+
+    int32_t offs = varName.find(":col");
+    if(offs >= 0)
+    {
+      matrixRow = varName[offs + 4] - '0';
+      varName.resize(offs);
+    }
+
+    GLint loc = GL.glGetAttribLocation(curProg, varName.c_str());
+
+    if(loc >= 0 && loc < numVAttribBindings)
+    {
+      vertexAttrBindings[loc + matrixRow] = i;
+    }
+  }
+}
+
+void GetCurrentBinding(GLuint curProg, ShaderReflection *refl, const ShaderResource &resource,
+                       uint32_t &slot, bool &used)
+{
   // in case of bugs, we readback into this array instead of a single int
   GLint dummyReadback[32];
 
@@ -2409,30 +2466,53 @@ void GetBindpointMapping(GLuint curProg, int shadIdx, const ShaderReflection *re
     dummyReadback[i] = 0x6c7b8a9d;
 #endif
 
-  const GLenum refEnum[] = {
+  const GLenum refEnums[] = {
       eGL_REFERENCED_BY_VERTEX_SHADER,          eGL_REFERENCED_BY_TESS_CONTROL_SHADER,
       eGL_REFERENCED_BY_TESS_EVALUATION_SHADER, eGL_REFERENCED_BY_GEOMETRY_SHADER,
       eGL_REFERENCED_BY_FRAGMENT_SHADER,        eGL_REFERENCED_BY_COMPUTE_SHADER,
   };
 
-  mapping.readOnlyResources.resize(refl->readOnlyResources.size());
-  for(size_t i = 0; i < refl->readOnlyResources.size(); i++)
+  const GLenum refEnum = refEnums[(uint32_t)refl->stage];
+
+  const GLenum atomicRefEnums[] = {
+      eGL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_VERTEX_SHADER,
+      eGL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_TESS_CONTROL_SHADER,
+      eGL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_TESS_EVALUATION_SHADER,
+      eGL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_GEOMETRY_SHADER,
+      eGL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_FRAGMENT_SHADER,
+      eGL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_COMPUTE_SHADER,
+  };
+
+  const GLenum atomicRefEnum = atomicRefEnums[(uint32_t)refl->stage];
+
+  if(refl->encoding == ShaderEncoding::OpenGLSPIRV)
   {
-    if(refl->readOnlyResources[i].isTexture)
+    if(resource.isTexture && resource.fixedBindNumber != ~0U)
+    {
+      GL.glGetUniformiv(curProg, resource.fixedBindNumber, dummyReadback);
+      slot = dummyReadback[0];
+      used = true;
+    }
+  }
+  else if(resource.isReadOnly)
+  {
+    if(resource.isTexture)
     {
       // normal sampler or image load/store
 
-      GLint loc = GL.glGetUniformLocation(curProg, refl->readOnlyResources[i].name.c_str());
+      GLint loc = GL.glGetUniformLocation(curProg, resource.name.c_str());
       if(loc >= 0)
       {
         GL.glGetUniformiv(curProg, loc, dummyReadback);
-        mapping.readOnlyResources[i].bindset = 0;
-        mapping.readOnlyResources[i].bind = dummyReadback[0];
-        mapping.readOnlyResources[i].arraySize = 1;
+        slot = dummyReadback[0];
+      }
+      else
+      {
+        slot = 0;
       }
 
       // handle sampler arrays, use the base name
-      rdcstr name = refl->readOnlyResources[i].name;
+      rdcstr name = resource.name;
       if(name.back() == ']')
       {
         do
@@ -2447,42 +2527,40 @@ void GetBindpointMapping(GLuint curProg, int shadIdx, const ShaderReflection *re
 
       if(idx == GL_INVALID_INDEX)
       {
-        mapping.readOnlyResources[i].used = false;
+        used = false;
       }
       else
       {
-        GLint used = 0;
-        GL.glGetProgramResourceiv(curProg, eGL_UNIFORM, idx, 1, &refEnum[shadIdx], 1, NULL, &used);
-        mapping.readOnlyResources[i].used = (used != 0);
+        GLint glUsed = 0;
+        GL.glGetProgramResourceiv(curProg, eGL_UNIFORM, idx, 1, &refEnum, 1, NULL, &glUsed);
+        used = (glUsed != 0);
       }
     }
     else
     {
-      mapping.readOnlyResources[i].bindset = -1;
-      mapping.readOnlyResources[i].bind = -1;
-      mapping.readOnlyResources[i].used = false;
-      mapping.readOnlyResources[i].arraySize = 1;
+      slot = 0;
+      used = false;
     }
   }
-
-  mapping.readWriteResources.resize(refl->readWriteResources.size());
-  for(size_t i = 0; i < refl->readWriteResources.size(); i++)
+  else
   {
-    if(refl->readWriteResources[i].isTexture)
+    if(resource.isTexture)
     {
       // image load/store
 
-      GLint loc = GL.glGetUniformLocation(curProg, refl->readWriteResources[i].name.c_str());
+      GLint loc = GL.glGetUniformLocation(curProg, resource.name.c_str());
       if(loc >= 0)
       {
         GL.glGetUniformiv(curProg, loc, dummyReadback);
-        mapping.readWriteResources[i].bindset = 0;
-        mapping.readWriteResources[i].bind = dummyReadback[0];
-        mapping.readWriteResources[i].arraySize = 1;
+        slot = dummyReadback[0];
+      }
+      else
+      {
+        slot = 0;
       }
 
       // handle sampler arrays, use the base name
-      rdcstr name = refl->readWriteResources[i].name;
+      rdcstr name = resource.name;
       if(name.back() == ']')
       {
         do
@@ -2497,31 +2575,27 @@ void GetBindpointMapping(GLuint curProg, int shadIdx, const ShaderReflection *re
 
       if(idx == GL_INVALID_INDEX)
       {
-        mapping.readWriteResources[i].used = false;
+        used = false;
       }
       else
       {
-        GLint used = 0;
-        GL.glGetProgramResourceiv(curProg, eGL_UNIFORM, idx, 1, &refEnum[shadIdx], 1, NULL, &used);
-        mapping.readWriteResources[i].used = (used != 0);
+        GLint glUsed = 0;
+        GL.glGetProgramResourceiv(curProg, eGL_UNIFORM, idx, 1, &refEnum, 1, NULL, &glUsed);
+        used = (glUsed != 0);
       }
     }
-    else if(!refl->readWriteResources[i].isTexture)
+    else
     {
-      if(refl->readWriteResources[i].variableType.columns == 1 &&
-         refl->readWriteResources[i].variableType.rows == 1 &&
-         refl->readWriteResources[i].variableType.baseType == VarType::UInt)
+      if(resource.variableType.columns == 1 && resource.variableType.rows == 1 &&
+         resource.variableType.baseType == VarType::UInt)
       {
         // atomic uint
-        GLuint idx = GL.glGetProgramResourceIndex(curProg, eGL_UNIFORM,
-                                                  refl->readWriteResources[i].name.c_str());
+        GLuint idx = GL.glGetProgramResourceIndex(curProg, eGL_UNIFORM, resource.name.c_str());
 
         if(idx == GL_INVALID_INDEX)
         {
-          mapping.readWriteResources[i].bindset = -1;
-          mapping.readWriteResources[i].bind = -1;
-          mapping.readWriteResources[i].used = false;
-          mapping.readWriteResources[i].arraySize = 1;
+          slot = 0;
+          used = false;
         }
         else
         {
@@ -2532,44 +2606,28 @@ void GetBindpointMapping(GLuint curProg, int shadIdx, const ShaderReflection *re
 
           if(atomicIndex == GL_INVALID_INDEX)
           {
-            mapping.readWriteResources[i].bindset = -1;
-            mapping.readWriteResources[i].bind = -1;
-            mapping.readWriteResources[i].used = false;
-            mapping.readWriteResources[i].arraySize = 1;
+            slot = 0;
+            used = false;
           }
           else
           {
             if(IsGLES)
             {
               prop = eGL_BUFFER_BINDING;
-              mapping.readWriteResources[i].bindset = 0;
               GL.glGetProgramResourceiv(curProg, eGL_ATOMIC_COUNTER_BUFFER, atomicIndex, 1, &prop,
-                                        1, NULL, &mapping.readWriteResources[i].bind);
-              GLint used = 0;
+                                        1, NULL, (GLint *)&slot);
+              GLint glUsed = 0;
               GL.glGetProgramResourceiv(curProg, eGL_ATOMIC_COUNTER_BUFFER, atomicIndex, 1,
-                                        &refEnum[shadIdx], 1, NULL, &used);
-              mapping.readWriteResources[i].used = (used != 0);
-              mapping.readWriteResources[i].arraySize = 1;
+                                        &refEnum, 1, NULL, &glUsed);
+              used = (glUsed != 0);
             }
             else
             {
-              const GLenum atomicRefEnum[] = {
-                  eGL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_VERTEX_SHADER,
-                  eGL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_TESS_CONTROL_SHADER,
-                  eGL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_TESS_EVALUATION_SHADER,
-                  eGL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_GEOMETRY_SHADER,
-                  eGL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_FRAGMENT_SHADER,
-                  eGL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_COMPUTE_SHADER,
-              };
-              mapping.readWriteResources[i].bindset = 0;
-              GL.glGetActiveAtomicCounterBufferiv(curProg, atomicIndex,
-                                                  eGL_ATOMIC_COUNTER_BUFFER_BINDING,
-                                                  &mapping.readWriteResources[i].bind);
-              GLint used = 0;
-              GL.glGetActiveAtomicCounterBufferiv(curProg, atomicIndex, atomicRefEnum[shadIdx],
-                                                  &used);
-              mapping.readWriteResources[i].used = (used != 0);
-              mapping.readWriteResources[i].arraySize = 1;
+              GL.glGetActiveAtomicCounterBufferiv(
+                  curProg, atomicIndex, eGL_ATOMIC_COUNTER_BUFFER_BINDING, (GLint *)&slot);
+              GLint glUsed = 0;
+              GL.glGetActiveAtomicCounterBufferiv(curProg, atomicIndex, atomicRefEnum, &glUsed);
+              used = (glUsed != 0);
             }
           }
         }
@@ -2577,113 +2635,24 @@ void GetBindpointMapping(GLuint curProg, int shadIdx, const ShaderReflection *re
       else
       {
         // shader storage buffer object
-        GLuint idx = GL.glGetProgramResourceIndex(curProg, eGL_SHADER_STORAGE_BLOCK,
-                                                  refl->readWriteResources[i].name.c_str());
+        GLuint idx =
+            GL.glGetProgramResourceIndex(curProg, eGL_SHADER_STORAGE_BLOCK, resource.name.c_str());
 
         if(idx == GL_INVALID_INDEX)
         {
-          mapping.readWriteResources[i].bindset = -1;
-          mapping.readWriteResources[i].bind = -1;
-          mapping.readWriteResources[i].used = false;
-          mapping.readWriteResources[i].arraySize = 1;
+          slot = 0;
+          used = false;
         }
         else
         {
           GLenum prop = eGL_BUFFER_BINDING;
-          mapping.readWriteResources[i].bindset = 0;
           GL.glGetProgramResourceiv(curProg, eGL_SHADER_STORAGE_BLOCK, idx, 1, &prop, 1, NULL,
-                                    &mapping.readWriteResources[i].bind);
-          GLint used = 0;
-          GL.glGetProgramResourceiv(curProg, eGL_SHADER_STORAGE_BLOCK, idx, 1, &refEnum[shadIdx], 1,
-                                    NULL, &used);
-          mapping.readWriteResources[i].used = (used != 0);
-          mapping.readWriteResources[i].arraySize = 1;
+                                    (GLint *)&slot);
+          GLint glUsed = 0;
+          GL.glGetProgramResourceiv(curProg, eGL_SHADER_STORAGE_BLOCK, idx, 1, &refEnum, 1, NULL,
+                                    &glUsed);
+          used = (glUsed != 0);
         }
-      }
-    }
-    else
-    {
-      mapping.readWriteResources[i].bindset = -1;
-      mapping.readWriteResources[i].bind = -1;
-      mapping.readWriteResources[i].used = false;
-      mapping.readWriteResources[i].arraySize = 1;
-    }
-  }
-
-  mapping.constantBlocks.resize(refl->constantBlocks.size());
-  for(size_t i = 0; i < refl->constantBlocks.size(); i++)
-  {
-    if(refl->constantBlocks[i].bufferBacked)
-    {
-      GLint loc = GL.glGetUniformBlockIndex(curProg, refl->constantBlocks[i].name.c_str());
-      if(loc >= 0)
-      {
-        GL.glGetActiveUniformBlockiv(curProg, loc, eGL_UNIFORM_BLOCK_BINDING, dummyReadback);
-        mapping.constantBlocks[i].bindset = 0;
-        mapping.constantBlocks[i].bind = dummyReadback[0];
-        mapping.constantBlocks[i].arraySize = 1;
-      }
-    }
-    else
-    {
-      mapping.constantBlocks[i].bindset = -1;
-      mapping.constantBlocks[i].bind = -1;
-      mapping.constantBlocks[i].arraySize = 1;
-    }
-
-    if(!refl->constantBlocks[i].bufferBacked)
-    {
-      mapping.constantBlocks[i].used = true;
-    }
-    else
-    {
-      GLuint idx = GL.glGetProgramResourceIndex(curProg, eGL_UNIFORM_BLOCK,
-                                                refl->constantBlocks[i].name.c_str());
-      if(idx == GL_INVALID_INDEX)
-      {
-        mapping.constantBlocks[i].used = false;
-      }
-      else
-      {
-        GLint used = 0;
-        GL.glGetProgramResourceiv(curProg, eGL_UNIFORM_BLOCK, idx, 1, &refEnum[shadIdx], 1, NULL,
-                                  &used);
-        mapping.constantBlocks[i].used = (used != 0);
-      }
-    }
-  }
-
-  GLint numVAttribBindings = 16;
-  GL.glGetIntegerv(eGL_MAX_VERTEX_ATTRIBS, &numVAttribBindings);
-
-  mapping.inputAttributes.resize(numVAttribBindings);
-  for(int32_t i = 0; i < numVAttribBindings; i++)
-    mapping.inputAttributes[i] = -1;
-
-  // override identity map with bindings
-  if(shadIdx == 0)
-  {
-    for(int32_t i = 0; i < refl->inputSignature.count(); i++)
-    {
-      // skip system inputs, as some drivers will return a location for them
-      if(refl->inputSignature[i].systemValue != ShaderBuiltin::Undefined)
-        continue;
-
-      int32_t matrixRow = 0;
-      rdcstr varName = refl->inputSignature[i].varName;
-
-      int32_t offs = varName.find(":col");
-      if(offs >= 0)
-      {
-        matrixRow = varName[offs + 4] - '0';
-        varName.resize(offs);
-      }
-
-      GLint loc = GL.glGetAttribLocation(curProg, varName.c_str());
-
-      if(loc >= 0 && loc < numVAttribBindings)
-      {
-        mapping.inputAttributes[loc + matrixRow] = i;
       }
     }
   }
@@ -2695,13 +2664,15 @@ void GetBindpointMapping(GLuint curProg, int shadIdx, const ShaderReflection *re
 #endif
 }
 
-void EvaluateSPIRVBindpointMapping(GLuint curProg, int shadIdx, const ShaderReflection *refl,
-                                   ShaderBindpointMapping &mapping)
+void GetCurrentBinding(GLuint curProg, ShaderReflection *refl, const ConstantBlock &cblock,
+                       uint32_t &slot, bool &used)
 {
-  // this is similar in principle to GetBindpointMapping - we want to look up the actual uniform
-  // values right now and replace the bindpoint mapping list. However for SPIR-V we can't call
-  // glGetUniformLocation. Instead we assume the *current* bind value is a location, and we
-  // overwrite it with the read uniform value.
+  if(refl->encoding == ShaderEncoding::OpenGLSPIRV)
+  {
+    // It's fuzzy on whether UBOs can be remapped with glUniformBlockBinding so for now we hope that
+    // anyone using UBOs and SPIR-V will at least specify immutable bindings in the SPIR-V.
+    return;
+  }
 
   // in case of bugs, we readback into this array instead of a single int
   GLint dummyReadback[32];
@@ -2711,103 +2682,45 @@ void EvaluateSPIRVBindpointMapping(GLuint curProg, int shadIdx, const ShaderRefl
     dummyReadback[i] = 0x6c7b8a9d;
 #endif
 
-  // GL_ARB_gl_spirv spec says that glBindAttribLocation does nothing on SPIR-V, so we don't have to
-  // remap inputAttributes.
+  const GLenum refEnums[] = {
+      eGL_REFERENCED_BY_VERTEX_SHADER,          eGL_REFERENCED_BY_TESS_CONTROL_SHADER,
+      eGL_REFERENCED_BY_TESS_EVALUATION_SHADER, eGL_REFERENCED_BY_GEOMETRY_SHADER,
+      eGL_REFERENCED_BY_FRAGMENT_SHADER,        eGL_REFERENCED_BY_COMPUTE_SHADER,
+  };
 
-  // It's fuzzy on whether UBOs can be remapped with glUniformBlockBinding so for now we hope that
-  // anyone using UBOs and SPIR-V will at least specify immutable bindings in the SPIR-V.
-  for(size_t i = 0; i < mapping.constantBlocks.size(); i++)
+  const GLenum refEnum = refEnums[(uint32_t)refl->stage];
+
+  if(cblock.bufferBacked)
   {
-    Bindpoint &bind = mapping.constantBlocks[i];
-
-    if(!bind.used)
-      continue;
-
-    if(bind.bind < 0)
+    GLint loc = GL.glGetUniformBlockIndex(curProg, cblock.name.c_str());
+    if(loc >= 0)
     {
-      RDCERR("Invalid constant block binding found: '%s' = %d",
-             refl->constantBlocks[i].name.c_str(), bind.bind);
-      bind.bind = 0;
+      GL.glGetActiveUniformBlockiv(curProg, loc, eGL_UNIFORM_BLOCK_BINDING, dummyReadback);
+      slot = dummyReadback[0];
     }
   }
-
-  // shouldn't have any separate samplers - this is GL
-  RDCASSERT(mapping.samplers.size() == 0);
-
-  // for other resources we handle textures only, other resource types are assumed to have valid fix
-  // binds already. Any negative inputs are locations, so get the uniform value and assign it as the
-  // binding index.
-  for(size_t i = 0; i < refl->readOnlyResources.size(); i++)
+  else
   {
-    if(!mapping.readOnlyResources[i].used)
-      continue;
+    slot = 0;
+  }
 
-    if(refl->readOnlyResources[i].isTexture && mapping.readOnlyResources[i].bind < 0)
+  if(!cblock.bufferBacked)
+  {
+    used = true;
+  }
+  else
+  {
+    GLuint idx = GL.glGetProgramResourceIndex(curProg, eGL_UNIFORM_BLOCK, cblock.name.c_str());
+    if(idx == GL_INVALID_INDEX)
     {
-      GL.glGetUniformiv(curProg, -mapping.readOnlyResources[i].bind, dummyReadback);
-      mapping.readOnlyResources[i].bind = dummyReadback[0];
-
-      if(mapping.readOnlyResources[i].bind < 0)
-      {
-        RDCERR("Invalid uniform value retrieved: '%s' = %d",
-               refl->readOnlyResources[i].name.c_str(), mapping.readOnlyResources[i].bind);
-        mapping.readOnlyResources[i].bind = 0;
-      }
+      used = false;
     }
     else
     {
-      if(mapping.readOnlyResources[i].bind < 0)
-      {
-        RDCERR("Invalid read-only resource binding found: '%s' = %d",
-               refl->readOnlyResources[i].name.c_str(), mapping.readOnlyResources[i].bind);
-        mapping.readOnlyResources[i].bind = 0;
-      }
+      GLint glUsed = 0;
+      GL.glGetProgramResourceiv(curProg, eGL_UNIFORM_BLOCK, idx, 1, &refEnum, 1, NULL, &glUsed);
+      used = (glUsed != 0);
     }
-  }
-
-  for(size_t i = 0; i < refl->readWriteResources.size(); i++)
-  {
-    if(!mapping.readWriteResources[i].used)
-      continue;
-
-    if(refl->readWriteResources[i].isTexture && mapping.readWriteResources[i].bind < 0)
-    {
-      GL.glGetUniformiv(curProg, -mapping.readWriteResources[i].bind, dummyReadback);
-      mapping.readWriteResources[i].bind = dummyReadback[0];
-
-      if(mapping.readWriteResources[i].bind < 0)
-      {
-        RDCERR("Invalid uniform value retrieved: '%s' = %d",
-               refl->readWriteResources[i].name.c_str(), mapping.readWriteResources[i].bind);
-        mapping.readWriteResources[i].bind = 0;
-      }
-    }
-    else
-    {
-      if(mapping.readWriteResources[i].bind < 0)
-      {
-        RDCERR("Invalid read-only resource binding found: '%s' = %d",
-               refl->readWriteResources[i].name.c_str(), mapping.readWriteResources[i].bind);
-        mapping.readWriteResources[i].bind = 0;
-      }
-    }
-  }
-
-  for(size_t i = 0; i < mapping.inputAttributes.size(); i++)
-    if(mapping.inputAttributes[i] < 0)
-      mapping.inputAttributes[i] = -1;
-
-  // ensure the mapping contains a value for all valid vertex attribs, even if it doesn't use them.
-  GLint numVAttribBindings = 16;
-  GL.glGetIntegerv(eGL_MAX_VERTEX_ATTRIBS, &numVAttribBindings);
-
-  // if more vertex attribs exist, resize and set them all to -1
-  if(numVAttribBindings > mapping.inputAttributes.count())
-  {
-    size_t prevSize = mapping.inputAttributes.size();
-    mapping.inputAttributes.resize(numVAttribBindings);
-    for(size_t i = prevSize; i < mapping.inputAttributes.size(); i++)
-      mapping.inputAttributes[i] = -1;
   }
 
 #if ENABLED(RDOC_DEVEL)
@@ -2815,154 +2728,4 @@ void EvaluateSPIRVBindpointMapping(GLuint curProg, int shadIdx, const ShaderRefl
     if(dummyReadback[i] != 0x6c7b8a9d)
       RDCERR("Invalid uniform readback - data beyond first element modified!");
 #endif
-}
-
-// first int - the mapping index, second int - the binding
-typedef rdcarray<rdcpair<size_t, int> > Permutation;
-
-// copy permutation by value since we mutate it to track the algorithm
-static void ApplyPermutation(Permutation permutation, std::function<void(size_t, size_t)> DoSwap)
-{
-  // permutations can always be decomposed into a series of disjoint cycles (one or more). Think
-  // of
-  // e.g:
-  //
-  // 0  1  2  3  4  5  6  7  8  9 10 11 12
-  // 8  0  4  5  2  11 1  12 6  3 10 9  7
-  //
-  // this is multiple cycles: 0 -> 8, 8 -> 6, 6 -> 1, 1 -> 0
-  //                          2 -> 4, 4 -> 2
-  //                          3 -> 5, 5 -> 11, 11 -> 9, 9 -> 3
-  //                          7 -> 12, 12 -> 7
-  //                          10 -> 10
-  //
-  // The general case is we just iterate along the permutation, find the first element that
-  // isn't in
-  // the right place, and then follow the cycle along - swapping the first element along into
-  // place
-  // until we eventually find that the cycle closes and we've swapped the first element into the
-  // right place. As we go we set the permutation values to an invalid marker so we know that
-  // they've been processed by a previous cycle when we continue with the iteration.
-  //
-  // This boils down to nothing in the case where the cycle is 2 long, it's just one swap.
-
-  size_t processedIdx = permutation.size();
-
-  for(size_t i = 0; i < permutation.size(); i++)
-  {
-    size_t dst = permutation[i].first;
-
-    // check if i is already in place or is already processed
-    if(i == dst || dst == processedIdx)
-      continue;
-
-    size_t src = i;
-
-    do
-    {
-      // do this swap
-      DoSwap(src, dst);
-
-      // mark this permutation as processed
-      permutation[src].first = processedIdx;
-
-      // move onto the next link in the cycle
-      src = dst;
-      dst = permutation[src].first;
-
-      // stop when we reach the start again - we've already done the swap to put this into place
-    } while(dst != i);
-
-    // close the cycle marking the last one as processed
-    permutation[src].first = processedIdx;
-  }
-}
-
-void ResortBindings(ShaderReflection *refl, ShaderBindpointMapping *mapping)
-{
-  // In addition to the annoyance with texture unit handling in GL below, there's also an additional
-  // problem with the way bindings are handled. Nominally we have a set of bindings reflected out
-  // from the shader - these may come in alphabetical, declaration, location, or some other
-  // implementation defined order. We want a single fixed set of bindings so that the same shader
-  // always presents the same set of bindings to the user. However we can't use this reflected order
-  // as the set, because the mapping from these binds to the actual API slots used is *mutable*. If
-  // it were fixed at shader compile/specification time then we could sort it once after reflection
-  // and then go on with our lives, however because it's mutable we have to do the sort here based
-  // on the latest uniform values.
-  //
-  // Other alternatives would be to never sort, but then we land ourselves in a quagmire where the
-  // bindings could be "diffuse, normals, shadow, depthbuffer" in reflected order, but then
-  // depthbuffer could be assigned to slot 0 - then we are listing the textures in an arbitrary
-  // unsorted order. It's not possible to sort by current binding anywhere above this level because
-  // we don't want to do this in any of the generic code. No matter how we represent the bindings,
-  // this fundamentally comes down to two competing orders: The order that actually makes sense (but
-  // is mutable), and the order that is fixed at reflection time (but is useless).
-  //
-  // In general the hope is that no-one actually makes use of this ability to remap uniform values
-  // at runtime, and in practice everyone either uses the layout qualifiers in shaders to fix the
-  // bindings are shader compile time anyway (hah), or they reflect the samplers and set them one
-  // time, then leave them fixed. In the worst case, if an application does actually remap the
-  // uniforms from action to action, they will end up seeing the bindings re-order themselves in the
-  // UI.
-  // This might be confusing, but it's a) technically what the application is actually doing, from a
-  // certain perspective, and b) limited to a very small niche of people that are doing something
-  // kind of ridiculous.
-  //
-  // So here we re-sort the actual reflection data and bindpoint mapping so that the 'bind' is in
-  // ascending order. It looks ugly because it is ugly.
-
-  if(!refl || !mapping)
-    return;
-
-  Permutation permutation;
-
-  // sort by the binding
-  struct permutation_sort
-  {
-    bool operator()(const rdcpair<size_t, int> &a, const rdcpair<size_t, int> &b) const
-    {
-      return a.second < b.second;
-    }
-  };
-
-  permutation.resize(mapping->readOnlyResources.size());
-  for(size_t i = 0; i < mapping->readOnlyResources.size(); i++)
-    permutation[i] = make_rdcpair(i, mapping->readOnlyResources[i].bind);
-
-  std::sort(permutation.begin(), permutation.end(), permutation_sort());
-
-  // apply the permutation to the mapping array, and update the bindPoint values in the shader
-  // reflection to match, so that the re-order is applied
-  ApplyPermutation(permutation, [mapping](size_t a, size_t b) {
-    std::swap(mapping->readOnlyResources[a], mapping->readOnlyResources[b]);
-  });
-
-  for(size_t i = 0; i < permutation.size(); i++)
-    refl->readOnlyResources[permutation[i].first].bindPoint = (int)i;
-
-  permutation.resize(mapping->readWriteResources.size());
-  for(size_t i = 0; i < mapping->readWriteResources.size(); i++)
-    permutation[i] = make_rdcpair(i, mapping->readWriteResources[i].bind);
-
-  std::sort(permutation.begin(), permutation.end(), permutation_sort());
-
-  ApplyPermutation(permutation, [mapping](size_t a, size_t b) {
-    std::swap(mapping->readWriteResources[a], mapping->readWriteResources[b]);
-  });
-
-  for(size_t i = 0; i < permutation.size(); i++)
-    refl->readWriteResources[permutation[i].first].bindPoint = (int)i;
-
-  permutation.resize(mapping->constantBlocks.size());
-  for(size_t i = 0; i < mapping->constantBlocks.size(); i++)
-    permutation[i] = make_rdcpair(i, mapping->constantBlocks[i].bind);
-
-  std::sort(permutation.begin(), permutation.end(), permutation_sort());
-
-  ApplyPermutation(permutation, [mapping](size_t a, size_t b) {
-    std::swap(mapping->constantBlocks[a], mapping->constantBlocks[b]);
-  });
-
-  for(size_t i = 0; i < permutation.size(); i++)
-    refl->constantBlocks[permutation[i].first].bindPoint = (int)i;
 }

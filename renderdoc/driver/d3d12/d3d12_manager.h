@@ -137,6 +137,7 @@ struct D3D12_SHADER_RESOURCE_VIEW_DESC_SQUEEZED
   union
   {
     D3D12_BUFFER_SRV Buffer;
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_SRV AS;
     D3D12_TEX1D_SRV Texture1D;
     D3D12_TEX1D_ARRAY_SRV Texture1DArray;
     D3D12_TEX2D_SRV Texture2D;
@@ -157,6 +158,8 @@ struct D3D12_SHADER_RESOURCE_VIEW_DESC_SQUEEZED
     // D3D12_TEX2D_ARRAY_SRV should be the largest component, so we can copy it and ensure we've
     // copied the rest.
     RDCCOMPILE_ASSERT(sizeof(Buffer) <= sizeof(Texture2DArray),
+                      "Texture2DArray isn't largest union member!");
+    RDCCOMPILE_ASSERT(sizeof(AS) <= sizeof(Texture2DArray),
                       "Texture2DArray isn't largest union member!");
     RDCCOMPILE_ASSERT(sizeof(Texture1D) <= sizeof(Texture2DArray),
                       "Texture2DArray isn't largest union member!");
@@ -573,17 +576,6 @@ class D3D12GpuBufferAllocator;
 
 struct D3D12GpuBuffer
 {
-  D3D12GpuBuffer()
-      : m_alignedAddress(0),
-        m_offset(0),
-        m_alignment(0),
-        m_addressContentSize(0),
-        m_heapType(D3D12GpuBufferHeapType::UnInitialized),
-        m_heapMemory(D3D12GpuBufferHeapMemoryFlag::UnInitialized),
-        m_resource(NULL)
-  {
-  }
-
   D3D12GpuBuffer(D3D12GpuBufferHeapType heapType, D3D12GpuBufferHeapMemoryFlag heapMemory,
                  uint64_t size, uint64_t alignment, D3D12_GPU_VIRTUAL_ADDRESS alignedAddress,
                  ID3D12Resource *resource)
@@ -595,11 +587,17 @@ struct D3D12GpuBuffer
         m_heapMemory(heapMemory),
         m_resource(resource)
   {
+    m_RefCount = 1;
     if(m_resource)
     {
       m_offset = alignedAddress - m_resource->GetGPUVirtualAddress();
     }
   }
+
+  // disable copying, these should be passed via pointer so the refcounting works as expected
+  D3D12GpuBuffer(const D3D12GpuBuffer &) = delete;
+  D3D12GpuBuffer(D3D12GpuBuffer &&) = delete;
+  D3D12GpuBuffer &operator=(const D3D12GpuBuffer &) = delete;
 
   D3D12GpuBufferHeapType HeapType() const { return m_heapType; }
   D3D12_HEAP_TYPE GetD3D12HeapType() const
@@ -637,9 +635,21 @@ struct D3D12GpuBuffer
   uint64_t Size() const { return m_addressContentSize; }
   D3D12_GPU_VIRTUAL_ADDRESS Address() const { return m_alignedAddress; }
   uint64_t Alignment() const { return m_alignment; }
-  bool Release();
+  void AddRef();
+  void Release();
   D3D12GpuBufferHeapMemoryFlag HeapMemory() const { return m_heapMemory; }
+
+  void *Map(D3D12_RANGE *pReadRange = NULL)
+  {
+    byte *ret = NULL;
+    if(FAILED(m_resource->Map(0, pReadRange, (void **)&ret)))
+      return NULL;
+    ret += m_offset;
+    return ret;
+  }
+  void Unmap(D3D12_RANGE *pWrittenRange = NULL) { m_resource->Unmap(0, pWrittenRange); }
 private:
+  unsigned int m_RefCount;
   D3D12_GPU_VIRTUAL_ADDRESS m_alignedAddress;
   uint64_t m_offset;
   uint64_t m_alignment;
@@ -856,15 +866,15 @@ public:
                                uint64_t dataSize);
 
   bool Alloc(D3D12GpuBufferHeapType heapType, D3D12GpuBufferHeapMemoryFlag heapMem, uint64_t size,
-             D3D12GpuBuffer &gpuBuffer)
+             D3D12GpuBuffer **gpuBuffer)
   {
     return Alloc(heapType, heapMem, size, 0, gpuBuffer);
   }
 
   bool Alloc(D3D12GpuBufferHeapType heapType, D3D12GpuBufferHeapMemoryFlag heapMem, uint64_t size,
-             uint64_t alignment, D3D12GpuBuffer &gpuBuffer);
+             uint64_t alignment, D3D12GpuBuffer **gpuBuffer);
 
-  bool Release(const D3D12GpuBuffer &gpuBuffer);
+  void Release(const D3D12GpuBuffer &gpuBuffer);
 
   uint64_t GetAllocatedMemorySize() const { return m_totalAllocatedMemoryInUse; }
   ~D3D12GpuBufferAllocator()
@@ -992,9 +1002,9 @@ private:
     }
 
     bool Alloc(WrappedID3D12Device *wrappedDevice, D3D12GpuBufferHeapMemoryFlag heapMem,
-               uint64_t size, uint64_t alignment, D3D12GpuBuffer &gpuBuffer);
+               uint64_t size, uint64_t alignment, D3D12GpuBuffer **gpuBuffer);
 
-    bool Free(const D3D12GpuBuffer &gpuBuffer);
+    void Free(const D3D12GpuBuffer &gpuBuffer);
 
     static constexpr uint64_t kDefaultWithUavSizeBufferInitSize = 1000ull * 8u;
     static constexpr uint64_t kAccStructBufferPoolInitSize = 1000ull * 256u;
@@ -1020,12 +1030,22 @@ private:
   uint64_t m_totalAllocatedMemoryInUse;
 };
 
-enum class D3D12PatchAccStructRootParamIndices
+enum class D3D12PatchTLASBuildParam
 {
   RootConstantBuffer,
   RootAddressPairSrv,
   RootPatchedAddressUav,
   Count
+};
+
+enum class D3D12PatchRayDispatchParam
+{
+  RootConstantBuffer,
+  DestBuffer,
+  StateObjectData,
+  RecordData,
+  RootSigData,
+  Count,
 };
 
 struct D3D12AccStructPatchInfo
@@ -1034,6 +1054,29 @@ struct D3D12AccStructPatchInfo
   ID3D12RootSignature *m_rootSignature;
   ID3D12PipelineState *m_pipeline;
 };
+
+struct PatchedRayDispatch
+{
+  struct Resources
+  {
+    // the lookup buffer
+    D3D12GpuBuffer *lookupBuffer;
+    // the scratch buffer used for patching's fence.
+    D3D12GpuBuffer *patchScratchBuffer;
+
+    // for convenience, when these resources are referenced in a queue they get a fence value to
+    // indicate when they're safe to release. This values are unset when returned from patching or
+    // referenced in the list and is set in each queue's copy of the references.
+    UINT64 fenceValue = 0;
+  };
+
+  Resources resources;
+
+  // the patched dispatch descriptor
+  D3D12_DISPATCH_RAYS_DESC desc = {};
+};
+
+struct D3D12ShaderExportDatabase;
 
 class D3D12RaytracingResourceAndUtilHandler
 {
@@ -1055,12 +1098,33 @@ public:
     SAFE_RELEASE(m_gpuFence);
     SAFE_RELEASE(m_accStructPatchInfo.m_rootSignature);
     SAFE_RELEASE(m_accStructPatchInfo.m_pipeline);
+    SAFE_RELEASE(m_RayPatchingData.rootSig);
+    SAFE_RELEASE(m_RayPatchingData.pipe);
   }
 
   void InitInternalResources();
 
+  uint32_t RegisterLocalRootSig(const D3D12RootSignature &sig);
+
+  void RegisterExportDatabase(D3D12ShaderExportDatabase *db);
+  void UnregisterExportDatabase(D3D12ShaderExportDatabase *db);
+
+  PatchedRayDispatch PatchRayDispatch(ID3D12GraphicsCommandList4 *unwrappedCmd,
+                                      rdcarray<ResourceId> heaps,
+                                      const D3D12_DISPATCH_RAYS_DESC &desc);
+
+  void ResizeSerialisationBuffer(UINT64 size);
+
+  // buffer in UAV state for emitting AS queries to, CPU accessible/mappable
+  D3D12GpuBuffer *ASQueryBuffer = NULL;
+
+  // temp buffer for AS serialise copies
+  D3D12GpuBuffer *ASSerialiseBuffer = NULL;
+
 private:
+  void InitRayDispatchPatchingResources();
   void InitReplayBlasPatchingResources();
+
   WrappedID3D12Device *m_wrappedDevice;
 
   ID3D12GraphicsCommandListX *m_cmdList;
@@ -1070,6 +1134,29 @@ private:
   HANDLE m_gpuSyncHandle;
   UINT64 m_gpuSyncCounter;
   D3D12AccStructPatchInfo m_accStructPatchInfo;
+
+  Threading::CriticalSection m_LookupBufferLock;
+
+  D3D12GpuBuffer *m_LookupBuffer = NULL;
+  D3D12_GPU_VIRTUAL_ADDRESS m_LookupAddrs[3] = {};
+
+  // each unique set of descriptor table offsets are stored here, so any root signatures which
+  // only vary in ways that don't affect which tables are contained within them (and so don't
+  // need patching) will have a single entry in here
+  rdcarray<rdcarray<uint32_t>> m_UniqueLocalRootSigs;
+
+  // export databases that are alive
+  rdcarray<D3D12ShaderExportDatabase *> m_ExportDatabases;
+
+  // is the lookup buffer dirty and needs to be recreated with the latest data?
+  bool m_LookupBufferDirty = true;
+
+  // pipeline data for patching ray dispatches
+  struct
+  {
+    ID3D12RootSignature *rootSig = NULL;
+    ID3D12PipelineState *pipe = NULL;
+  } m_RayPatchingData;
 };
 
 struct D3D12ResourceManagerConfiguration
@@ -1086,8 +1173,8 @@ public:
   D3D12ResourceManager(CaptureState &state, WrappedID3D12Device *dev)
       : ResourceManager(state), m_Device(dev)
   {
-    m_raytracingResourceManager = new D3D12RaytracingResourceAndUtilHandler(m_Device);
     D3D12GpuBufferAllocator::Initialize(dev);
+    m_raytracingResourceManager = new D3D12RaytracingResourceAndUtilHandler(m_Device);
   }
 
   ~D3D12ResourceManager()

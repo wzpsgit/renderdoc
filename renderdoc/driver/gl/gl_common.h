@@ -618,13 +618,13 @@ GLint GetNumVertexBuffers();
 struct ShaderReflection;
 struct ShaderBindpointMapping;
 
-void EvaluateSPIRVBindpointMapping(GLuint curProg, int shadIdx, const ShaderReflection *refl,
-                                   ShaderBindpointMapping &mapping);
+void EvaluateVertexAttributeBinds(GLuint curProg, const ShaderReflection *refl, bool spirv,
+                                  rdcarray<int32_t> &vertexAttrBindings);
 
-void GetBindpointMapping(GLuint curProg, int shadIdx, const ShaderReflection *refl,
-                         ShaderBindpointMapping &mapping);
-
-void ResortBindings(ShaderReflection *refl, ShaderBindpointMapping *mapping);
+void GetCurrentBinding(GLuint curProg, ShaderReflection *refl, const ShaderResource &resource,
+                       uint32_t &slot, bool &used);
+void GetCurrentBinding(GLuint curProg, ShaderReflection *refl, const ConstantBlock &cblock,
+                       uint32_t &slot, bool &used);
 
 // calls glBlitFramebuffer but ensures no state can interfere like scissor or color mask
 // pops state for only a single drawbuffer!

@@ -255,7 +255,7 @@ struct VulkanPostVSData
 struct VKDynamicShaderFeedback
 {
   bool compute = false, valid = false;
-  rdcarray<BindpointIndex> used;
+  rdcarray<DescriptorAccess> access;
   rdcarray<ShaderMessage> messages;
 };
 
@@ -324,6 +324,9 @@ public:
   ResourceDescription &GetResourceDesc(ResourceId id);
   rdcarray<ResourceDescription> GetResources();
 
+  rdcarray<DescriptorStoreDescription> GetDescriptorStores();
+  void RegisterDescriptorStore(const DescriptorStoreDescription &desc);
+
   rdcarray<BufferDescription> GetBuffers();
   BufferDescription GetBuffer(ResourceId id);
 
@@ -349,6 +352,13 @@ public:
     m_VulkanPipelineState = vk;
   }
   void SavePipelineState(uint32_t eventId);
+  rdcarray<Descriptor> GetDescriptors(ResourceId descriptorStore,
+                                      const rdcarray<DescriptorRange> &ranges);
+  rdcarray<SamplerDescriptor> GetSamplerDescriptors(ResourceId descriptorStore,
+                                                    const rdcarray<DescriptorRange> &ranges);
+  rdcarray<DescriptorAccess> GetDescriptorAccess(uint32_t eventId);
+  rdcarray<DescriptorLogicalLocation> GetDescriptorLocations(ResourceId descriptorStore,
+                                                             const rdcarray<DescriptorRange> &ranges);
   void FreeTargetResource(ResourceId id);
 
   RDResult ReadLogInitialisation(RDCFile *rdc, bool storeStructuredBuffers);
@@ -488,6 +498,9 @@ public:
 private:
   bool FetchShaderFeedback(uint32_t eventId);
   void ClearFeedbackCache();
+
+  void FillDescriptor(Descriptor &dstel, const DescriptorSetSlot &srcel);
+  void FillSamplerDescriptor(SamplerDescriptor &dstel, const DescriptorSetSlot &srcel);
 
   void PatchReservedDescriptors(const VulkanStatePipeline &pipe, VkDescriptorPool &descpool,
                                 rdcarray<VkDescriptorSetLayout> &setLayouts,
@@ -813,6 +826,7 @@ private:
   ShaderDebugData m_ShaderDebugData;
 
   rdcarray<ResourceDescription> m_Resources;
+  rdcarray<DescriptorStoreDescription> m_DescriptorStores;
   std::map<ResourceId, size_t> m_ResourceIdx;
 
   VKPipe::State *m_VulkanPipelineState = NULL;

@@ -81,6 +81,7 @@ struct QueueReadbackData
 class WrappedID3D12Device;
 class WrappedID3D12Resource;
 class WrappedID3D12PipelineState;
+class D3D12AccelerationStructure;
 
 class D3D12Replay;
 class D3D12TextRenderer;
@@ -605,6 +606,8 @@ private:
   ID3D12Device12 *m_pDevice12;
   ID3D12DeviceDownlevel *m_pDownlevel;
 
+  WrappedID3D12DeviceConfiguration m_DevConfig;
+
   // list of all queues being captured
   rdcarray<WrappedID3D12CommandQueue *> m_Queues;
   rdcarray<ID3D12Fence *> m_QueueFences;
@@ -618,6 +621,24 @@ private:
   // it) and us releasing our reference on them.
   rdcarray<WrappedID3D12CommandQueue *> m_RefQueues;
   rdcarray<ID3D12Resource *> m_RefBuffers;
+
+  rdcarray<D3D12ResourceRecord *> m_ForcedReferences;
+  Threading::CriticalSection m_ForcedReferencesLock;
+  bool m_HaveSeenASBuild = false;
+
+  int64_t m_QueueCounter = 0;
+
+  rdcarray<D3D12ResourceRecord *> GetForcedReferences()
+  {
+    rdcarray<D3D12ResourceRecord *> ret;
+
+    {
+      SCOPED_LOCK(m_ForcedReferencesLock);
+      ret = m_ForcedReferences;
+    }
+
+    return ret;
+  }
 
   // the queue we use for all internal work, the first DIRECT queue
   WrappedID3D12CommandQueue *m_Queue;
@@ -789,6 +810,7 @@ private:
   D3D12_FEATURE_DATA_D3D12_OPTIONS1 m_D3D12Opts1;
   D3D12_FEATURE_DATA_D3D12_OPTIONS2 m_D3D12Opts2;
   D3D12_FEATURE_DATA_D3D12_OPTIONS3 m_D3D12Opts3;
+  D3D12_FEATURE_DATA_D3D12_OPTIONS5 m_D3D12Opts5;
   D3D12_FEATURE_DATA_D3D12_OPTIONS6 m_D3D12Opts6;
   D3D12_FEATURE_DATA_D3D12_OPTIONS7 m_D3D12Opts7;
   D3D12_FEATURE_DATA_D3D12_OPTIONS9 m_D3D12Opts9;
@@ -826,6 +848,7 @@ public:
   const D3D12_FEATURE_DATA_D3D12_OPTIONS1 &GetOpts1() { return m_D3D12Opts1; }
   const D3D12_FEATURE_DATA_D3D12_OPTIONS2 &GetOpts2() { return m_D3D12Opts2; }
   const D3D12_FEATURE_DATA_D3D12_OPTIONS3 &GetOpts3() { return m_D3D12Opts3; }
+  const D3D12_FEATURE_DATA_D3D12_OPTIONS5 &GetOpts5() { return m_D3D12Opts5; }
   const D3D12_FEATURE_DATA_D3D12_OPTIONS6 &GetOpts6() { return m_D3D12Opts6; }
   const D3D12_FEATURE_DATA_D3D12_OPTIONS7 &GetOpts7() { return m_D3D12Opts7; }
   const D3D12_FEATURE_DATA_D3D12_OPTIONS9 &GetOpts9() { return m_D3D12Opts9; }
@@ -834,6 +857,12 @@ public:
   const D3D12_FEATURE_DATA_D3D12_OPTIONS15 &GetOpts15() { return m_D3D12Opts15; }
   const D3D12_FEATURE_DATA_D3D12_OPTIONS16 &GetOpts16() { return m_D3D12Opts16; }
   void RemoveQueue(WrappedID3D12CommandQueue *queue);
+
+  void AddForcedReference(D3D12ResourceRecord *record)
+  {
+    SCOPED_LOCK(m_ForcedReferencesLock);
+    m_ForcedReferences.push_back(record);
+  }
 
   // only valid on replay
   const std::map<ResourceId, WrappedID3D12Resource *> &GetResourceList() { return *m_ResourceList; }
@@ -859,7 +888,7 @@ public:
   ID3D12Device9 *GetReal9() const { return m_pDevice9; }
   static rdcstr GetChunkName(uint32_t idx);
   D3D12ResourceManager *GetResourceManager() { return m_ResourceManager; }
-  D3D12ShaderCache *GetShaderCache() { return m_ShaderCache; }
+  D3D12ShaderCache *GetShaderCache();
   D3D12DebugManager *GetDebugManager();
   ResourceId GetResourceID() { return m_ResourceID; }
   Threading::RWLock &GetCapTransitionLock() { return m_CapTransitionLock; }
@@ -966,6 +995,12 @@ public:
   // ExecuteLists may issue this many command lists together. If more than this are
   // pending at once then they will be split up and issued in multiple calls.
   static const UINT executeListsMaxSize = 50;
+
+  // GPU side pair-struct for remapping BLAS addresses just in time before builds
+  uint32_t m_blasAddressCount = 0;
+  ID3D12Resource *m_blasAddressBufferResource = NULL;
+  ID3D12Resource *m_blasAddressBufferUploadResource = NULL;
+  bool m_addressBufferUploaded = false;
 
   ID3D12GraphicsCommandListX *GetNewList();
   ID3D12GraphicsCommandListX *GetInitialStateList();
@@ -1235,9 +1270,7 @@ public:
 
   void UploadBLASBufferAddresses();
   ID3D12Resource *GetBLASAddressBufferResource() const { return m_blasAddressBufferResource; }
-  ID3D12Resource *m_blasAddressBufferResource = NULL;
-  ID3D12Resource *m_blasAddressBufferUploadResource = NULL;
-  bool m_addressBufferUploaded = false;
+  uint32_t GetBLASAddressCount() const { return m_blasAddressCount; }
 
   void ReleaseResource(ID3D12DeviceChild *pResource);
 
@@ -1250,6 +1283,11 @@ public:
   IMPLEMENT_FUNCTION_THREAD_SERIALISED(void, SetName, ID3D12DeviceChild *pResource, const char *Name);
   IMPLEMENT_FUNCTION_THREAD_SERIALISED(HRESULT, SetShaderDebugPath, ID3D12DeviceChild *pResource,
                                        const char *Path);
+
+  IMPLEMENT_FUNCTION_THREAD_SERIALISED(
+      void, CreateAS, ID3D12Resource *pResource, UINT64 resourceOffset,
+      const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO &preBldInfo,
+      D3D12AccelerationStructure *as);
 
   // IHV APIs
   IMPLEMENT_FUNCTION_SERIALISED(void, SetShaderExtUAV, GPUVendor vendor, uint32_t reg,

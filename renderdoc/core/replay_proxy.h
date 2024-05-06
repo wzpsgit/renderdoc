@@ -105,6 +105,12 @@ enum ReplayProxyPacket
   eReplayProxy_FreeDebugger,
 
   eReplayProxy_FatalErrorCheck,
+
+  eReplayProxy_GetDescriptors,
+  eReplayProxy_GetSamplerDescriptors,
+  eReplayProxy_GetDescriptorAccess,
+  eReplayProxy_GetDescriptorLocations,
+  eReplayProxy_GetDescriptorStores,
 };
 
 DECLARE_REFLECTION_ENUM(ReplayProxyPacket);
@@ -464,6 +470,8 @@ public:
 
   IMPLEMENT_FUNCTION_PROXIED(rdcarray<ResourceDescription>, GetResources);
 
+  IMPLEMENT_FUNCTION_PROXIED(rdcarray<DescriptorStoreDescription>, GetDescriptorStores);
+
   IMPLEMENT_FUNCTION_PROXIED(rdcarray<BufferDescription>, GetBuffers);
   IMPLEMENT_FUNCTION_PROXIED(BufferDescription, GetBuffer, ResourceId id);
 
@@ -478,6 +486,13 @@ public:
 
   IMPLEMENT_FUNCTION_PROXIED(void, SavePipelineState, uint32_t eventId);
   IMPLEMENT_FUNCTION_PROXIED(void, ReplayLog, uint32_t endEventID, ReplayLogType replayType);
+  IMPLEMENT_FUNCTION_PROXIED(rdcarray<Descriptor>, GetDescriptors, ResourceId descriptorStore,
+                             const rdcarray<DescriptorRange> &ranges);
+  IMPLEMENT_FUNCTION_PROXIED(rdcarray<SamplerDescriptor>, GetSamplerDescriptors,
+                             ResourceId descriptorStore, const rdcarray<DescriptorRange> &ranges);
+  IMPLEMENT_FUNCTION_PROXIED(rdcarray<DescriptorAccess>, GetDescriptorAccess, uint32_t eventId);
+  IMPLEMENT_FUNCTION_PROXIED(rdcarray<DescriptorLogicalLocation>, GetDescriptorLocations,
+                             ResourceId descriptorStore, const rdcarray<DescriptorRange> &ranges);
 
   IMPLEMENT_FUNCTION_PROXIED(rdcarray<uint32_t>, GetPassEvents, uint32_t eventId);
 
@@ -645,18 +660,13 @@ private:
   struct ShaderReflKey
   {
     ShaderReflKey() {}
-    ShaderReflKey(uint32_t eid, ResourceId p, ResourceId s, ShaderEntryPoint e)
-        : eventId(eid), pipeline(p), shader(s), entry(e)
+    ShaderReflKey(ResourceId p, ResourceId s, ShaderEntryPoint e) : pipeline(p), shader(s), entry(e)
     {
     }
-    uint32_t eventId;
     ResourceId pipeline, shader;
     ShaderEntryPoint entry;
     bool operator<(const ShaderReflKey &o) const
     {
-      if(eventId != o.eventId)
-        return eventId < o.eventId;
-
       if(pipeline != o.pipeline)
         return pipeline < o.pipeline;
 

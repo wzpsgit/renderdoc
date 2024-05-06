@@ -519,6 +519,10 @@ struct CaptureContextInvoker : ObjectForwarder<ICaptureContext>
   virtual TextureDescription *GetTexture(ResourceId id) override { return m_Obj.GetTexture(id); }
   virtual const rdcarray<TextureDescription> &GetTextures() override { return m_Obj.GetTextures(); }
   virtual BufferDescription *GetBuffer(ResourceId id) override { return m_Obj.GetBuffer(id); }
+  virtual DescriptorStoreDescription *GetDescriptorStore(ResourceId id) override
+  {
+    return m_Obj.GetDescriptorStore(id);
+  }
   virtual const rdcarray<BufferDescription> &GetBuffers() const override
   {
     return m_Obj.GetBuffers();
@@ -814,11 +818,10 @@ struct CaptureContextInvoker : ObjectForwarder<ICaptureContext>
                                               revertCallback);
   }
 
-  virtual IShaderViewer *DebugShader(const ShaderBindpointMapping *bind,
-                                     const ShaderReflection *shader, ResourceId pipeline,
+  virtual IShaderViewer *DebugShader(const ShaderReflection *shader, ResourceId pipeline,
                                      ShaderDebugTrace *trace, const rdcstr &debugContext) override
   {
-    return InvokeRetFunction<IShaderViewer *>(&ICaptureContext::DebugShader, bind, shader, pipeline,
+    return InvokeRetFunction<IShaderViewer *>(&ICaptureContext::DebugShader, shader, pipeline,
                                               trace, debugContext);
   }
 
@@ -830,6 +833,17 @@ struct CaptureContextInvoker : ObjectForwarder<ICaptureContext>
   virtual IShaderMessageViewer *ViewShaderMessages(ShaderStageMask stages) override
   {
     return InvokeRetFunction<IShaderMessageViewer *>(&ICaptureContext::ViewShaderMessages, stages);
+  }
+
+  virtual IDescriptorViewer *ViewDescriptorStore(ResourceId id) override
+  {
+    return InvokeRetFunction<IDescriptorViewer *>(&ICaptureContext::ViewDescriptorStore, id);
+  }
+  virtual IDescriptorViewer *ViewDescriptors(const rdcarray<Descriptor> &descriptors,
+                                             const rdcarray<SamplerDescriptor> &samplerDescriptors) override
+  {
+    return InvokeRetFunction<IDescriptorViewer *>(&ICaptureContext::ViewDescriptors, descriptors,
+                                                  samplerDescriptors);
   }
 
   virtual IBufferViewer *ViewBuffer(uint64_t byteOffset, uint64_t byteSize, ResourceId id,

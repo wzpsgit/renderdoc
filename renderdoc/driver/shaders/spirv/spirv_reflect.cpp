@@ -256,35 +256,36 @@ void AddXFBAnnotations(const ShaderReflection &refl, const SPIRVPatchData &patch
   }
 }
 
-const int32_t INVALID_BIND = -INT_MAX;
+const uint32_t INVALID_BIND = ~0U;
 
 template <typename T>
-struct bindpair
+struct sortedbind
 {
-  Bindpoint map;
   T bindres;
+  rdcspv::Id id;
 
-  bindpair() = default;
-  bindpair(const Bindpoint &m, const T &res) : map(m), bindres(res) {}
-  bool operator<(const bindpair &o) const
+  sortedbind() = default;
+  sortedbind(rdcspv::Id id, const T &res) : bindres(res), id(id) {}
+  bool operator<(const sortedbind &o) const
   {
-    if(map.bindset != o.map.bindset)
-      return map.bindset < o.map.bindset;
+    if(bindres.fixedBindSetOrSpace != o.bindres.fixedBindSetOrSpace)
+      return bindres.fixedBindSetOrSpace < o.bindres.fixedBindSetOrSpace;
 
     // sort invalid/not set binds to the end
-    if(map.bind == INVALID_BIND && o.map.bind == INVALID_BIND)    // equal
+    if(bindres.fixedBindNumber == INVALID_BIND && o.bindres.fixedBindNumber == INVALID_BIND)    // equal
       return false;
-    if(map.bind == INVALID_BIND)    // invalid bind not less than anything
+    if(bindres.fixedBindNumber == INVALID_BIND)    // invalid bind not less than anything
       return false;
-    if(o.map.bind == INVALID_BIND)    // anything is less than invalid bind
+    if(o.bindres.fixedBindNumber == INVALID_BIND)    // anything is less than invalid bind
       return true;
 
-    return map.bind < o.map.bind;
+    return bindres.fixedBindNumber < o.bindres.fixedBindNumber;
   }
 };
 
-typedef bindpair<ConstantBlock> cblockpair;
-typedef bindpair<ShaderResource> shaderrespair;
+typedef sortedbind<ConstantBlock> sortedcblock;
+typedef sortedbind<ShaderResource> sortedres;
+typedef sortedbind<ShaderSampler> sortedsamp;
 
 static uint32_t GetDescSet(uint32_t set)
 {
@@ -851,6 +852,14 @@ void Reflector::PostParse()
         type.name = StringFormat::Fmt("Sampled%s",
                                       dataTypes[sampledImageTypes[type.id].baseId].name.c_str());
       }
+      else if(type.type == DataType::RayQueryType)
+      {
+        type.name = StringFormat::Fmt("rayQuery%u", type.id.value());
+      }
+      else if(type.type == DataType::AccelerationStructureType)
+      {
+        type.name = StringFormat::Fmt("accelerationStructure%u", type.id.value());
+      }
     }
   }
 
@@ -893,8 +902,7 @@ rdcarray<ShaderEntryPoint> Reflector::EntryPoints() const
 
 void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage stage,
                                const rdcstr &entryPoint, const rdcarray<SpecConstant> &specInfo,
-                               ShaderReflection &reflection, ShaderBindpointMapping &mapping,
-                               SPIRVPatchData &patchData) const
+                               ShaderReflection &reflection, SPIRVPatchData &patchData) const
 {
   // set global properties
   reflection.entryPoint = entryPoint;
@@ -914,8 +922,6 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
       break;
     }
   }
-
-  bool multiEntryModule = entries.size() > 1;
 
   if(!entry)
   {
@@ -1148,12 +1154,22 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
     usedIds.clear();
     usedIds.insert(entry->usedIds.begin(), entry->usedIds.end());
   }
+  else
+  {
+    // before that, still consider all entry interface used just not exclusively
+    usedIds.insert(entry->usedIds.begin(), entry->usedIds.end());
+  }
+
+  patchData.usedIds.reserve(usedIds.size());
+  for(Id id : usedIds)
+    patchData.usedIds.push_back(id);
 
   // arrays of elements, which can be appended to in any order and then sorted
   rdcarray<SigParameter> inputs;
   rdcarray<SigParameter> outputs;
-  rdcarray<cblockpair> cblocks;
-  rdcarray<shaderrespair> samplers, roresources, rwresources;
+  rdcarray<sortedcblock> cblocks;
+  rdcarray<sortedsamp> samplers;
+  rdcarray<sortedres> roresources, rwresources;
 
   // for pointer types, mapping of inner type ID to index in list (assigned sequentially)
   SparseIdMap<uint16_t> pointerTypes;
@@ -1214,9 +1230,8 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
 
       const bool used = usedIds.find(global.id) != usedIds.end();
 
-      // if there are multiple entry points in this module only include signature parameters that
-      // are explicitly used.
-      if(multiEntryModule && !used)
+      // only include signature parameters that are explicitly used.
+      if(!used)
         continue;
 
       // we want to skip any members of the builtin interface block that are completely unused and
@@ -1332,11 +1347,9 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
       const DataType *varType = &dataTypes[dataTypes[global.type].InnerType()];
 
       // if the outer type is an array, get the length and peel it off.
-      bool isArray = false;
       uint32_t arraySize = 1;
       if(varType->type == DataType::ArrayType)
       {
-        isArray = true;
         // runtime arrays have no length
         if(varType->length != Id())
           arraySize = EvaluateConstant(varType->length, specInfo).value.u32v[0];
@@ -1357,29 +1370,31 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
       if(ssbo)
         effectiveStorage = StorageClass::StorageBuffer;
 
-      Bindpoint bindmap;
-      // set something crazy so this doesn't overlap with a real buffer binding
-      if(pushConst)
-        bindmap.bindset = PushConstantBindSet;
-      else
-        bindmap.bindset = GetDescSet(decorations[global.id].set);
+      uint32_t bindset = 0;
+      if(!pushConst)
+        bindset = GetDescSet(decorations[global.id].set);
 
-      bindmap.bind = GetBinding(decorations[global.id].binding);
+      uint32_t bind = GetBinding(decorations[global.id].binding);
 
-      // On GL if we have a location and no binding, put that in as the bind. It will be overwritten
-      // dynamically with the actual value read from glGetUniform. This should only happen for
+      // On GL if we have a location and no binding, put that in as the bind. It is not used
+      // otherwise on GL as the bindings are dynamic. This should only happen for
       // bare uniforms and not for texture/buffer type uniforms which should have a binding
-      if(sourceAPI == GraphicsAPI::OpenGL &&
-         (decorations[global.id].flags & (Decorations::HasLocation | Decorations::HasBinding)) ==
-             Decorations::HasLocation)
+      if(sourceAPI == GraphicsAPI::OpenGL)
       {
-        bindmap.bind = -int32_t(decorations[global.id].location);
+        Decorations::Flags flags = Decorations::Flags(
+            decorations[global.id].flags & (Decorations::HasLocation | Decorations::HasBinding));
+
+        if(flags == Decorations::HasLocation)
+        {
+          bind = decorations[global.id].location;
+        }
+        else if(flags == Decorations::NoFlags)
+        {
+          bind = ~0U;
+        }
       }
 
-      bindmap.arraySize = isArray ? arraySize : 1;
-      bindmap.used = usedIds.find(global.id) != usedIds.end();
-
-      if(multiEntryModule && !bindmap.used)
+      if(usedIds.find(global.id) == usedIds.end())
       {
         // ignore this variable that's not in the entry point's used interface
       }
@@ -1397,17 +1412,19 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
           res.name = varType->name;
         if(res.name.empty())
           res.name = StringFormat::Fmt("atomic%u", global.id.value());
-        res.resType = TextureType::Buffer;
+        res.textureType = TextureType::Buffer;
+        res.descriptorType = DescriptorType::ReadWriteBuffer;
 
         res.variableType.columns = 1;
         res.variableType.rows = 1;
         res.variableType.baseType = VarType::UInt;
         res.variableType.name = varType->name;
 
-        bindmap.bindset = 0;
-        bindmap.bind = GetBinding(decorations[global.id].binding);
+        res.fixedBindSetOrSpace = 0;
+        res.fixedBindNumber = GetBinding(decorations[global.id].binding);
+        res.bindArraySize = arraySize;
 
-        rwresources.push_back(shaderrespair(bindmap, res));
+        rwresources.push_back(sortedres(global.id, res));
       }
       else if(varType->IsOpaqueType())
       {
@@ -1415,7 +1432,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
         // should have gotten a location
         // above, which will be rewritten later when looking up the pipeline state since it's
         // mutable from action to action in theory.
-        RDCASSERT(!bindmap.used || bindmap.bind != INVALID_BIND);
+        RDCASSERT(bind != INVALID_BIND);
 
         // opaque type - buffers, images, etc
         ShaderResource res;
@@ -1424,51 +1441,85 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
         if(res.name.empty())
           res.name = StringFormat::Fmt("res%u", global.id.value());
 
+        res.fixedBindSetOrSpace = bindset;
+        res.fixedBindNumber = bind;
+        res.bindArraySize = arraySize;
+
         if(varType->type == DataType::SamplerType)
         {
-          res.resType = TextureType::Unknown;
+          ShaderSampler samp;
+          samp.name = res.name;
+          samp.fixedBindSetOrSpace = bindset;
+          samp.fixedBindNumber = bind;
+          samp.bindArraySize = arraySize;
+
+          samplers.push_back(sortedsamp(global.id, samp));
+        }
+        else if(varType->type == DataType::AccelerationStructureType)
+        {
+          res.descriptorType = DescriptorType::AccelerationStructure;
+          res.variableType.baseType = VarType::ReadOnlyResource;
           res.isTexture = false;
           res.isReadOnly = true;
 
-          samplers.push_back(shaderrespair(bindmap, res));
+          roresources.push_back(sortedres(global.id, res));
         }
         else
         {
           Id imageTypeId = varType->id;
 
           if(varType->type == DataType::SampledImageType)
+          {
             imageTypeId = sampledImageTypes[varType->id].baseId;
+            res.hasSampler = true;
+          }
 
           const Image &imageType = imageTypes[imageTypeId];
 
           if(imageType.ms)
-            res.resType =
+            res.textureType =
                 imageType.arrayed ? TextureType::Texture2DMSArray : TextureType::Texture2DMS;
           else if(imageType.dim == rdcspv::Dim::_1D)
-            res.resType = imageType.arrayed ? TextureType::Texture1DArray : TextureType::Texture1D;
+            res.textureType =
+                imageType.arrayed ? TextureType::Texture1DArray : TextureType::Texture1D;
           else if(imageType.dim == rdcspv::Dim::_2D)
-            res.resType = imageType.arrayed ? TextureType::Texture2DArray : TextureType::Texture2D;
+            res.textureType =
+                imageType.arrayed ? TextureType::Texture2DArray : TextureType::Texture2D;
           else if(imageType.dim == rdcspv::Dim::Cube)
-            res.resType =
+            res.textureType =
                 imageType.arrayed ? TextureType::TextureCubeArray : TextureType::TextureCube;
           else if(imageType.dim == rdcspv::Dim::_3D)
-            res.resType = TextureType::Texture3D;
+            res.textureType = TextureType::Texture3D;
           else if(imageType.dim == rdcspv::Dim::Rect)
-            res.resType = TextureType::TextureRect;
+            res.textureType = TextureType::TextureRect;
           else if(imageType.dim == rdcspv::Dim::Buffer)
-            res.resType = TextureType::Buffer;
+            res.textureType = TextureType::Buffer;
           else if(imageType.dim == rdcspv::Dim::SubpassData)
-            res.resType = TextureType::Texture2D;
+            res.textureType = TextureType::Texture2D;
 
-          res.isTexture = res.resType != TextureType::Buffer;
+          res.isTexture = res.textureType != TextureType::Buffer;
           res.isReadOnly = imageType.sampled != 2 || imageType.dim == rdcspv::Dim::SubpassData;
+          res.isInputAttachment = imageType.dim == rdcspv::Dim::SubpassData;
 
           res.variableType.baseType = imageType.retType.Type();
 
           if(res.isReadOnly)
-            roresources.push_back(shaderrespair(bindmap, res));
+          {
+            res.descriptorType =
+                res.hasSampler ? DescriptorType::ImageSampler : DescriptorType::Image;
+            if(!res.isTexture)
+              res.descriptorType = DescriptorType::TypedBuffer;
+
+            roresources.push_back(sortedres(global.id, res));
+          }
           else
-            rwresources.push_back(shaderrespair(bindmap, res));
+          {
+            res.descriptorType = DescriptorType::ReadWriteImage;
+            if(!res.isTexture)
+              res.descriptorType = DescriptorType::ReadWriteTypedBuffer;
+
+            rwresources.push_back(sortedres(global.id, res));
+          }
         }
       }
       else
@@ -1499,7 +1550,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
             MakeConstantBlockVariable(constant, pointerTypes, effectiveStorage, *varType,
                                       strings[global.id], decorations[global.id], specInfo);
 
-            if(isArray)
+            if(arraySize > 1)
               constant.type.elements = arraySize;
             else
               constant.type.elements = 0;
@@ -1527,7 +1578,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
           // it's push constants (which is handled elsewhere). On GL we should have gotten a
           // location above, which will be rewritten later when looking up the pipeline state since
           // it's mutable from action to action in theory.
-          RDCASSERT(!bindmap.used || pushConst || bindmap.bind != INVALID_BIND);
+          RDCASSERT(pushConst || bind != INVALID_BIND);
 
           if(ssbo)
           {
@@ -1538,7 +1589,12 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
             res.name = strings[global.id];
             if(res.name.empty())
               res.name = StringFormat::Fmt("ssbo%u", global.id.value());
-            res.resType = TextureType::Buffer;
+            res.textureType = TextureType::Buffer;
+            res.descriptorType = DescriptorType::ReadWriteBuffer;
+
+            res.fixedBindNumber = bind;
+            res.fixedBindSetOrSpace = bindset;
+            res.bindArraySize = arraySize;
 
             res.variableType.columns = 0;
             res.variableType.rows = 0;
@@ -1548,7 +1604,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
             MakeConstantBlockVariables(effectiveStorage, *varType, 0, 0, res.variableType.members,
                                        pointerTypes, specInfo);
 
-            rwresources.push_back(shaderrespair(bindmap, res));
+            rwresources.push_back(sortedres(global.id, res));
           }
           else
           {
@@ -1560,6 +1616,10 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
             cblock.bufferBacked = !pushConst;
             cblock.inlineDataBytes = pushConst;
 
+            cblock.fixedBindNumber = bind;
+            cblock.fixedBindSetOrSpace = bindset;
+            cblock.bindArraySize = arraySize;
+
             MakeConstantBlockVariables(effectiveStorage, *varType, 0, 0, cblock.variables,
                                        pointerTypes, specInfo);
 
@@ -1568,7 +1628,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
             else
               cblock.byteSize = 0;
 
-            cblocks.push_back(cblockpair(bindmap, cblock));
+            cblocks.push_back(sortedcblock(global.id, cblock));
           }
         }
       }
@@ -1612,17 +1672,11 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
     specblock.inlineDataBytes = true;
     specblock.compileConstants = true;
     specblock.byteSize = 0;
+    // set the binding number to some huge value to try to sort it to the end
+    specblock.fixedBindNumber = 0x8000000;
+    specblock.bindArraySize = 1;
 
-    Bindpoint bindmap;
-
-    // set something crazy so this doesn't overlap with a real buffer binding
-    // also identify this as specialization constant data
-    bindmap.bindset = SpecializationConstantBindSet;
-    bindmap.bind = INVALID_BIND;
-    bindmap.arraySize = 1;
-    bindmap.used = true;
-
-    cblocks.push_back(cblockpair(bindmap, specblock));
+    cblocks.push_back(sortedcblock(Id(), specblock));
   }
 
   if(!globalsblock.variables.empty())
@@ -1631,15 +1685,12 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
     globalsblock.bufferBacked = false;
     globalsblock.inlineDataBytes = false;
     globalsblock.byteSize = (uint32_t)globalsblock.variables.size();
-    globalsblock.bindPoint = (int)cblocks.size();
+    globalsblock.fixedBindSetOrSpace = 0;
+    // set the binding number to some huge value to try to sort it to the end
+    globalsblock.fixedBindNumber = 0x8000001;
+    globalsblock.bindArraySize = 1;
 
-    Bindpoint bindmap;
-    bindmap.bindset = 0;
-    bindmap.bind = INVALID_BIND;
-    bindmap.arraySize = 1;
-    bindmap.used = true;
-
-    cblocks.push_back(cblockpair(bindmap, globalsblock));
+    cblocks.push_back(sortedcblock(Id(), globalsblock));
   }
 
   reflection.taskPayload = taskPayloadBlock;
@@ -1748,15 +1799,7 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
     if(reflection.inputSignature[i].systemValue == ShaderBuiltin::Undefined)
       numInputs = RDCMAX(numInputs, (size_t)reflection.inputSignature[i].regIndex + 1);
 
-  mapping.inputAttributes.resize(numInputs);
-  for(size_t i = 0; i < numInputs; i++)
-    mapping.inputAttributes[i] = -1;
-
-  for(size_t i = 0; i < reflection.inputSignature.size(); i++)
-    if(reflection.inputSignature[i].systemValue == ShaderBuiltin::Undefined)
-      mapping.inputAttributes[reflection.inputSignature[i].regIndex] = (int32_t)i;
-
-  for(cblockpair &cb : cblocks)
+  for(sortedcblock &cb : cblocks)
   {
     // sort the variables within each block because we want them in offset order but they don't have
     // to be declared in offset order in the SPIR-V.
@@ -1768,64 +1811,53 @@ void Reflector::MakeReflection(const GraphicsAPI sourceAPI, const ShaderStage st
   std::sort(roresources.begin(), roresources.end());
   std::sort(rwresources.begin(), rwresources.end());
 
-  mapping.constantBlocks.resize(cblocks.size());
   reflection.constantBlocks.resize(cblocks.size());
-
-  mapping.samplers.resize(samplers.size());
   reflection.samplers.resize(samplers.size());
-
-  mapping.readOnlyResources.resize(roresources.size());
   reflection.readOnlyResources.resize(roresources.size());
-
-  mapping.readWriteResources.resize(rwresources.size());
   reflection.readWriteResources.resize(rwresources.size());
 
   for(size_t i = 0; i < cblocks.size(); i++)
   {
-    mapping.constantBlocks[i] = cblocks[i].map;
+    patchData.cblockInterface.push_back(cblocks[i].id);
+    reflection.constantBlocks[i] = cblocks[i].bindres;
     // fix up any bind points marked with INVALID_BIND. They were sorted to the end
     // but from here on we want to just be able to index with the bind point
     // without any special casing.
-    if(mapping.constantBlocks[i].bind == INVALID_BIND)
-      mapping.constantBlocks[i].bind = 0;
-    reflection.constantBlocks[i] = cblocks[i].bindres;
-    reflection.constantBlocks[i].bindPoint = (int32_t)i;
+    if(reflection.constantBlocks[i].fixedBindNumber == INVALID_BIND)
+      reflection.constantBlocks[i].fixedBindNumber = 0;
   }
 
   for(size_t i = 0; i < samplers.size(); i++)
   {
-    mapping.samplers[i] = samplers[i].map;
+    patchData.samplerInterface.push_back(samplers[i].id);
+    reflection.samplers[i] = samplers[i].bindres;
     // fix up any bind points marked with INVALID_BIND. They were sorted to the end
     // but from here on we want to just be able to index with the bind point
     // without any special casing.
-    if(mapping.samplers[i].bind == INVALID_BIND)
-      mapping.samplers[i].bind = 0;
-    reflection.samplers[i].name = samplers[i].bindres.name;
-    reflection.samplers[i].bindPoint = (int32_t)i;
+    if(reflection.samplers[i].fixedBindNumber == INVALID_BIND)
+      reflection.samplers[i].fixedBindNumber = 0;
   }
 
   for(size_t i = 0; i < roresources.size(); i++)
   {
-    mapping.readOnlyResources[i] = roresources[i].map;
+    patchData.roInterface.push_back(roresources[i].id);
+    reflection.readOnlyResources[i] = roresources[i].bindres;
     // fix up any bind points marked with INVALID_BIND. They were sorted to the end
     // but from here on we want to just be able to index with the bind point
     // without any special casing.
-    if(mapping.readOnlyResources[i].bind == INVALID_BIND)
-      mapping.readOnlyResources[i].bind = 0;
-    reflection.readOnlyResources[i] = roresources[i].bindres;
-    reflection.readOnlyResources[i].bindPoint = (int32_t)i;
+    if(reflection.readOnlyResources[i].fixedBindNumber == INVALID_BIND)
+      reflection.readOnlyResources[i].fixedBindNumber = 0;
   }
 
   for(size_t i = 0; i < rwresources.size(); i++)
   {
-    mapping.readWriteResources[i] = rwresources[i].map;
+    patchData.rwInterface.push_back(rwresources[i].id);
+    reflection.readWriteResources[i] = rwresources[i].bindres;
     // fix up any bind points marked with INVALID_BIND. They were sorted to the end
     // but from here on we want to just be able to index with the bind point
     // without any special casing.
-    if(mapping.readWriteResources[i].bind == INVALID_BIND)
-      mapping.readWriteResources[i].bind = 0;
-    reflection.readWriteResources[i] = rwresources[i].bindres;
-    reflection.readWriteResources[i].bindPoint = (int32_t)i;
+    if(reflection.readWriteResources[i].fixedBindNumber == INVALID_BIND)
+      reflection.readWriteResources[i].fixedBindNumber = 0;
   }
 
   // go through each pointer type and populate it. This may generate more pointer types so we repeat
@@ -2361,7 +2393,7 @@ TEST_CASE("Validate SPIR-V reflection", "[spirv][reflection]")
 {
   ShaderType type = ShaderType::Vulkan;
   auto compiler = [&type](ShaderStage stage, const rdcstr &source, const rdcstr &entryPoint,
-                          ShaderReflection &refl, ShaderBindpointMapping &mapping) {
+                          ShaderReflection &refl) {
     rdcspv::Init();
     RenderDoc::Inst().RegisterShutdownFunction(&rdcspv::Shutdown);
 
@@ -2382,7 +2414,7 @@ TEST_CASE("Validate SPIR-V reflection", "[spirv][reflection]")
 
     SPIRVPatchData patchData;
     spv.MakeReflection(type == ShaderType::Vulkan ? GraphicsAPI::Vulkan : GraphicsAPI::OpenGL,
-                       stage, entryPoint, {}, refl, mapping, patchData);
+                       stage, entryPoint, {}, refl, patchData);
   };
 
   // test both Vulkan and GL SPIR-V reflection

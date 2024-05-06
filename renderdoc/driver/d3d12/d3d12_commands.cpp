@@ -525,6 +525,8 @@ WrappedID3D12CommandQueue::~WrappedID3D12CommandQueue()
 {
   SAFE_DELETE(m_FrameReader);
 
+  SAFE_RELEASE(m_RayFence);
+
   if(m_CreationRecord)
     m_CreationRecord->Delete(m_pDevice->GetResourceManager());
 
@@ -627,6 +629,25 @@ HRESULT STDMETHODCALLTYPE WrappedID3D12CommandQueue::QueryInterface(REFIID riid,
   }
 
   return RefCounter12::QueryInterface("ID3D12CommandQueue", riid, ppvObject);
+}
+
+void WrappedID3D12CommandQueue::CheckAndFreeRayDispatches()
+{
+  UINT64 signalled = 0;
+  if(m_RayFence)
+    signalled = m_RayFence->GetCompletedValue();
+
+  for(PatchedRayDispatch::Resources &ray : m_RayDispatchesPending)
+  {
+    if(signalled >= ray.fenceValue)
+    {
+      SAFE_RELEASE(ray.patchScratchBuffer);
+      SAFE_RELEASE(ray.lookupBuffer);
+    }
+  }
+
+  m_RayDispatchesPending.removeIf(
+      [](const PatchedRayDispatch::Resources &ray) { return ray.lookupBuffer == NULL; });
 }
 
 void WrappedID3D12CommandQueue::ClearAfterCapture()
@@ -923,7 +944,6 @@ bool WrappedID3D12CommandQueue::ProcessChunk(ReadSerialiser &ser, D3D12Chunk chu
 
     case D3D12Chunk::List_ClearState: ret = m_ReplayList->Serialise_ClearState(ser, NULL); break;
 
-    /*-----AMD TODO------*/
     case D3D12Chunk::List_BuildRaytracingAccelerationStructure:
       ret = m_ReplayList->Serialise_BuildRaytracingAccelerationStructure(ser, NULL, 0, NULL);
       break;
@@ -942,8 +962,6 @@ bool WrappedID3D12CommandQueue::ProcessChunk(ReadSerialiser &ser, D3D12Chunk chu
     case D3D12Chunk::List_SetPipelineState1:
       ret = m_ReplayList->Serialise_SetPipelineState1(ser, NULL);
       break;
-
-    /*-----AMD TODO-------*/
 
     // in order to get a warning if we miss a case, we explicitly handle the device creation chunks
     // here. If we actually encounter one it's an error (we shouldn't see these inside the captured
@@ -985,6 +1003,7 @@ bool WrappedID3D12CommandQueue::ProcessChunk(ReadSerialiser &ser, D3D12Chunk chu
     case D3D12Chunk::Device_CreateReservedResource2:
     case D3D12Chunk::Device_CreateStateObject:
     case D3D12Chunk::Device_AddToStateObject:
+    case D3D12Chunk::CreateAS:
       RDCERR("Unexpected chunk while processing frame: %s", ToStr(chunk).c_str());
       return false;
 
@@ -1407,6 +1426,17 @@ bool WrappedID3D12GraphicsCommandList::ValidateRootGPUVA(D3D12_GPU_VIRTUAL_ADDRE
 WriteSerialiser &WrappedID3D12GraphicsCommandList::GetThreadSerialiser()
 {
   return m_pDevice->GetThreadSerialiser();
+}
+
+void WrappedID3D12GraphicsCommandList::AddRayDispatches(rdcarray<PatchedRayDispatch::Resources> &dispatches)
+{
+  dispatches.reserve(dispatches.size() + m_RayDispatches.size());
+  for(const PatchedRayDispatch::Resources &r : m_RayDispatches)
+  {
+    dispatches.push_back(r);
+    r.lookupBuffer->AddRef();
+    r.patchScratchBuffer->AddRef();
+  }
 }
 
 rdcstr WrappedID3D12GraphicsCommandList::GetChunkName(uint32_t idx)
@@ -1925,17 +1955,16 @@ void D3D12CommandData::AddCPUUsage(ResourceId id, ResourceUsage usage)
 void D3D12CommandData::AddUsageForBindInRootSig(const D3D12RenderState &state,
                                                 D3D12ActionTreeNode &actionNode,
                                                 const D3D12RenderState::RootSignature *rootsig,
-                                                D3D12_DESCRIPTOR_RANGE_TYPE type, const Bindpoint &b)
+                                                D3D12_DESCRIPTOR_RANGE_TYPE type, uint32_t space,
+                                                uint32_t bind, uint32_t rangeSize)
 {
   static bool hugeRangeWarned = false;
 
   ActionDescription &a = actionNode.action;
   uint32_t eid = a.eventId;
 
-  const uint32_t space = b.bindset;
-  const uint32_t bind = b.bind;
   // use a 'clamped' range size to avoid annoying overflow issues
-  const uint32_t rangeSize = b.arraySize == ~0U ? 0x10000000 : b.arraySize;
+  rangeSize = RDCMIN(rangeSize, 0x10000000U);
 
   D3D12ResourceManager *rm = m_pDevice->GetResourceManager();
 
@@ -2058,7 +2087,7 @@ void D3D12CommandData::AddUsageForBindInRootSig(const D3D12RenderState &state,
           continue;
         }
 
-        bool allInRange = (bind >= range.BaseShaderRegister && b.arraySize <= range.NumDescriptors);
+        bool allInRange = (bind >= range.BaseShaderRegister && rangeSize <= range.NumDescriptors);
 
         // move to the first descriptor in the range which is in the binding we want
         desc += (bind - range.BaseShaderRegister);
@@ -2117,7 +2146,7 @@ void D3D12CommandData::AddUsage(const D3D12RenderState &state, D3D12ActionTreeNo
   if(state.pipe != ResourceId())
     pipe = rm->GetCurrentAs<WrappedID3D12PipelineState>(state.pipe);
 
-  const ShaderBindpointMapping *bindMap[NumShaderStages] = {};
+  const ShaderReflection *refls[NumShaderStages] = {};
 
   if((a.flags & ActionFlags::Dispatch) && state.compute.rootsig != ResourceId())
   {
@@ -2127,7 +2156,7 @@ void D3D12CommandData::AddUsage(const D3D12RenderState &state, D3D12ActionTreeNo
     {
       WrappedID3D12Shader *sh = (WrappedID3D12Shader *)pipe->compute->CS.pShaderBytecode;
 
-      bindMap[uint32_t(ShaderStage::Compute)] = &sh->GetMapping();
+      refls[uint32_t(ShaderStage::Compute)] = &sh->GetDetails();
     }
   }
   else if(state.graphics.rootsig != ResourceId())
@@ -2155,7 +2184,7 @@ void D3D12CommandData::AddUsage(const D3D12RenderState &state, D3D12ActionTreeNo
         WrappedID3D12Shader *sh = (WrappedID3D12Shader *)srcArr[stage]->pShaderBytecode;
 
         if(sh)
-          bindMap[stage] = &sh->GetMapping();
+          refls[stage] = &sh->GetDetails();
       }
     }
 
@@ -2204,33 +2233,27 @@ void D3D12CommandData::AddUsage(const D3D12RenderState &state, D3D12ActionTreeNo
     // signature. We have to do this kind of N:N lookup because of D3D12's bad design, but this
     // should be a better way around to do it than iterating over the root signature and finding a
     // bind for each element
-    for(size_t sh = 0; sh < ARRAY_COUNT(bindMap); sh++)
+    for(size_t sh = 0; sh < ARRAY_COUNT(refls); sh++)
     {
-      if(!bindMap[sh])
+      if(!refls[sh])
         continue;
 
-      for(const Bindpoint &b : bindMap[sh]->constantBlocks)
+      for(const ConstantBlock &b : refls[sh]->constantBlocks)
       {
-        if(!b.used)
-          continue;
-
-        AddUsageForBindInRootSig(state, actionNode, rootsig, D3D12_DESCRIPTOR_RANGE_TYPE_CBV, b);
+        AddUsageForBindInRootSig(state, actionNode, rootsig, D3D12_DESCRIPTOR_RANGE_TYPE_CBV,
+                                 b.fixedBindSetOrSpace, b.fixedBindNumber, b.bindArraySize);
       }
 
-      for(const Bindpoint &b : bindMap[sh]->readOnlyResources)
+      for(const ShaderResource &r : refls[sh]->readOnlyResources)
       {
-        if(!b.used)
-          continue;
-
-        AddUsageForBindInRootSig(state, actionNode, rootsig, D3D12_DESCRIPTOR_RANGE_TYPE_SRV, b);
+        AddUsageForBindInRootSig(state, actionNode, rootsig, D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+                                 r.fixedBindSetOrSpace, r.fixedBindNumber, r.bindArraySize);
       }
 
-      for(const Bindpoint &b : bindMap[sh]->readWriteResources)
+      for(const ShaderResource &r : refls[sh]->readWriteResources)
       {
-        if(!b.used)
-          continue;
-
-        AddUsageForBindInRootSig(state, actionNode, rootsig, D3D12_DESCRIPTOR_RANGE_TYPE_UAV, b);
+        AddUsageForBindInRootSig(state, actionNode, rootsig, D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
+                                 r.fixedBindSetOrSpace, r.fixedBindNumber, r.bindArraySize);
       }
     }
   }

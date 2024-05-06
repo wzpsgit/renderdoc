@@ -339,7 +339,7 @@ rdcstr D3D11Replay::DisassembleShader(ResourceId pipeline, const ShaderReflectio
   DXBC::DXBCContainer *dxbc = it->second->GetDXBC();
 
   if(target == DXBCDisassemblyTarget || target.empty())
-    return dxbc->GetDisassembly();
+    return dxbc->GetDisassembly(true);
 
   return StringFormat::Fmt("; Invalid disassembly target %s", target.c_str());
 }
@@ -426,7 +426,6 @@ APIProperties D3D11Replay::GetAPIProperties()
   ret.localRenderer = GraphicsAPI::D3D11;
   ret.vendor = m_DriverInfo.vendor;
   ret.degraded = m_WARP;
-  ret.shadersMutable = false;
   ret.shaderDebugging = true;
   ret.pixelHistory = true;
 
@@ -741,6 +740,11 @@ void D3D11Replay::SavePipelineState(uint32_t eventId)
 
   D3D11ResourceManager *rm = m_pDevice->GetResourceManager();
 
+  ret.descriptorStore = m_pImmediateContext->GetDescriptorsID();
+  ret.descriptorCount =
+      EncodeD3D11DescriptorIndex({ShaderStage::Compute, D3D11DescriptorMapping::Count, 0});
+  ret.descriptorByteSize = 1;
+
   ret.inputAssembly.bytecode = NULL;
   ret.inputAssembly.resourceId = ResourceId();
   ret.inputAssembly.layouts.clear();
@@ -816,296 +820,10 @@ void D3D11Replay::SavePipelineState(uint32_t eventId)
       ShaderReflection *refl = NULL;
 
       if(shad != NULL)
-      {
         refl = &shad->GetDetails();
-        dst.bindpointMapping = shad->GetMapping();
-      }
-      else
-      {
-        dst.bindpointMapping = ShaderBindpointMapping();
-      }
 
       dst.resourceId = rm->GetUnreplacedOriginalID(id);
       dst.reflection = refl;
-
-      dst.constantBuffers.resize(D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT);
-      for(size_t s = 0; s < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; s++)
-      {
-        dst.constantBuffers[s].resourceId =
-            rm->GetOriginalID(GetIDForDeviceChild(src.ConstantBuffers[s]));
-        dst.constantBuffers[s].vecOffset = src.CBOffsets[s];
-        dst.constantBuffers[s].vecCount = src.CBCounts[s];
-      }
-
-      dst.samplers.resize(D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT);
-      for(size_t s = 0; s < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; s++)
-      {
-        D3D11Pipe::Sampler &samp = dst.samplers[s];
-
-        samp.resourceId = rm->GetOriginalID(GetIDForDeviceChild(src.Samplers[s]));
-
-        if(samp.resourceId != ResourceId())
-        {
-          D3D11_SAMPLER_DESC desc;
-          src.Samplers[s]->GetDesc(&desc);
-
-          samp.addressU = MakeAddressMode(desc.AddressU);
-          samp.addressV = MakeAddressMode(desc.AddressV);
-          samp.addressW = MakeAddressMode(desc.AddressW);
-
-          samp.borderColor = desc.BorderColor;
-
-          samp.compareFunction = MakeCompareFunc(desc.ComparisonFunc);
-          samp.filter = MakeFilter(desc.Filter);
-          samp.maxAnisotropy = 0;
-          if(samp.filter.mip == FilterMode::Anisotropic)
-            samp.maxAnisotropy = desc.MaxAnisotropy;
-          samp.maxLOD = desc.MaxLOD;
-          samp.minLOD = desc.MinLOD;
-          samp.mipLODBias = desc.MipLODBias;
-        }
-        else
-        {
-          samp.addressU = samp.addressV = samp.addressW = AddressMode::ClampEdge;
-
-          samp.borderColor = {1.0f, 1.0f, 1.0f, 1.0f};
-
-          samp.compareFunction = CompareFunction::Never;
-          samp.filter.filter = FilterFunction::Normal;
-          samp.filter.magnify = FilterMode::Linear;
-          samp.filter.minify = FilterMode::Linear;
-          samp.filter.mip = FilterMode::Linear;
-          samp.maxAnisotropy = 1;
-          samp.maxLOD = FLT_MAX;
-          samp.minLOD = -FLT_MAX;
-          samp.mipLODBias = 0.0f;
-        }
-      }
-
-      dst.srvs.resize(D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT);
-      for(size_t s = 0; s < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT; s++)
-      {
-        D3D11Pipe::View &view = dst.srvs[s];
-
-        view.viewResourceId = rm->GetOriginalID(GetIDForDeviceChild(src.SRVs[s]));
-
-        if(view.viewResourceId != ResourceId())
-        {
-          D3D11_SHADER_RESOURCE_VIEW_DESC desc;
-          src.SRVs[s]->GetDesc(&desc);
-
-          view.viewFormat = MakeResourceFormat(desc.Format);
-
-          ID3D11Resource *res = NULL;
-          src.SRVs[s]->GetResource(&res);
-
-          view.structured = false;
-          view.bufferStructCount = 0;
-
-          view.elementByteSize =
-              desc.Format == DXGI_FORMAT_UNKNOWN ? 1 : GetByteSize(1, 1, 1, desc.Format, 0);
-
-          view.resourceResourceId = rm->GetOriginalID(GetIDForDeviceChild(res));
-
-          view.type = MakeTextureDim(desc.ViewDimension);
-
-          if(desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFER)
-          {
-            view.firstElement = desc.Buffer.FirstElement;
-            view.numElements = desc.Buffer.NumElements;
-
-            D3D11_BUFFER_DESC bufdesc;
-            ((ID3D11Buffer *)res)->GetDesc(&bufdesc);
-
-            view.structured = bufdesc.StructureByteStride > 0 && desc.Format == DXGI_FORMAT_UNKNOWN;
-
-            if(view.structured)
-              view.elementByteSize = bufdesc.StructureByteStride;
-          }
-          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFEREX)
-          {
-            view.firstElement = desc.BufferEx.FirstElement;
-            view.numElements = desc.BufferEx.NumElements;
-            view.bufferFlags = D3DBufferViewFlags(desc.BufferEx.Flags);
-
-            D3D11_BUFFER_DESC bufdesc;
-            ((ID3D11Buffer *)res)->GetDesc(&bufdesc);
-
-            view.structured = bufdesc.StructureByteStride > 0 && desc.Format == DXGI_FORMAT_UNKNOWN;
-
-            if(view.structured)
-              view.elementByteSize = bufdesc.StructureByteStride;
-          }
-          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE1D)
-          {
-            view.firstMip = desc.Texture1D.MostDetailedMip;
-            view.numMips = desc.Texture1D.MipLevels;
-            view.firstSlice = 0;
-            view.numSlices = 1;
-          }
-          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE1DARRAY)
-          {
-            view.firstMip = desc.Texture1DArray.MostDetailedMip;
-            view.numMips = desc.Texture1DArray.MipLevels;
-            view.numSlices = desc.Texture1DArray.ArraySize;
-            view.firstSlice = desc.Texture1DArray.FirstArraySlice;
-          }
-          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D)
-          {
-            view.firstMip = desc.Texture2D.MostDetailedMip;
-            view.numMips = desc.Texture2D.MipLevels;
-            view.firstSlice = 0;
-            view.numSlices = 1;
-          }
-          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2DARRAY)
-          {
-            view.firstMip = desc.Texture2DArray.MostDetailedMip;
-            view.numMips = desc.Texture2DArray.MipLevels;
-            view.firstSlice = desc.Texture2DArray.FirstArraySlice;
-            view.numSlices = desc.Texture2DArray.ArraySize;
-          }
-          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2DMS)
-          {
-            view.firstMip = 0;
-            view.numMips = 1;
-            view.firstSlice = 0;
-            view.numSlices = 1;
-          }
-          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY)
-          {
-            view.firstMip = 0;
-            view.numMips = 1;
-            view.numSlices = desc.Texture2DMSArray.ArraySize;
-            view.firstSlice = desc.Texture2DMSArray.FirstArraySlice;
-          }
-          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE3D)
-          {
-            view.firstMip = desc.Texture3D.MostDetailedMip;
-            view.numMips = desc.Texture3D.MipLevels;
-            view.firstSlice = 0;
-            view.numSlices = 1;
-          }
-          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURECUBE)
-          {
-            view.firstMip = desc.TextureCube.MostDetailedMip;
-            view.numMips = desc.TextureCube.MipLevels;
-            view.firstSlice = 0;
-            view.numSlices = 6;
-          }
-          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURECUBEARRAY)
-          {
-            view.firstMip = desc.TextureCubeArray.MostDetailedMip;
-            view.numMips = desc.TextureCubeArray.MipLevels;
-            view.firstSlice = desc.TextureCubeArray.First2DArrayFace;
-            view.numSlices = desc.TextureCubeArray.NumCubes * 6;
-          }
-
-          SAFE_RELEASE(res);
-        }
-        else
-        {
-          view.resourceResourceId = ResourceId();
-        }
-      }
-
-      dst.uavs.resize(D3D11_1_UAV_SLOT_COUNT);
-      for(size_t s = 0; dst.stage == ShaderStage::Compute && s < D3D11_1_UAV_SLOT_COUNT; s++)
-      {
-        D3D11Pipe::View &view = dst.uavs[s];
-
-        view.viewResourceId = rm->GetOriginalID(GetIDForDeviceChild(rs->CSUAVs[s]));
-
-        if(view.viewResourceId != ResourceId())
-        {
-          D3D11_UNORDERED_ACCESS_VIEW_DESC desc;
-          rs->CSUAVs[s]->GetDesc(&desc);
-
-          ID3D11Resource *res = NULL;
-          rs->CSUAVs[s]->GetResource(&res);
-
-          view.structured = false;
-          view.bufferStructCount = 0;
-
-          view.elementByteSize =
-              desc.Format == DXGI_FORMAT_UNKNOWN ? 1 : GetByteSize(1, 1, 1, desc.Format, 0);
-
-          view.counterResourceId = ResourceId();
-
-          if(desc.ViewDimension == D3D11_UAV_DIMENSION_BUFFER &&
-             (desc.Buffer.Flags & (D3D11_BUFFER_UAV_FLAG_APPEND | D3D11_BUFFER_UAV_FLAG_COUNTER)))
-          {
-            view.bufferStructCount = GetDebugManager()->GetStructCount(rs->CSUAVs[s]);
-
-            view.counterResourceId = GetDebugManager()->GetCounterBufferID(rs->CSUAVs[s]);
-          }
-
-          view.resourceResourceId = rm->GetOriginalID(GetIDForDeviceChild(res));
-
-          view.viewFormat = MakeResourceFormat(desc.Format);
-          view.type = MakeTextureDim(desc.ViewDimension);
-
-          if(desc.ViewDimension == D3D11_UAV_DIMENSION_BUFFER)
-          {
-            view.numSlices = 1;
-            view.firstSlice = 0;
-            view.firstMip = 0;
-            view.numMips = 1;
-
-            view.firstElement = desc.Buffer.FirstElement;
-            view.numElements = desc.Buffer.NumElements;
-            view.bufferFlags = D3DBufferViewFlags(desc.Buffer.Flags);
-
-            D3D11_BUFFER_DESC bufdesc;
-            ((ID3D11Buffer *)res)->GetDesc(&bufdesc);
-
-            view.structured = bufdesc.StructureByteStride > 0 && desc.Format == DXGI_FORMAT_UNKNOWN;
-
-            if(view.structured)
-              view.elementByteSize = bufdesc.StructureByteStride;
-          }
-          else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE1D)
-          {
-            view.numSlices = 1;
-            view.firstSlice = 0;
-            view.firstMip = desc.Texture1D.MipSlice;
-            view.numMips = 1;
-          }
-          else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE1DARRAY)
-          {
-            view.numSlices = desc.Texture1DArray.ArraySize;
-            view.firstSlice = desc.Texture1DArray.FirstArraySlice;
-            view.firstMip = desc.Texture1DArray.MipSlice;
-            view.numMips = 1;
-          }
-          else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE2D)
-          {
-            view.numSlices = 1;
-            view.firstSlice = 0;
-            view.firstMip = desc.Texture2D.MipSlice;
-            view.numMips = 1;
-          }
-          else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE2DARRAY)
-          {
-            view.numSlices = desc.Texture2DArray.ArraySize;
-            view.firstSlice = desc.Texture2DArray.FirstArraySlice;
-            view.firstMip = desc.Texture2DArray.MipSlice;
-            view.numMips = 1;
-          }
-          else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE3D)
-          {
-            view.numSlices = desc.Texture3D.WSize;
-            view.firstSlice = desc.Texture3D.FirstWSlice;
-            view.firstMip = desc.Texture3D.MipSlice;
-            view.numMips = 1;
-          }
-
-          SAFE_RELEASE(res);
-        }
-        else
-        {
-          view.resourceResourceId = ResourceId();
-        }
-      }
 
       dst.classInstances.reserve(src.NumInstances);
       for(UINT s = 0; s < src.NumInstances; s++)
@@ -1247,11 +965,11 @@ void D3D11Replay::SavePipelineState(uint32_t eventId)
     ret.outputMerger.renderTargets.resize(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT);
     for(size_t i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++)
     {
-      D3D11Pipe::View &view = ret.outputMerger.renderTargets[i];
+      Descriptor &descriptor = ret.outputMerger.renderTargets[i];
 
-      view.viewResourceId = rm->GetOriginalID(GetIDForDeviceChild(rs->OM.RenderTargets[i]));
+      descriptor.view = rm->GetOriginalID(GetIDForDeviceChild(rs->OM.RenderTargets[i]));
 
-      if(view.viewResourceId != ResourceId())
+      if(descriptor.view != ResourceId())
       {
         D3D11_RENDER_TARGET_VIEW_DESC desc;
         rs->OM.RenderTargets[i]->GetDesc(&desc);
@@ -1259,180 +977,87 @@ void D3D11Replay::SavePipelineState(uint32_t eventId)
         ID3D11Resource *res = NULL;
         rs->OM.RenderTargets[i]->GetResource(&res);
 
-        view.structured = false;
-        view.bufferStructCount = 0;
-        view.elementByteSize =
+        descriptor.bufferStructCount = 0;
+        descriptor.elementByteSize =
             desc.Format == DXGI_FORMAT_UNKNOWN ? 1 : GetByteSize(1, 1, 1, desc.Format, 0);
 
-        view.resourceResourceId = rm->GetOriginalID(GetIDForDeviceChild(res));
+        descriptor.resource = rm->GetOriginalID(GetIDForDeviceChild(res));
 
-        view.viewFormat = MakeResourceFormat(desc.Format);
-        view.type = MakeTextureDim(desc.ViewDimension);
+        descriptor.type = DescriptorType::ReadWriteImage;
+        descriptor.format = MakeResourceFormat(desc.Format);
+        descriptor.textureType = MakeTextureDim(desc.ViewDimension);
 
         if(desc.ViewDimension == D3D11_RTV_DIMENSION_BUFFER)
         {
-          view.firstElement = desc.Buffer.FirstElement;
-          view.numElements = desc.Buffer.NumElements;
+          descriptor.byteOffset = desc.Buffer.FirstElement * descriptor.elementByteSize;
+          descriptor.byteSize = desc.Buffer.NumElements * descriptor.elementByteSize;
         }
         else if(desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE1D)
         {
-          view.numSlices = 1;
-          view.firstSlice = 0;
-          view.firstMip = desc.Texture1D.MipSlice;
-          view.numMips = 1;
+          descriptor.numSlices = 1;
+          descriptor.firstSlice = 0;
+          descriptor.firstMip = desc.Texture1D.MipSlice & 0xff;
+          descriptor.numMips = 1;
         }
         else if(desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE1DARRAY)
         {
-          view.numSlices = desc.Texture1DArray.ArraySize;
-          view.firstSlice = desc.Texture1DArray.FirstArraySlice;
-          view.firstMip = desc.Texture1DArray.MipSlice;
-          view.numMips = 1;
+          descriptor.numSlices = desc.Texture1DArray.ArraySize & 0xffff;
+          descriptor.firstSlice = desc.Texture1DArray.FirstArraySlice & 0xffff;
+          descriptor.firstMip = desc.Texture1DArray.MipSlice & 0xff;
+          descriptor.numMips = 1;
         }
         else if(desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2D)
         {
-          view.numSlices = 1;
-          view.firstSlice = 0;
-          view.firstMip = desc.Texture2D.MipSlice;
-          view.numMips = 1;
+          descriptor.numSlices = 1;
+          descriptor.firstSlice = 0;
+          descriptor.firstMip = desc.Texture2D.MipSlice & 0xff;
+          descriptor.numMips = 1;
         }
         else if(desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2DARRAY)
         {
-          view.numSlices = desc.Texture2DArray.ArraySize;
-          view.firstSlice = desc.Texture2DArray.FirstArraySlice;
-          view.firstMip = desc.Texture2DArray.MipSlice;
-          view.numMips = 1;
+          descriptor.numSlices = desc.Texture2DArray.ArraySize & 0xffff;
+          descriptor.firstSlice = desc.Texture2DArray.FirstArraySlice & 0xffff;
+          descriptor.firstMip = desc.Texture2DArray.MipSlice & 0xff;
+          descriptor.numMips = 1;
         }
         else if(desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2DMS)
         {
-          view.firstMip = 0;
-          view.numMips = 1;
-          view.firstSlice = 0;
-          view.numSlices = 1;
+          descriptor.firstMip = 0;
+          descriptor.numMips = 1;
+          descriptor.firstSlice = 0;
+          descriptor.numSlices = 1;
         }
         else if(desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY)
         {
-          view.numSlices = desc.Texture2DMSArray.ArraySize;
-          view.firstSlice = desc.Texture2DMSArray.FirstArraySlice;
-          view.firstMip = 0;
-          view.numMips = 1;
+          descriptor.numSlices = desc.Texture2DMSArray.ArraySize & 0xffff;
+          descriptor.firstSlice = desc.Texture2DMSArray.FirstArraySlice & 0xffff;
+          descriptor.firstMip = 0;
+          descriptor.numMips = 1;
         }
         else if(desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE3D)
         {
-          view.numSlices = desc.Texture3D.WSize;
-          view.firstSlice = desc.Texture3D.FirstWSlice;
-          view.firstMip = desc.Texture3D.MipSlice;
-          view.numMips = 1;
+          descriptor.numSlices = desc.Texture3D.WSize & 0xffff;
+          descriptor.firstSlice = desc.Texture3D.FirstWSlice & 0xffff;
+          descriptor.firstMip = desc.Texture3D.MipSlice & 0xff;
+          descriptor.numMips = 1;
         }
 
         SAFE_RELEASE(res);
       }
       else
       {
-        view.resourceResourceId = ResourceId();
+        descriptor = Descriptor();
       }
     }
 
     ret.outputMerger.uavStartSlot = rs->OM.UAVStartSlot;
 
-    ret.outputMerger.uavs.resize(D3D11_1_UAV_SLOT_COUNT);
-    for(size_t s = 0; s < D3D11_1_UAV_SLOT_COUNT; s++)
     {
-      D3D11Pipe::View view;
+      Descriptor &descriptor = ret.outputMerger.depthTarget;
 
-      view.viewResourceId = rm->GetOriginalID(GetIDForDeviceChild(rs->OM.UAVs[s]));
+      descriptor.view = rm->GetOriginalID(GetIDForDeviceChild(rs->OM.DepthView));
 
-      if(view.viewResourceId != ResourceId())
-      {
-        D3D11_UNORDERED_ACCESS_VIEW_DESC desc;
-        rs->OM.UAVs[s]->GetDesc(&desc);
-
-        ID3D11Resource *res = NULL;
-        rs->OM.UAVs[s]->GetResource(&res);
-
-        view.structured = false;
-        view.bufferStructCount = 0;
-        view.elementByteSize =
-            desc.Format == DXGI_FORMAT_UNKNOWN ? 1 : GetByteSize(1, 1, 1, desc.Format, 0);
-
-        if(desc.ViewDimension == D3D11_UAV_DIMENSION_BUFFER &&
-           (desc.Buffer.Flags & (D3D11_BUFFER_UAV_FLAG_APPEND | D3D11_BUFFER_UAV_FLAG_COUNTER)))
-        {
-          view.bufferStructCount = GetDebugManager()->GetStructCount(rs->OM.UAVs[s]);
-
-          view.counterResourceId = GetDebugManager()->GetCounterBufferID(rs->OM.UAVs[s]);
-        }
-
-        view.resourceResourceId = rm->GetOriginalID(GetIDForDeviceChild(res));
-
-        view.viewFormat = MakeResourceFormat(desc.Format);
-        view.type = MakeTextureDim(desc.ViewDimension);
-
-        if(desc.ViewDimension == D3D11_UAV_DIMENSION_BUFFER)
-        {
-          view.firstElement = desc.Buffer.FirstElement;
-          view.numElements = desc.Buffer.NumElements;
-          view.bufferFlags = D3DBufferViewFlags(desc.Buffer.Flags);
-
-          D3D11_BUFFER_DESC bufdesc;
-          ((ID3D11Buffer *)res)->GetDesc(&bufdesc);
-
-          view.structured = bufdesc.StructureByteStride > 0 && desc.Format == DXGI_FORMAT_UNKNOWN;
-
-          if(view.structured)
-            view.elementByteSize = bufdesc.StructureByteStride;
-        }
-        else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE1D)
-        {
-          view.numSlices = 1;
-          view.firstSlice = 0;
-          view.firstMip = desc.Texture1D.MipSlice;
-          view.numMips = 1;
-        }
-        else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE1DARRAY)
-        {
-          view.numSlices = desc.Texture1DArray.ArraySize;
-          view.firstSlice = desc.Texture1DArray.FirstArraySlice;
-          view.firstMip = desc.Texture1DArray.MipSlice;
-          view.numMips = 1;
-        }
-        else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE2D)
-        {
-          view.numSlices = 1;
-          view.firstSlice = 0;
-          view.firstMip = desc.Texture2D.MipSlice;
-          view.numMips = 1;
-        }
-        else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE2DARRAY)
-        {
-          view.numSlices = desc.Texture2DArray.ArraySize;
-          view.firstSlice = desc.Texture2DArray.FirstArraySlice;
-          view.firstMip = desc.Texture2DArray.MipSlice;
-          view.numMips = 1;
-        }
-        else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE3D)
-        {
-          view.numSlices = desc.Texture3D.WSize;
-          view.firstSlice = desc.Texture3D.FirstWSlice;
-          view.firstMip = desc.Texture3D.MipSlice;
-          view.numMips = 1;
-        }
-
-        SAFE_RELEASE(res);
-      }
-      else
-      {
-        view.resourceResourceId = ResourceId();
-      }
-
-      ret.outputMerger.uavs[s] = view;
-    }
-
-    {
-      D3D11Pipe::View &view = ret.outputMerger.depthTarget;
-
-      view.viewResourceId = rm->GetOriginalID(GetIDForDeviceChild(rs->OM.DepthView));
-
-      if(view.viewResourceId != ResourceId())
+      if(descriptor.view != ResourceId())
       {
         D3D11_DEPTH_STENCIL_VIEW_DESC desc;
         rs->OM.DepthView->GetDesc(&desc);
@@ -1440,9 +1065,8 @@ void D3D11Replay::SavePipelineState(uint32_t eventId)
         ID3D11Resource *res = NULL;
         rs->OM.DepthView->GetResource(&res);
 
-        view.structured = false;
-        view.bufferStructCount = 0;
-        view.elementByteSize =
+        descriptor.bufferStructCount = 0;
+        descriptor.elementByteSize =
             desc.Format == DXGI_FORMAT_UNKNOWN ? 1 : GetByteSize(1, 1, 1, desc.Format, 0);
 
         ret.outputMerger.depthReadOnly = false;
@@ -1453,59 +1077,60 @@ void D3D11Replay::SavePipelineState(uint32_t eventId)
         if(desc.Flags & D3D11_DSV_READ_ONLY_STENCIL)
           ret.outputMerger.stencilReadOnly = true;
 
-        view.resourceResourceId = rm->GetOriginalID(GetIDForDeviceChild(res));
+        descriptor.resource = rm->GetOriginalID(GetIDForDeviceChild(res));
 
-        view.viewFormat = MakeResourceFormat(desc.Format);
-        view.type = MakeTextureDim(desc.ViewDimension);
+        descriptor.type = DescriptorType::ReadWriteImage;
+        descriptor.format = MakeResourceFormat(desc.Format);
+        descriptor.textureType = MakeTextureDim(desc.ViewDimension);
 
         if(desc.ViewDimension == D3D11_DSV_DIMENSION_TEXTURE1D)
         {
-          view.numSlices = 1;
-          view.firstSlice = 0;
-          view.firstMip = desc.Texture1D.MipSlice;
-          view.numMips = 1;
+          descriptor.numSlices = 1;
+          descriptor.firstSlice = 0;
+          descriptor.firstMip = desc.Texture1D.MipSlice & 0xff;
+          descriptor.numMips = 1;
         }
         else if(desc.ViewDimension == D3D11_DSV_DIMENSION_TEXTURE1DARRAY)
         {
-          view.numSlices = desc.Texture1DArray.ArraySize;
-          view.firstSlice = desc.Texture1DArray.FirstArraySlice;
-          view.firstMip = desc.Texture1DArray.MipSlice;
-          view.numMips = 1;
+          descriptor.numSlices = desc.Texture1DArray.ArraySize & 0xffff;
+          descriptor.firstSlice = desc.Texture1DArray.FirstArraySlice & 0xffff;
+          descriptor.firstMip = desc.Texture1DArray.MipSlice & 0xff;
+          descriptor.numMips = 1;
         }
         else if(desc.ViewDimension == D3D11_DSV_DIMENSION_TEXTURE2D)
         {
-          view.numSlices = 1;
-          view.firstSlice = 0;
-          view.firstMip = desc.Texture2D.MipSlice;
-          view.numMips = 1;
+          descriptor.numSlices = 1;
+          descriptor.firstSlice = 0;
+          descriptor.firstMip = desc.Texture2D.MipSlice & 0xff;
+          descriptor.numMips = 1;
         }
         else if(desc.ViewDimension == D3D11_DSV_DIMENSION_TEXTURE2DARRAY)
         {
-          view.numSlices = desc.Texture2DArray.ArraySize;
-          view.firstSlice = desc.Texture2DArray.FirstArraySlice;
-          view.firstMip = desc.Texture2DArray.MipSlice;
-          view.numMips = 1;
+          descriptor.numSlices = desc.Texture2DArray.ArraySize & 0xffff;
+          descriptor.firstSlice = desc.Texture2DArray.FirstArraySlice & 0xffff;
+          descriptor.firstMip = desc.Texture2DArray.MipSlice & 0xff;
+          descriptor.numMips = 1;
         }
         else if(desc.ViewDimension == D3D11_DSV_DIMENSION_TEXTURE2DMS)
         {
-          view.firstMip = 0;
-          view.numMips = 1;
-          view.firstSlice = 0;
-          view.numSlices = 1;
+          descriptor.firstMip = 0;
+          descriptor.numMips = 1;
+          descriptor.firstSlice = 0;
+          descriptor.numSlices = 1;
         }
         else if(desc.ViewDimension == D3D11_DSV_DIMENSION_TEXTURE2DMSARRAY)
         {
-          view.numSlices = desc.Texture2DMSArray.ArraySize;
-          view.firstSlice = desc.Texture2DMSArray.FirstArraySlice;
-          view.firstMip = 0;
-          view.numMips = 1;
+          descriptor.numSlices = desc.Texture2DMSArray.ArraySize & 0xffff;
+          descriptor.firstSlice = desc.Texture2DMSArray.FirstArraySlice & 0xffff;
+          descriptor.firstMip = 0;
+          descriptor.numMips = 1;
         }
 
         SAFE_RELEASE(res);
       }
       else
       {
-        view.resourceResourceId = ResourceId();
+        descriptor = Descriptor();
       }
     }
 
@@ -1662,6 +1287,398 @@ void D3D11Replay::SavePipelineState(uint32_t eventId)
   ret.predication.resourceId = rm->GetOriginalID(GetIDForDeviceChild(rs->Predicate));
   ret.predication.value = rs->PredicateValue == TRUE ? true : false;
   ret.predication.isPassing = rs->PredicationWouldPass();
+}
+
+rdcarray<Descriptor> D3D11Replay::GetDescriptors(ResourceId descriptorStore,
+                                                 const rdcarray<DescriptorRange> &ranges)
+{
+  rdcarray<Descriptor> ret;
+
+  if(descriptorStore != m_pImmediateContext->GetDescriptorsID())
+  {
+    RDCERR(
+        "Descriptors query for invalid descriptor descriptorStore on fixed bindings API (D3D11)");
+    return ret;
+  }
+
+  D3D11RenderState *rs = m_pDevice->GetImmediateContext()->GetCurrentPipelineState();
+  D3D11ResourceManager *rm = m_pDevice->GetResourceManager();
+
+  size_t count = 0;
+  for(const DescriptorRange &r : ranges)
+    count += r.count;
+  ret.resize(count);
+
+  const D3D11RenderState::Shader *srcArr[] = {&rs->VS, &rs->HS, &rs->DS, &rs->GS, &rs->PS, &rs->CS};
+
+  size_t dst = 0;
+  for(const DescriptorRange &r : ranges)
+  {
+    uint32_t descriptorId = r.offset;
+
+    for(uint32_t i = 0; i < r.count; i++, dst++, descriptorId++)
+    {
+      D3D11DescriptorLocation idx = DecodeD3D11DescriptorIndex(descriptorId);
+      const D3D11RenderState::Shader &src = *srcArr[(uint32_t)idx.stage];
+
+      if(idx.type == D3D11DescriptorMapping::CBs)
+      {
+        ret[dst].type = DescriptorType::ConstantBuffer;
+
+        ret[dst].resource = rm->GetOriginalID(GetIDForDeviceChild(src.ConstantBuffers[idx.idx]));
+        ret[dst].byteOffset = src.CBOffsets[idx.idx] * sizeof(Vec4f);
+        ret[dst].byteSize = src.CBCounts[idx.idx] * sizeof(Vec4f);
+      }
+      else if(idx.type == D3D11DescriptorMapping::SRVs)
+      {
+        ID3D11ShaderResourceView *view = src.SRVs[idx.idx];
+
+        ret[dst].view = rm->GetOriginalID(GetIDForDeviceChild(view));
+
+        ret[dst].type = DescriptorType::Image;
+        if(ret[dst].view != ResourceId())
+        {
+          D3D11_SHADER_RESOURCE_VIEW_DESC desc;
+          view->GetDesc(&desc);
+
+          ret[dst].format = MakeResourceFormat(desc.Format);
+
+          ID3D11Resource *res = NULL;
+          view->GetResource(&res);
+
+          ret[dst].elementByteSize =
+              desc.Format == DXGI_FORMAT_UNKNOWN ? 1 : GetByteSize(1, 1, 1, desc.Format, 0);
+
+          ret[dst].resource = rm->GetOriginalID(GetIDForDeviceChild(res));
+
+          ret[dst].textureType = MakeTextureDim(desc.ViewDimension);
+
+          if(desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFER)
+          {
+            ret[dst].type = DescriptorType::TypedBuffer;
+
+            D3D11_BUFFER_DESC bufdesc;
+            ((ID3D11Buffer *)res)->GetDesc(&bufdesc);
+
+            if(bufdesc.StructureByteStride > 0 && desc.Format == DXGI_FORMAT_UNKNOWN)
+            {
+              ret[dst].elementByteSize = bufdesc.StructureByteStride;
+              ret[dst].type = DescriptorType::Buffer;
+            }
+
+            ret[dst].byteOffset = desc.Buffer.FirstElement * ret[dst].elementByteSize;
+            ret[dst].byteSize = desc.Buffer.NumElements * ret[dst].elementByteSize;
+          }
+          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFEREX)
+          {
+            ret[dst].type = DescriptorType::TypedBuffer;
+
+            ret[dst].flags = DescriptorFlags(desc.BufferEx.Flags);
+
+            D3D11_BUFFER_DESC bufdesc;
+            ((ID3D11Buffer *)res)->GetDesc(&bufdesc);
+
+            if(bufdesc.StructureByteStride > 0 && desc.Format == DXGI_FORMAT_UNKNOWN)
+            {
+              ret[dst].elementByteSize = bufdesc.StructureByteStride;
+              ret[dst].type = DescriptorType::Buffer;
+            }
+
+            ret[dst].byteOffset = desc.BufferEx.FirstElement * ret[dst].elementByteSize;
+            ret[dst].byteSize = desc.BufferEx.NumElements * ret[dst].elementByteSize;
+          }
+          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE1D)
+          {
+            ret[dst].firstMip = desc.Texture1D.MostDetailedMip & 0xff;
+            ret[dst].numMips = desc.Texture1D.MipLevels & 0xff;
+          }
+          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE1DARRAY)
+          {
+            ret[dst].firstMip = desc.Texture1DArray.MostDetailedMip & 0xff;
+            ret[dst].numMips = desc.Texture1DArray.MipLevels & 0xff;
+            ret[dst].numSlices = desc.Texture1DArray.ArraySize & 0xffff;
+            ret[dst].firstSlice = desc.Texture1DArray.FirstArraySlice & 0xffff;
+          }
+          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D)
+          {
+            ret[dst].firstMip = desc.Texture2D.MostDetailedMip & 0xff;
+            ret[dst].numMips = desc.Texture2D.MipLevels & 0xff;
+          }
+          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2DARRAY)
+          {
+            ret[dst].firstMip = desc.Texture2DArray.MostDetailedMip & 0xff;
+            ret[dst].numMips = desc.Texture2DArray.MipLevels & 0xff;
+            ret[dst].firstSlice = desc.Texture2DArray.FirstArraySlice & 0xffff;
+            ret[dst].numSlices = desc.Texture2DArray.ArraySize & 0xffff;
+          }
+          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2DMS)
+          {
+          }
+          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY)
+          {
+            ret[dst].numSlices = desc.Texture2DMSArray.ArraySize & 0xffff;
+            ret[dst].firstSlice = desc.Texture2DMSArray.FirstArraySlice & 0xffff;
+          }
+          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE3D)
+          {
+            ret[dst].firstMip = desc.Texture3D.MostDetailedMip & 0xff;
+            ret[dst].numMips = desc.Texture3D.MipLevels & 0xff;
+          }
+          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURECUBE)
+          {
+            ret[dst].firstMip = desc.TextureCube.MostDetailedMip & 0xff;
+            ret[dst].numMips = desc.TextureCube.MipLevels & 0xff;
+            ret[dst].numSlices = 6;
+          }
+          else if(desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURECUBEARRAY)
+          {
+            ret[dst].firstMip = desc.TextureCubeArray.MostDetailedMip & 0xff;
+            ret[dst].numMips = desc.TextureCubeArray.MipLevels & 0xff;
+            ret[dst].firstSlice = desc.TextureCubeArray.First2DArrayFace & 0xffff;
+            ret[dst].numSlices = (desc.TextureCubeArray.NumCubes * 6) & 0xffff;
+          }
+
+          SAFE_RELEASE(res);
+        }
+      }
+      else if(idx.type == D3D11DescriptorMapping::UAVs)
+      {
+        ID3D11UnorderedAccessView *view = NULL;
+
+        if(idx.stage == ShaderStage::Compute)
+          view = rs->CSUAVs[idx.idx];
+        else if(idx.idx >= rs->OM.UAVStartSlot)
+          view = rs->OM.UAVs[idx.idx - rs->OM.UAVStartSlot];
+
+        ret[dst].view = rm->GetOriginalID(GetIDForDeviceChild(view));
+
+        ret[dst].type = DescriptorType::ReadWriteImage;
+        if(ret[dst].view != ResourceId())
+        {
+          D3D11_UNORDERED_ACCESS_VIEW_DESC desc;
+          view->GetDesc(&desc);
+
+          ID3D11Resource *res = NULL;
+          view->GetResource(&res);
+
+          ret[dst].bufferStructCount = 0;
+
+          ret[dst].elementByteSize =
+              desc.Format == DXGI_FORMAT_UNKNOWN ? 1 : GetByteSize(1, 1, 1, desc.Format, 0);
+
+          ret[dst].textureType = MakeTextureDim(desc.ViewDimension);
+
+          ret[dst].secondary = ResourceId();
+
+          if(desc.ViewDimension == D3D11_UAV_DIMENSION_BUFFER &&
+             (desc.Buffer.Flags & (D3D11_BUFFER_UAV_FLAG_APPEND | D3D11_BUFFER_UAV_FLAG_COUNTER)))
+          {
+            ret[dst].bufferStructCount = GetDebugManager()->GetStructCount(view);
+
+            ret[dst].secondary = GetDebugManager()->GetCounterBufferID(view);
+          }
+
+          ret[dst].resource = rm->GetOriginalID(GetIDForDeviceChild(res));
+
+          ret[dst].format = MakeResourceFormat(desc.Format);
+
+          if(desc.ViewDimension == D3D11_UAV_DIMENSION_BUFFER)
+          {
+            ret[dst].type = DescriptorType::ReadWriteBuffer;
+
+            if(desc.Format != DXGI_FORMAT_UNKNOWN)
+              ret[dst].type = DescriptorType::ReadWriteTypedBuffer;
+
+            ret[dst].flags = DescriptorFlags(desc.Buffer.Flags);
+
+            D3D11_BUFFER_DESC bufdesc;
+            ((ID3D11Buffer *)res)->GetDesc(&bufdesc);
+
+            if(bufdesc.StructureByteStride > 0 && desc.Format == DXGI_FORMAT_UNKNOWN)
+              ret[dst].elementByteSize = bufdesc.StructureByteStride;
+
+            ret[dst].byteOffset = desc.Buffer.FirstElement * ret[dst].elementByteSize;
+            ret[dst].byteSize = desc.Buffer.NumElements * ret[dst].elementByteSize;
+          }
+          else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE1D)
+          {
+            ret[dst].firstMip = desc.Texture1D.MipSlice & 0xff;
+          }
+          else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE1DARRAY)
+          {
+            ret[dst].numSlices = desc.Texture1DArray.ArraySize & 0xffff;
+            ret[dst].firstSlice = desc.Texture1DArray.FirstArraySlice & 0xffff;
+            ret[dst].firstMip = desc.Texture1DArray.MipSlice & 0xff;
+          }
+          else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE2D)
+          {
+            ret[dst].firstMip = desc.Texture2D.MipSlice & 0xff;
+          }
+          else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE2DARRAY)
+          {
+            ret[dst].numSlices = desc.Texture2DArray.ArraySize & 0xffff;
+            ret[dst].firstSlice = desc.Texture2DArray.FirstArraySlice & 0xffff;
+            ret[dst].firstMip = desc.Texture2DArray.MipSlice & 0xff;
+          }
+          else if(desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE3D)
+          {
+            ret[dst].numSlices = desc.Texture3D.WSize & 0xffff;
+            ret[dst].firstSlice = desc.Texture3D.FirstWSlice & 0xffff;
+            ret[dst].firstMip = desc.Texture3D.MipSlice & 0xff;
+          }
+
+          SAFE_RELEASE(res);
+        }
+      }
+    }
+  }
+
+  return ret;
+}
+
+rdcarray<SamplerDescriptor> D3D11Replay::GetSamplerDescriptors(ResourceId descriptorStore,
+                                                               const rdcarray<DescriptorRange> &ranges)
+{
+  rdcarray<SamplerDescriptor> ret;
+
+  if(descriptorStore != m_pImmediateContext->GetDescriptorsID())
+  {
+    RDCERR(
+        "Descriptors query for invalid descriptor descriptorStore on fixed bindings API (D3D11)");
+    return ret;
+  }
+
+  D3D11RenderState *rs = m_pDevice->GetImmediateContext()->GetCurrentPipelineState();
+  D3D11ResourceManager *rm = m_pDevice->GetResourceManager();
+
+  size_t count = 0;
+  for(const DescriptorRange &r : ranges)
+    count += r.count;
+  ret.resize(count);
+
+  const D3D11RenderState::Shader *srcArr[] = {&rs->VS, &rs->HS, &rs->DS, &rs->GS, &rs->PS, &rs->CS};
+
+  size_t dst = 0;
+  for(const DescriptorRange &r : ranges)
+  {
+    uint32_t descriptorId = r.offset;
+
+    for(uint32_t i = 0; i < r.count; i++, dst++, descriptorId++)
+    {
+      D3D11DescriptorLocation idx = DecodeD3D11DescriptorIndex(descriptorId);
+
+      if(idx.type != D3D11DescriptorMapping::Samplers)
+        continue;
+
+      ID3D11SamplerState *samp = srcArr[(uint32_t)idx.stage]->Samplers[idx.idx];
+
+      ret[dst].type = DescriptorType::Sampler;
+      ret[dst].object = rm->GetOriginalID(GetIDForDeviceChild(samp));
+
+      if(ret[dst].object != ResourceId())
+      {
+        D3D11_SAMPLER_DESC desc;
+        samp->GetDesc(&desc);
+
+        ret[dst].addressU = MakeAddressMode(desc.AddressU);
+        ret[dst].addressV = MakeAddressMode(desc.AddressV);
+        ret[dst].addressW = MakeAddressMode(desc.AddressW);
+
+        ret[dst].borderColorValue.floatValue = desc.BorderColor;
+        ret[dst].borderColorType = CompType::Float;
+
+        ret[dst].compareFunction = MakeCompareFunc(desc.ComparisonFunc);
+        ret[dst].filter = MakeFilter(desc.Filter);
+        ret[dst].maxAnisotropy = 0;
+        if(ret[dst].filter.mip == FilterMode::Anisotropic)
+          ret[dst].maxAnisotropy = (float)desc.MaxAnisotropy;
+        ret[dst].maxLOD = desc.MaxLOD;
+        ret[dst].minLOD = desc.MinLOD;
+        ret[dst].mipBias = desc.MipLODBias;
+      }
+    }
+  }
+
+  return ret;
+}
+
+rdcarray<DescriptorAccess> D3D11Replay::GetDescriptorAccess(uint32_t eventId)
+{
+  D3D11RenderState *rs = m_pDevice->GetImmediateContext()->GetCurrentPipelineState();
+
+  rdcarray<DescriptorAccess> ret;
+
+  const D3D11RenderState::Shader *srcArr[] = {&rs->VS, &rs->HS, &rs->DS, &rs->GS, &rs->PS, &rs->CS};
+
+  for(size_t stage = 0; stage < ARRAY_COUNT(srcArr); stage++)
+  {
+    const D3D11RenderState::Shader &src = *srcArr[stage];
+
+    WrappedShader *shad = (WrappedShader *)(WrappedID3D11Shader<ID3D11VertexShader> *)src.Object;
+
+    if(shad)
+      ret.append(shad->GetDescriptorAccess());
+  }
+
+  return ret;
+}
+
+rdcarray<DescriptorLogicalLocation> D3D11Replay::GetDescriptorLocations(
+    ResourceId descriptorStore, const rdcarray<DescriptorRange> &ranges)
+{
+  rdcarray<DescriptorLogicalLocation> ret;
+
+  if(descriptorStore != m_pImmediateContext->GetDescriptorsID())
+  {
+    RDCERR("Descriptors query for invalid descriptor store on fixed bindings API (D3D11)");
+    return ret;
+  }
+
+  size_t count = 0;
+  for(const DescriptorRange &r : ranges)
+    count += r.count;
+  ret.resize(count);
+
+  size_t dst = 0;
+  for(const DescriptorRange &r : ranges)
+  {
+    uint32_t descriptorByteOffset = r.offset;
+
+    for(uint32_t i = 0; i < r.count; i++, dst++, descriptorByteOffset++)
+    {
+      DescriptorLogicalLocation &dstLoc = ret[dst];
+      D3D11DescriptorLocation srcLoc = DecodeD3D11DescriptorIndex(descriptorByteOffset);
+
+      dstLoc.stageMask = MaskForStage(srcLoc.stage);
+      char typePrefix = '?';
+      switch(srcLoc.type)
+      {
+        case D3D11DescriptorMapping::CBs:
+          typePrefix = 'b';
+          dstLoc.category = DescriptorCategory::ConstantBlock;
+          break;
+        case D3D11DescriptorMapping::Samplers:
+          typePrefix = 's';
+          dstLoc.category = DescriptorCategory::Sampler;
+          break;
+        case D3D11DescriptorMapping::SRVs:
+          typePrefix = 't';
+          dstLoc.category = DescriptorCategory::ReadOnlyResource;
+          break;
+        case D3D11DescriptorMapping::UAVs:
+          typePrefix = 'u';
+          dstLoc.category = DescriptorCategory::ReadWriteResource;
+          break;
+        case D3D11DescriptorMapping::Count:
+        case D3D11DescriptorMapping::Invalid: dstLoc.category = DescriptorCategory::Unknown; break;
+      }
+      dstLoc.fixedBindNumber = srcLoc.idx;
+
+      dstLoc.logicalBindName = StringFormat::Fmt("%c%u", typePrefix, srcLoc.idx);
+    }
+  }
+
+  return ret;
 }
 
 RDResult D3D11Replay::ReadLogInitialisation(RDCFile *rdc, bool storeStructuredBuffers)

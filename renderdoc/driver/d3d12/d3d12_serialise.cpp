@@ -840,6 +840,7 @@ void DoSerialise(SerialiserType &ser, D3D12_INDIRECT_ARGUMENT_DESC &el)
     case D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED:
     case D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH:
     case D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH:
+    case D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_RAYS:
     case D3D12_INDIRECT_ARGUMENT_TYPE_INDEX_BUFFER_VIEW:
       // nothing to serialise
       break;
@@ -1069,6 +1070,12 @@ void DoSerialise(SerialiserType &ser, D3D12_TEXCUBE_ARRAY_SRV &el)
   SERIALISE_MEMBER(First2DArrayFace);
   SERIALISE_MEMBER(NumCubes);
   SERIALISE_MEMBER(ResourceMinLODClamp);
+}
+
+template <class SerialiserType>
+void DoSerialise(SerialiserType &ser, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_SRV &el)
+{
+  SERIALISE_MEMBER_TYPED(D3D12BufferLocation, Location);
 }
 
 template <class SerialiserType>
@@ -1876,14 +1883,9 @@ void DoSerialise(SerialiserType &ser, D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCT
   SERIALISE_MEMBER_TYPED(D3D12BufferLocation, DestAccelerationStructureData).Important();
   SERIALISE_MEMBER(Inputs);
 
+  SERIALISE_MEMBER_TYPED(D3D12BufferLocation, SourceAccelerationStructureData);
   if(el.SourceAccelerationStructureData)
-  {
-    SERIALISE_MEMBER_TYPED(D3D12BufferLocation, SourceAccelerationStructureData).Important();
-  }
-  else
-  {
-    SERIALISE_MEMBER_TYPED(D3D12BufferLocation, SourceAccelerationStructureData);
-  }
+    ser.Important();
 
   SERIALISE_MEMBER_TYPED(D3D12BufferLocation, ScratchAccelerationStructureData).Important();
 }
@@ -1965,6 +1967,14 @@ void DoSerialise(SerialiserType &ser, D3D12_RAYTRACING_GEOMETRY_AABBS_DESC &el)
 }
 
 template <class SerialiserType>
+void DoSerialise(SerialiserType &ser, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO &el)
+{
+  SERIALISE_MEMBER(ResultDataMaxSizeInBytes);
+  SERIALISE_MEMBER(ScratchDataSizeInBytes);
+  SERIALISE_MEMBER(UpdateScratchDataSizeInBytes);
+}
+
+template <class SerialiserType>
 void DoSerialise(SerialiserType &ser, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC &el)
 {
   SERIALISE_MEMBER_TYPED(D3D12BufferLocation, DestBuffer);
@@ -1977,12 +1987,6 @@ void DoSerialise(SerialiserType &ser,
 {
   SERIALISE_MEMBER(SerializedSizeInBytes);
   SERIALISE_MEMBER(NumBottomLevelAccelerationStructurePointers);
-}
-
-template <class SerialiserType>
-void DoSerialise(SerialiserType &ser, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_SRV &el)
-{
-  SERIALISE_MEMBER_TYPED(D3D12BufferLocation, Location);
 }
 
 template <class SerialiserType>
@@ -2193,15 +2197,19 @@ void Deserialise(const D3D12_DXIL_LIBRARY_DESC &el)
 template <class SerialiserType>
 void DoSerialise(SerialiserType &ser, D3D12_EXISTING_COLLECTION_DESC &el)
 {
-  // AMD TODO
-  RDCERR("D3D12_EXISTING_COLLECTION_DESC serialization is not handled");
+  SERIALISE_MEMBER(pExistingCollection);
+  SERIALISE_MEMBER(NumExports);
+  SERIALISE_MEMBER_ARRAY(pExports, NumExports);
 }
 
 template <>
 void Deserialise(const D3D12_EXISTING_COLLECTION_DESC &el)
 {
-  // AMD TODO
-  RDCERR("D3D12_EXISTING_COLLECTION_DESC de-serialization is not handled");
+  for(size_t i = 0; i < el.NumExports; i++)
+  {
+    Deserialise(el.pExports[i]);
+  }
+  delete[] el.pExports;
 }
 
 template <class SerialiserType>
@@ -2389,6 +2397,33 @@ void Deserialise(const D3D12_EXPORT_DESC &el)
   delete[] el.ExportToRename;
 }
 
+template <class SerialiserType>
+void DoSerialise(SerialiserType &ser, D3D12_GPU_VIRTUAL_ADDRESS_RANGE &el)
+{
+  SERIALISE_MEMBER_TYPED(D3D12BufferLocation, StartAddress).Important();
+  SERIALISE_MEMBER(SizeInBytes);
+}
+
+template <class SerialiserType>
+void DoSerialise(SerialiserType &ser, D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE &el)
+{
+  SERIALISE_MEMBER_TYPED(D3D12BufferLocation, StartAddress).Important();
+  SERIALISE_MEMBER(SizeInBytes);
+  SERIALISE_MEMBER(StrideInBytes);
+}
+
+template <class SerialiserType>
+void DoSerialise(SerialiserType &ser, D3D12_DISPATCH_RAYS_DESC &el)
+{
+  SERIALISE_MEMBER(RayGenerationShaderRecord);
+  SERIALISE_MEMBER(MissShaderTable);
+  SERIALISE_MEMBER(HitGroupTable);
+  SERIALISE_MEMBER(CallableShaderTable);
+  SERIALISE_MEMBER(Width).Important();
+  SERIALISE_MEMBER(Height).Important();
+  SERIALISE_MEMBER(Depth).Important();
+}
+
 INSTANTIATE_SERIALISE_TYPE(D3D12RootSignature);
 INSTANTIATE_SERIALISE_TYPE(PortableHandle);
 INSTANTIATE_SERIALISE_TYPE(D3D12_CPU_DESCRIPTOR_HANDLE);
@@ -2455,6 +2490,7 @@ INSTANTIATE_SERIALISE_TYPE(D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS)
 INSTANTIATE_SERIALISE_TYPE(D3D12_RAYTRACING_GEOMETRY_DESC);
 INSTANTIATE_SERIALISE_TYPE(D3D12_RAYTRACING_GEOMETRY_TRIANGLES_DESC);
 INSTANTIATE_SERIALISE_TYPE(D3D12_RAYTRACING_GEOMETRY_AABBS_DESC);
+INSTANTIATE_SERIALISE_TYPE(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO);
 INSTANTIATE_SERIALISE_TYPE(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC);
 INSTANTIATE_SERIALISE_TYPE(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_SERIALIZATION_DESC);
 INSTANTIATE_SERIALISE_TYPE(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_SRV);
@@ -2473,3 +2509,6 @@ INSTANTIATE_SERIALISE_TYPE(D3D12_RAYTRACING_PIPELINE_CONFIG);
 INSTANTIATE_SERIALISE_TYPE(D3D12_HIT_GROUP_DESC);
 INSTANTIATE_SERIALISE_TYPE(D3D12_RAYTRACING_PIPELINE_CONFIG1);
 INSTANTIATE_SERIALISE_TYPE(D3D12_EXPORT_DESC);
+INSTANTIATE_SERIALISE_TYPE(D3D12_GPU_VIRTUAL_ADDRESS_RANGE);
+INSTANTIATE_SERIALISE_TYPE(D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE);
+INSTANTIATE_SERIALISE_TYPE(D3D12_DISPATCH_RAYS_DESC);

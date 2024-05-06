@@ -165,6 +165,9 @@ bool WrappedVulkan::Prepare_InitialState(WrappedVkRes *res)
       RDCERR("Push descriptor set with initial contents! Should never have been marked dirty");
       initialContents.numDescriptors = 0;
       initialContents.descriptorSlots = NULL;
+      initialContents.numAccelerationStructures = 0;
+      initialContents.accelerationStructures = NULL;
+      initialContents.accelerationStructureWrites = NULL;
     }
 
     GetResourceManager()->SetInitialContents(id, initialContents);
@@ -571,6 +574,33 @@ bool WrappedVulkan::Prepare_InitialState(WrappedVkRes *res)
 
     return true;
   }
+  else if(type == eResAccelerationStructureKHR)
+  {
+    VkResourceRecord *record = GetResourceManager()->GetResourceRecord(id);
+    if(!record->accelerationStructureBuilt)
+    {
+      RDCDEBUG("Skipping AS %s as it has not been built", ToStr(id).c_str());
+      return true;
+    }
+
+    VulkanAccelerationStructureManager::ASMemory result;
+    VkAccelerationStructureKHR as = ToUnwrappedHandle<VkAccelerationStructureKHR>(res);
+    if(!GetAccelerationStructureManager()->Prepare(as, m_QueueFamilyIndices, result))
+    {
+      SET_ERROR_RESULT(m_LastCaptureError, ResultCode::OutOfMemory,
+                       "Couldn't allocate readback memory");
+      m_CaptureFailure = true;
+      return false;
+    }
+
+    VkInitialContents ic = VkInitialContents(type, result.alloc);
+    ic.isTLAS = result.isTLAS;
+
+    GetResourceManager()->SetInitialContents(id, ic);
+    m_PreparedNotSerialisedInitStates.push_back(id);
+
+    return true;
+  }
   else
   {
     RDCERR("Unhandled resource type %d", type);
@@ -608,7 +638,8 @@ uint64_t WrappedVulkan::GetSize_InitialState(ResourceId id, const VkInitialConte
     // buffers only have initial states when they're sparse
     return ret;
   }
-  else if(initial.type == eResImage || initial.type == eResDeviceMemory)
+  else if(initial.type == eResImage || initial.type == eResDeviceMemory ||
+          initial.type == eResAccelerationStructureKHR)
   {
     // the size primarily comes from the buffer, the size of which we conveniently have stored.
     return ret + uint64_t(128 + initial.mem.size + WriteSerialiser::GetChunkAlignment());
@@ -1191,6 +1222,15 @@ bool WrappedVulkan::Serialise_InitialState(SerialiserType &ser, ResourceId id, V
         RDCASSERTEQUAL(layout.inlineByteSize, InlineData.size());
         memcpy(initialContents.inlineData, InlineData.data(), InlineData.size());
       }
+      if(layout.accelerationStructureWriteCount > 0)
+      {
+        initialContents.accelerationStructureWrites =
+            new VkWriteDescriptorSetAccelerationStructureKHR[layout.accelerationStructureWriteCount];
+
+        initialContents.numAccelerationStructures = layout.accelerationStructureCount;
+        initialContents.accelerationStructures =
+            new VkAccelerationStructureKHR[initialContents.numAccelerationStructures];
+      }
 
       RDCCOMPILE_ASSERT(sizeof(VkDescriptorBufferInfo) >= sizeof(VkDescriptorImageInfo),
                         "Descriptor structs sizes are unexpected, ensure largest size is used");
@@ -1199,6 +1239,9 @@ bool WrappedVulkan::Serialise_InitialState(SerialiserType &ser, ResourceId id, V
 
       VkDescriptorBufferInfo *writeScratch = initialContents.descriptorInfo;
       VkWriteDescriptorSetInlineUniformBlock *dstInline = initialContents.inlineInfo;
+      VkWriteDescriptorSetAccelerationStructureKHR *dstAS =
+          initialContents.accelerationStructureWrites;
+      VkAccelerationStructureKHR *accelerationStructures = initialContents.accelerationStructures;
       DescriptorSetSlot *srcBindings = Bindings;
       byte *srcInlineData = initialContents.inlineData;
 
@@ -1257,6 +1300,31 @@ bool WrappedVulkan::Serialise_InitialState(SerialiserType &ser, ResourceId id, V
           writes.push_back(write);
 
           dstInline++;
+        }
+        else if(layoutBind.layoutDescType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+        {
+          for(uint32_t i = 0; i < layoutBind.descriptorCount; ++i)
+          {
+            accelerationStructures[i] =
+                GetResourceManager()->GetLiveHandle<VkAccelerationStructureKHR>(slots[i].resource);
+          }
+
+          dstAS->sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+          dstAS->pNext = NULL;
+          dstAS->accelerationStructureCount = layoutBind.descriptorCount;
+          dstAS->pAccelerationStructures = accelerationStructures;
+
+          VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+          write.pNext = dstAS;
+          write.dstSet = set;
+          write.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+          write.dstBinding = bind;
+          write.descriptorCount = layoutBind.descriptorCount;
+
+          writes.push_back(write);
+
+          dstAS++;
+          accelerationStructures += layoutBind.descriptorCount;
         }
         // quick check for slots that were completely uninitialised and so don't have valid data
         else if(!NULLDescriptorsAllowed() && descriptorCount == 1 &&
@@ -1637,6 +1705,10 @@ bool WrappedVulkan::Serialise_InitialState(SerialiserType &ser, ResourceId id, V
       }
     }
   }
+  else if(type == eResAccelerationStructureKHR)
+  {
+    ret = GetAccelerationStructureManager()->Serialise(ser, id, initial, m_State);
+  }
   else
   {
     RDCERR("Unhandled resource type %s", ToStr(type).c_str());
@@ -1729,6 +1801,7 @@ void WrappedVulkan::Apply_InitialState(WrappedVkRes *live, const VkInitialConten
     // when we want to fetch pipeline state
     rdcarray<DescriptorSetSlot *> &bindings = m_DescriptorSetState[id].data.binds;
     bytebuf &inlineData = m_DescriptorSetState[id].data.inlineBytes;
+    VkAccelerationStructureKHR *asData = initial.accelerationStructures;
 
     for(uint32_t i = 0; i < initial.numDescriptors; i++)
     {
@@ -1744,6 +1817,15 @@ void WrappedVulkan::Apply_InitialState(WrappedVkRes *live, const VkInitialConten
         memcpy(inlineData.data() + bind->offset + writes[i].dstArrayElement, inlineWrite->pData,
                inlineWrite->dataSize);
         continue;
+      }
+      else if(writes[i].descriptorType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+      {
+        VkWriteDescriptorSetAccelerationStructureKHR *asWrite =
+            (VkWriteDescriptorSetAccelerationStructureKHR *)FindNextStruct(
+                &writes[i], VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+        RDCASSERTEQUAL(initial.numAccelerationStructures, writes[i].descriptorCount);
+        memcpy(asData + bind->offset + writes[i].dstArrayElement, asWrite->pAccelerationStructures,
+               sizeof(VkAccelerationStructureKHR) * asWrite->accelerationStructureCount);
       }
 
       for(uint32_t d = 0; d < writes[i].descriptorCount; d++)
@@ -1761,6 +1843,14 @@ void WrappedVulkan::Apply_InitialState(WrappedVkRes *live, const VkInitialConten
                 writes[i].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC)
         {
           bind[idx].SetBuffer(writes[i].descriptorType, writes[i].pBufferInfo[d]);
+        }
+        else if(writes[i].descriptorType == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+        {
+          VkWriteDescriptorSetAccelerationStructureKHR *asWrite =
+              (VkWriteDescriptorSetAccelerationStructureKHR *)FindNextStruct(
+                  &writes[i], VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR);
+          bind[idx].SetAccelerationStructure(writes[i].descriptorType,
+                                             asWrite->pAccelerationStructures[d]);
         }
         else
         {
@@ -2311,6 +2401,10 @@ void WrappedVulkan::Apply_InitialState(WrappedVkRes *live, const VkInitialConten
       SubmitCmds();
       FlushQ();
     }
+  }
+  else if(type == eResAccelerationStructureKHR)
+  {
+    GetAccelerationStructureManager()->Apply(id, initial);
   }
   else
   {

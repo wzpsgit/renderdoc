@@ -256,22 +256,46 @@ void BarrierSet::Unapply(ID3D12GraphicsCommandListX *list)
   RDCASSERT(newToOldBarriers.empty());
 }
 
-bool EnableD3D12DebugLayer(PFN_D3D12_GET_DEBUG_INTERFACE getDebugInterface)
+bool EnableD3D12DebugLayer(D3D12DevConfiguration *devConfig,
+                           PFN_D3D12_GET_DEBUG_INTERFACE getDebugInterface)
 {
-  if(!getDebugInterface)
-    getDebugInterface = (PFN_D3D12_GET_DEBUG_INTERFACE)GetProcAddress(GetModuleHandleA("d3d12.dll"),
-                                                                      "D3D12GetDebugInterface");
-
-  if(!getDebugInterface)
+  ID3D12Debug *debug = NULL;
+  if(devConfig)
   {
-    RDCERR("Couldn't find D3D12GetDebugInterface!");
-    return false;
+    if(devConfig->debug)
+    {
+      debug = devConfig->debug;
+      debug->AddRef();
+    }
+  }
+  else
+  {
+    if(!getDebugInterface)
+      getDebugInterface = (PFN_D3D12_GET_DEBUG_INTERFACE)GetProcAddress(
+          GetModuleHandleA("d3d12.dll"), "D3D12GetDebugInterface");
+
+    if(!getDebugInterface)
+    {
+      RDCERR("Couldn't find D3D12GetDebugInterface!");
+      return false;
+    }
+
+    HRESULT hr = getDebugInterface(__uuidof(ID3D12Debug), (void **)&debug);
+
+    if(FAILED(hr))
+      SAFE_RELEASE(debug);
+
+    if(hr == DXGI_ERROR_SDK_COMPONENT_MISSING)
+    {
+      RDCWARN("Debug layer not available: DXGI_ERROR_SDK_COMPONENT_MISSING");
+    }
+    else if(FAILED(hr))
+    {
+      RDCERR("Couldn't enable debug layer: %x", hr);
+    }
   }
 
-  ID3D12Debug *debug = NULL;
-  HRESULT hr = getDebugInterface(__uuidof(ID3D12Debug), (void **)&debug);
-
-  if(SUCCEEDED(hr) && debug)
+  if(debug)
   {
     debug->EnableDebugLayer();
 
@@ -297,14 +321,6 @@ bool EnableD3D12DebugLayer(PFN_D3D12_GET_DEBUG_INTERFACE getDebugInterface)
     SAFE_RELEASE(debug);
 
     return true;
-  }
-  else if(hr == DXGI_ERROR_SDK_COMPONENT_MISSING)
-  {
-    RDCWARN("Debug layer not available: DXGI_ERROR_SDK_COMPONENT_MISSING");
-  }
-  else
-  {
-    RDCERR("Couldn't enable debug layer: %x", hr);
   }
 
   return false;
@@ -481,6 +497,7 @@ TextureType MakeTextureDim(D3D12_SRV_DIMENSION dim)
   {
     case D3D12_SRV_DIMENSION_UNKNOWN: return TextureType::Unknown;
     case D3D12_SRV_DIMENSION_BUFFER: return TextureType::Buffer;
+    case D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE: return TextureType::Buffer;
     case D3D12_SRV_DIMENSION_TEXTURE1D: return TextureType::Texture1D;
     case D3D12_SRV_DIMENSION_TEXTURE1DARRAY: return TextureType::Texture1DArray;
     case D3D12_SRV_DIMENSION_TEXTURE2D: return TextureType::Texture2D;
@@ -660,22 +677,22 @@ TextureFilter MakeFilter(D3D12_FILTER filter)
   return ret;
 }
 
-D3DBufferViewFlags MakeBufferFlags(D3D12_BUFFER_SRV_FLAGS flags)
+DescriptorFlags MakeDescriptorFlags(D3D12_BUFFER_SRV_FLAGS flags)
 {
-  D3DBufferViewFlags ret = D3DBufferViewFlags::NoFlags;
+  DescriptorFlags ret = DescriptorFlags::NoFlags;
 
   if(flags & D3D12_BUFFER_SRV_FLAG_RAW)
-    ret |= D3DBufferViewFlags::Raw;
+    ret |= DescriptorFlags::RawBuffer;
 
   return ret;
 }
 
-D3DBufferViewFlags MakeBufferFlags(D3D12_BUFFER_UAV_FLAGS flags)
+DescriptorFlags MakeDescriptorFlags(D3D12_BUFFER_UAV_FLAGS flags)
 {
-  D3DBufferViewFlags ret = D3DBufferViewFlags::NoFlags;
+  DescriptorFlags ret = DescriptorFlags::NoFlags;
 
   if(flags & D3D12_BUFFER_UAV_FLAG_RAW)
-    ret |= D3DBufferViewFlags::Raw;
+    ret |= DescriptorFlags::RawBuffer;
 
   return ret;
 }
@@ -1067,6 +1084,50 @@ rdcstr PIX3DecodeEventString(const UINT64 *pData, UINT64 &color)
   // sprintf remaining args
   formatString = PIX3SprintfParams(formatString, pData);
   return formatString;
+}
+
+D3D12_SAMPLER_DESC2 ConvertStaticSampler(const D3D12_STATIC_SAMPLER_DESC1 &samp)
+{
+  D3D12_SAMPLER_DESC2 desc;
+  desc.Filter = samp.Filter;
+  desc.AddressU = samp.AddressU;
+  desc.AddressV = samp.AddressV;
+  desc.AddressW = samp.AddressW;
+  desc.MipLODBias = samp.MipLODBias;
+  desc.MaxAnisotropy = samp.MaxAnisotropy;
+  desc.ComparisonFunc = samp.ComparisonFunc;
+  switch(samp.BorderColor)
+  {
+    default:
+    case D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK:
+      desc.FloatBorderColor[0] = desc.FloatBorderColor[1] = desc.FloatBorderColor[2] =
+          desc.FloatBorderColor[3] = 0.0f;
+      break;
+    case D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK:
+      desc.FloatBorderColor[0] = desc.FloatBorderColor[1] = desc.FloatBorderColor[2] = 0.0f;
+      desc.FloatBorderColor[3] = 1.0f;
+      break;
+    case D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE:
+      desc.FloatBorderColor[0] = desc.FloatBorderColor[1] = desc.FloatBorderColor[2] =
+          desc.FloatBorderColor[3] = 1.0f;
+      break;
+    case D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK_UINT:
+      desc.UintBorderColor[0] = desc.UintBorderColor[1] = desc.UintBorderColor[2] = 0;
+      desc.UintBorderColor[3] = 1;
+      // this flag is optional in D3D, add it here to ensure we can check it elsewhere
+      desc.Flags |= D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR;
+      break;
+    case D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE_UINT:
+      desc.UintBorderColor[0] = desc.UintBorderColor[1] = desc.UintBorderColor[2] =
+          desc.UintBorderColor[3] = 1;
+      // this flag is optional in D3D, add it here to ensure we can check it elsewhere
+      desc.Flags |= D3D12_SAMPLER_FLAG_UINT_BORDER_COLOR;
+      break;
+  }
+  desc.MinLOD = samp.MinLOD;
+  desc.MaxLOD = samp.MaxLOD;
+  desc.Flags = samp.Flags;
+  return desc;
 }
 
 D3D12_DEPTH_STENCILOP_DESC1 Upconvert(const D3D12_DEPTH_STENCILOP_DESC &face)
@@ -1769,3 +1830,107 @@ D3D12_PACKED_PIPELINE_STATE_STREAM_DESC &D3D12_PACKED_PIPELINE_STATE_STREAM_DESC
 
   return *this;
 }
+
+#if ENABLED(ENABLE_UNIT_TESTS)
+#include "catch/catch.hpp"
+
+#define INCLUDE_GPUADDRESS_HELPERS
+
+#include "data/hlsl/hlsl_cbuffers.h"
+
+GPUAddress toaddr(uint64_t addr)
+{
+  GPUAddress ret;
+  RDCCOMPILE_ASSERT(sizeof(ret) == sizeof(addr), "GPU address isn't 64-bit");
+  memcpy(&ret, &addr, sizeof(ret));
+  return ret;
+}
+
+uint64_t fromaddr(GPUAddress addr)
+{
+  uint64_t ret;
+  RDCCOMPILE_ASSERT(sizeof(ret) == sizeof(addr), "GPU address isn't 64-bit");
+  memcpy(&ret, &addr, sizeof(ret));
+  return ret;
+}
+
+TEST_CASE("HLSL uint64 helpers", "[d3d]")
+{
+  rdcarray<uint64_t> testValues = {
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      100,
+      128,
+      1000,
+
+      0xfffffffa,
+      0xfffffffb,
+      0xfffffffc,
+      0xfffffffd,
+      0xfffffffe,
+      0xffffffff,
+
+      0x100000000ULL,
+      0x100000001ULL,
+      0x100000002ULL,
+      0x100000003ULL,
+      0x100000004ULL,
+      0x100000005ULL,
+      0x100000006ULL,
+
+      0x1000000000001000ULL,
+      0x100000000fffffffULL,
+      0x1000000010000000ULL,
+      0x1000000010000001ULL,
+      0x1000000010000002ULL,
+      0x1000000010000002ULL,
+
+      0x4000000000001000ULL,
+      0x400000000fffffffULL,
+      0x4000000010000000ULL,
+      0x4000000010000001ULL,
+      0x4000000010000002ULL,
+      0x4000000010000002ULL,
+      // don't test anything that could overflow if summed together for simplicity
+  };
+
+  for(uint64_t first : testValues)
+  {
+    for(uint64_t second : testValues)
+    {
+      GPUAddress a, b;
+      a = toaddr(first);
+      b = toaddr(second);
+
+      // sanity check
+      CHECK(fromaddr(a) == first);
+      CHECK(fromaddr(b) == second);
+
+      CHECK(lessThan(a, b) == (first < second));
+      CHECK(lessEqual(a, b) == (first <= second));
+
+      CHECK(lessThan(b, a) == (second < first));
+      CHECK(lessEqual(b, a) == (second <= first));
+
+      CHECK(fromaddr(add(a, b)) == (first + second));
+      CHECK(fromaddr(add(b, a)) == (first + second));
+
+      if(first >= second)
+        CHECK(fromaddr(sub(a, b)) == (first - second));
+      else
+        CHECK(fromaddr(sub(b, a)) == (second - first));
+    }
+  }
+};
+
+#endif    // ENABLED(ENABLE_UNIT_TESTS)

@@ -177,6 +177,10 @@ public:
   TextureDescription *GetTexture(ResourceId id) override { return m_Textures[id]; }
   const rdcarray<TextureDescription> &GetTextures() override { return m_TextureList; }
   BufferDescription *GetBuffer(ResourceId id) override { return m_Buffers[id]; }
+  DescriptorStoreDescription *GetDescriptorStore(ResourceId id) override
+  {
+    return m_DescriptorStores[id];
+  }
   const rdcarray<BufferDescription> &GetBuffers() const override { return m_BufferList; }
   const ActionDescription *GetAction(uint32_t eventId) override
   {
@@ -255,14 +259,16 @@ public:
                        const rdcstr &entryFunc, const bytebuf &shaderBytes);
   void RevertShaderEdit(IShaderViewer *viewer, ResourceId id);
 
-  IShaderViewer *DebugShader(const ShaderBindpointMapping *bind, const ShaderReflection *shader,
-                             ResourceId pipeline, ShaderDebugTrace *trace,
-                             const rdcstr &debugContext) override;
+  IShaderViewer *DebugShader(const ShaderReflection *shader, ResourceId pipeline,
+                             ShaderDebugTrace *trace, const rdcstr &debugContext) override;
 
   IShaderViewer *ViewShader(const ShaderReflection *shader, ResourceId pipeline) override;
 
   IShaderMessageViewer *ViewShaderMessages(ShaderStageMask stages) override;
 
+  IDescriptorViewer *ViewDescriptorStore(ResourceId id) override;
+  IDescriptorViewer *ViewDescriptors(const rdcarray<Descriptor> &descriptors,
+                                     const rdcarray<SamplerDescriptor> &samplerDescriptors) override;
   IBufferViewer *ViewBuffer(uint64_t byteOffset, uint64_t byteSize, ResourceId id,
                             const rdcstr &format = "") override;
   IBufferViewer *ViewTextureAsBuffer(ResourceId id, const Subresource &sub,
@@ -375,6 +381,8 @@ private:
   rdcarray<TextureDescription> m_TextureList;
   QMap<ResourceId, BufferDescription *> m_Buffers;
   rdcarray<BufferDescription> m_BufferList;
+  QMap<ResourceId, DescriptorStoreDescription *> m_DescriptorStores;
+  rdcarray<DescriptorStoreDescription> m_DescriptorStoreList;
   QMap<ResourceId, ResourceDescription *> m_Resources;
   rdcarray<ResourceDescription> m_ResourceList;
 

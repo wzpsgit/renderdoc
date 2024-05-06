@@ -56,6 +56,8 @@ D3D12ResourceType IdentifyTypeByPtr(ID3D12Object *ptr)
     return Resource_GraphicsCommandList;
   if(WrappedID3D12CommandQueue::IsAlloc(ptr))
     return Resource_CommandQueue;
+  if(D3D12AccelerationStructure::IsAlloc(ptr))
+    return Resource_AccelerationStructure;
 
   RDCERR("Unknown type for ptr 0x%p", ptr);
 
@@ -487,54 +489,62 @@ rdcarray<ID3D12Resource *> WrappedID3D12Resource::AddRefBuffersBeforeCapture(D3D
   return ret;
 }
 
-bool WrappedID3D12DescriptorHeap::HasValidViewCache(uint32_t index)
+void WrappedID3D12DescriptorHeap::MarkMutableIndex(uint32_t index)
 {
-  if(!mutableViewBitmask)
+  if(!mutableDescriptorBitmask)
+    return;
+
+  mutableDescriptorBitmask[index / 64] |= (1ULL << (index % 64));
+}
+
+bool WrappedID3D12DescriptorHeap::HasValidDescriptorCache(uint32_t index)
+{
+  if(!mutableDescriptorBitmask)
     return false;
 
   // don't cache mutable views. In theory we could but we'd need to know which ones were modified
   // mid-frame, to mark the cache as stale when initial contents are re-applied. This optimisation
   // is aimed at the assumption of a huge number of descriptors that don't change so we just don't
   // cache ones that change mid-frame
-  if((mutableViewBitmask[index / 64] & (1ULL << (index % 64))) != 0)
+  if((mutableDescriptorBitmask[index / 64] & (1ULL << (index % 64))) != 0)
     return false;
+
+  EnsureDescriptorCache();
 
   // anything that's not mutable is valid once it's been set at least once. Since we
   // zero-initialise, we use bind as a flag (it isn't retrieved from the cache since it depends on
   // the binding)
-  return cachedViews[index].bind == 1;
+  return cachedDescriptors[index].type != DescriptorType::Unknown;
 }
 
-void WrappedID3D12DescriptorHeap::MarkMutableView(uint32_t index)
+void WrappedID3D12DescriptorHeap::GetFromDescriptorCache(uint32_t index, Descriptor &view)
 {
-  if(!mutableViewBitmask)
+  if(!mutableDescriptorBitmask)
     return;
 
-  mutableViewBitmask[index / 64] |= (1ULL << (index % 64));
+  EnsureDescriptorCache();
+
+  view = cachedDescriptors[index];
 }
 
-void WrappedID3D12DescriptorHeap::GetFromViewCache(uint32_t index, D3D12Pipe::View &view)
+void WrappedID3D12DescriptorHeap::EnsureDescriptorCache()
 {
-  if(!mutableViewBitmask)
-    return;
-
-  bool dynamicallyUsed = view.dynamicallyUsed;
-  uint32_t bind = view.bind;
-  uint32_t tableIndex = view.tableIndex;
-  view = cachedViews[index];
-  view.dynamicallyUsed = dynamicallyUsed;
-  view.bind = bind;
-  view.tableIndex = tableIndex;
+  if(!cachedDescriptors)
+  {
+    D3D12_DESCRIPTOR_HEAP_DESC desc = GetDesc();
+    cachedDescriptors = new Descriptor[desc.NumDescriptors];
+    RDCEraseMem(cachedDescriptors, sizeof(Descriptor) * desc.NumDescriptors);
+  }
 }
 
-void WrappedID3D12DescriptorHeap::SetToViewCache(uint32_t index, const D3D12Pipe::View &view)
+void WrappedID3D12DescriptorHeap::SetToDescriptorCache(uint32_t index, const Descriptor &view)
 {
-  if(!mutableViewBitmask)
+  if(!mutableDescriptorBitmask)
     return;
 
-  cachedViews[index] = view;
-  // we re-use bind as the indicator that this view is valid
-  cachedViews[index].bind = 1;
+  EnsureDescriptorCache();
+
+  cachedDescriptors[index] = view;
 }
 
 WrappedID3D12DescriptorHeap::WrappedID3D12DescriptorHeap(ID3D12DescriptorHeap *real,
@@ -562,16 +572,15 @@ WrappedID3D12DescriptorHeap::WrappedID3D12DescriptorHeap(ID3D12DescriptorHeap *r
   {
     size_t bitmaskSize = AlignUp(desc.NumDescriptors, 64U) / 64;
 
-    cachedViews = new D3D12Pipe::View[desc.NumDescriptors];
-    RDCEraseMem(cachedViews, sizeof(D3D12Pipe::View) * desc.NumDescriptors);
+    cachedDescriptors = NULL;
 
-    mutableViewBitmask = new uint64_t[bitmaskSize];
-    RDCEraseMem(mutableViewBitmask, sizeof(uint64_t) * bitmaskSize);
+    mutableDescriptorBitmask = new uint64_t[bitmaskSize];
+    RDCEraseMem(mutableDescriptorBitmask, sizeof(uint64_t) * bitmaskSize);
   }
   else
   {
-    cachedViews = NULL;
-    mutableViewBitmask = NULL;
+    cachedDescriptors = NULL;
+    mutableDescriptorBitmask = NULL;
   }
 }
 
@@ -579,8 +588,8 @@ WrappedID3D12DescriptorHeap::~WrappedID3D12DescriptorHeap()
 {
   Shutdown();
   SAFE_DELETE_ARRAY(descriptors);
-  SAFE_DELETE_ARRAY(cachedViews);
-  SAFE_DELETE_ARRAY(mutableViewBitmask);
+  SAFE_DELETE_ARRAY(cachedDescriptors);
+  SAFE_DELETE_ARRAY(mutableDescriptorBitmask);
 }
 
 void WrappedID3D12PipelineState::ShaderEntry::BuildReflection()
@@ -589,8 +598,698 @@ void WrappedID3D12PipelineState::ShaderEntry::BuildReflection()
       D3Dx_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT == D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT,
       "Mismatched vertex input count");
 
-  MakeShaderReflection(m_DXBCFile, m_Details, &m_Mapping);
+  MakeShaderReflection(m_DXBCFile, {}, m_Details);
   m_Details->resourceId = GetResourceID();
+}
+
+rdcpair<uint32_t, uint32_t> FindMatchingRootParameter(const D3D12RootSignature *sig,
+                                                      D3D12_SHADER_VISIBILITY visibility,
+                                                      D3D12_DESCRIPTOR_RANGE_TYPE rangeType,
+                                                      uint32_t space, uint32_t bind)
+{
+  // search the root signature to find the matching entry and figure out the offset from the root binding
+  for(uint32_t root = 0; root < sig->Parameters.size(); root++)
+  {
+    const D3D12RootSignatureParameter &param = sig->Parameters[root];
+
+    if(param.ShaderVisibility != visibility && param.ShaderVisibility != D3D12_SHADER_VISIBILITY_ALL)
+      continue;
+
+    // identify root parameters
+    if((
+           // root constants
+           (param.ParameterType == D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS &&
+            rangeType == D3D12_DESCRIPTOR_RANGE_TYPE_CBV) ||
+           // root CBV
+           (param.ParameterType == D3D12_ROOT_PARAMETER_TYPE_CBV &&
+            rangeType == D3D12_DESCRIPTOR_RANGE_TYPE_CBV) ||
+           // root SRV
+           (param.ParameterType == D3D12_ROOT_PARAMETER_TYPE_SRV &&
+            rangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SRV) ||
+           // root UAV
+           (param.ParameterType == D3D12_ROOT_PARAMETER_TYPE_UAV &&
+            rangeType == D3D12_DESCRIPTOR_RANGE_TYPE_UAV)) &&
+       // and matching space/binding
+       param.Descriptor.RegisterSpace == space && param.Descriptor.ShaderRegister == bind)
+    {
+      // offset is unused since it's just the root parameter, so we indicate that with the offset
+      return {root, ~0U};
+    }
+
+    uint32_t descOffset = 0;
+    for(const D3D12_DESCRIPTOR_RANGE1 &range : param.ranges)
+    {
+      uint32_t rangeOffset = range.OffsetInDescriptorsFromTableStart;
+      if(range.OffsetInDescriptorsFromTableStart == D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND)
+        rangeOffset = descOffset;
+
+      if(range.RangeType == rangeType && range.RegisterSpace == space &&
+         range.BaseShaderRegister <= bind &&
+         (range.NumDescriptors == ~0U || bind < range.BaseShaderRegister + range.NumDescriptors))
+      {
+        return {root, rangeOffset + (bind - range.BaseShaderRegister)};
+      }
+
+      descOffset = rangeOffset + range.NumDescriptors;
+    }
+  }
+
+  // if not found above, and looking for samplers, look at static samplers next
+  if(rangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER)
+  {
+    // indicate that we're looking up static samplers
+    uint32_t numRoots = (uint32_t)sig->Parameters.size();
+    for(uint32_t samp = 0; samp < sig->StaticSamplers.size(); samp++)
+    {
+      if(sig->StaticSamplers[samp].RegisterSpace == space &&
+         sig->StaticSamplers[samp].ShaderRegister == bind)
+      {
+        return {numRoots, samp};
+      }
+    }
+  }
+
+  return {~0U, 0};
+}
+
+void WrappedID3D12PipelineState::ProcessDescriptorAccess()
+{
+  if(m_AccessProcessed)
+    return;
+  m_AccessProcessed = true;
+
+  const D3D12RootSignature *sig = NULL;
+  if(graphics)
+    sig = &((WrappedID3D12RootSignature *)graphics->pRootSignature)->sig;
+  else if(compute)
+    sig = &((WrappedID3D12RootSignature *)compute->pRootSignature)->sig;
+
+  for(ShaderEntry *shad : {VS(), HS(), DS(), GS(), PS(), AS(), MS(), CS()})
+  {
+    if(!shad)
+      continue;
+
+    const ShaderReflection &refl = shad->GetDetails();
+
+    D3D12_SHADER_VISIBILITY visibility;
+    switch(refl.stage)
+    {
+      case ShaderStage::Vertex: visibility = D3D12_SHADER_VISIBILITY_VERTEX; break;
+      case ShaderStage::Hull: visibility = D3D12_SHADER_VISIBILITY_HULL; break;
+      case ShaderStage::Domain: visibility = D3D12_SHADER_VISIBILITY_DOMAIN; break;
+      case ShaderStage::Geometry: visibility = D3D12_SHADER_VISIBILITY_GEOMETRY; break;
+      case ShaderStage::Pixel: visibility = D3D12_SHADER_VISIBILITY_PIXEL; break;
+      case ShaderStage::Amplification: visibility = D3D12_SHADER_VISIBILITY_AMPLIFICATION; break;
+      case ShaderStage::Mesh: visibility = D3D12_SHADER_VISIBILITY_MESH; break;
+      default: visibility = D3D12_SHADER_VISIBILITY_ALL; break;
+    }
+
+    DescriptorAccess access;
+    access.stage = refl.stage;
+
+    // we will store the root signature element in byteSize to be decoded into descriptorStore later
+    access.byteSize = 0;
+
+    staticDescriptorAccess.reserve(staticDescriptorAccess.size() + refl.constantBlocks.size() +
+                                   refl.samplers.size() + refl.readOnlyResources.size() +
+                                   refl.readWriteResources.size());
+
+    RDCASSERT(refl.constantBlocks.size() < 0xffff, refl.constantBlocks.size());
+    for(uint16_t i = 0; i < refl.constantBlocks.size(); i++)
+    {
+      const ConstantBlock &bind = refl.constantBlocks[i];
+
+      // arrayed descriptors will be handled with bindless feedback
+      if(bind.bindArraySize > 1)
+        continue;
+
+      access.type = DescriptorType::ConstantBuffer;
+      access.index = i;
+      rdctie(access.byteSize, access.byteOffset) =
+          FindMatchingRootParameter(sig, visibility, D3D12_DESCRIPTOR_RANGE_TYPE_CBV,
+                                    bind.fixedBindSetOrSpace, bind.fixedBindNumber);
+
+      if(access.byteSize != ~0U)
+        staticDescriptorAccess.push_back(access);
+    }
+
+    RDCASSERT(refl.samplers.size() < 0xffff, refl.samplers.size());
+    for(uint16_t i = 0; i < refl.samplers.size(); i++)
+    {
+      const ShaderSampler &bind = refl.samplers[i];
+
+      // arrayed descriptors will be handled with bindless feedback
+      if(bind.bindArraySize > 1)
+        continue;
+
+      access.type = DescriptorType::Sampler;
+      access.index = i;
+      rdctie(access.byteSize, access.byteOffset) =
+          FindMatchingRootParameter(sig, visibility, D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
+                                    bind.fixedBindSetOrSpace, bind.fixedBindNumber);
+
+      if(access.byteSize != ~0U)
+        staticDescriptorAccess.push_back(access);
+    }
+
+    RDCASSERT(refl.readOnlyResources.size() < 0xffff, refl.readOnlyResources.size());
+    for(uint16_t i = 0; i < refl.readOnlyResources.size(); i++)
+    {
+      const ShaderResource &bind = refl.readOnlyResources[i];
+
+      // arrayed descriptors will be handled with bindless feedback
+      if(bind.bindArraySize > 1)
+        continue;
+
+      access.type = refl.readOnlyResources[i].descriptorType;
+      access.index = i;
+      rdctie(access.byteSize, access.byteOffset) =
+          FindMatchingRootParameter(sig, visibility, D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+                                    bind.fixedBindSetOrSpace, bind.fixedBindNumber);
+
+      if(access.byteSize != ~0U)
+        staticDescriptorAccess.push_back(access);
+    }
+
+    RDCASSERT(refl.readWriteResources.size() < 0xffff, refl.readWriteResources.size());
+    for(uint16_t i = 0; i < refl.readWriteResources.size(); i++)
+    {
+      const ShaderResource &bind = refl.readWriteResources[i];
+
+      // arrayed descriptors will be handled with bindless feedback
+      if(bind.bindArraySize > 1)
+        continue;
+
+      access.type = refl.readWriteResources[i].descriptorType;
+      access.index = i;
+      rdctie(access.byteSize, access.byteOffset) =
+          FindMatchingRootParameter(sig, visibility, D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
+                                    bind.fixedBindSetOrSpace, bind.fixedBindNumber);
+
+      if(access.byteSize != ~0U)
+        staticDescriptorAccess.push_back(access);
+    }
+  }
+}
+
+D3D12ShaderExportDatabase::D3D12ShaderExportDatabase(ResourceId id,
+                                                     D3D12RaytracingResourceAndUtilHandler *rayManager,
+                                                     ID3D12StateObjectProperties *obj)
+    : RefCounter12(NULL), objectOriginalId(id), m_RayManager(rayManager), m_StateObjectProps(obj)
+{
+  m_RayManager->RegisterExportDatabase(this);
+}
+
+D3D12ShaderExportDatabase::~D3D12ShaderExportDatabase()
+{
+  for(D3D12ShaderExportDatabase *parent : parents)
+  {
+    SAFE_RELEASE(parent);
+  }
+
+  m_RayManager->UnregisterExportDatabase(this);
+}
+
+void D3D12ShaderExportDatabase::PopulateDatabase(size_t NumSubobjects,
+                                                 const D3D12_STATE_SUBOBJECT *subobjects)
+{
+  // store the default local root signature - if we only find one in the whole state object then it becomes default
+  ID3D12RootSignature *defaultRoot = NULL;
+  bool unassocDefaultValid = false;
+  bool explicitDefault = false;
+  bool unassocDXILDefaultValid = false;
+  uint32_t dxilDefaultRoot = ~0U;
+
+  rdcarray<rdcpair<rdcstr, uint32_t>> explicitRootSigAssocs;
+  rdcarray<rdcstr> explicitDefaultDxilAssocs;
+  rdcarray<rdcpair<rdcstr, rdcstr>> explicitDxilAssocs;
+  rdcflatmap<rdcstr, uint32_t> dxilLocalRootSigs;
+
+  rdcarray<rdcpair<rdcstr, uint32_t>> inheritedRootSigAssocs;
+  rdcarray<rdcpair<rdcstr, rdcstr>> inheritedDXILRootSigAssocs;
+  rdcflatmap<rdcstr, uint32_t> inheritedDXILLocalRootSigs;
+
+  // fill shader exports list as well as local root signature lookups.
+  // shader exports that can be queried come from two sources:
+  // - hit groups
+  // - exports from a DXIL library
+  // - exports from a collection
+  for(size_t i = 0; i < NumSubobjects; i++)
+  {
+    if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP)
+    {
+      D3D12_HIT_GROUP_DESC *desc = (D3D12_HIT_GROUP_DESC *)subobjects[i].pDesc;
+      AddExport(StringFormat::Wide2UTF8(desc->HitGroupExport));
+
+      rdcarray<rdcstr> shaders;
+      if(desc->IntersectionShaderImport)
+        shaders.push_back(StringFormat::Wide2UTF8(desc->IntersectionShaderImport));
+      if(desc->AnyHitShaderImport)
+        shaders.push_back(StringFormat::Wide2UTF8(desc->AnyHitShaderImport));
+      if(desc->ClosestHitShaderImport)
+        shaders.push_back(StringFormat::Wide2UTF8(desc->ClosestHitShaderImport));
+
+      // register the hit group so that if we get associations with the individual shaders we
+      // can apply that up to the hit group
+      AddLastHitGroupShaders(std::move(shaders));
+    }
+    else if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY)
+    {
+      D3D12_DXIL_LIBRARY_DESC *dxil = (D3D12_DXIL_LIBRARY_DESC *)subobjects[i].pDesc;
+
+      if(dxil->NumExports > 0)
+      {
+        for(UINT e = 0; e < dxil->NumExports; e++)
+        {
+          // Name is always the name used for exports - if renaming then the renamed-from name
+          // is only used to lookup in the dxil library and not for any associations-by-name
+          AddExport(StringFormat::Wide2UTF8(dxil->pExports[e].Name));
+        }
+      }
+      else
+      {
+        // hard part, we need to parse the DXIL to get the entry points
+        DXBC::DXBCContainer container(
+            bytebuf((byte *)dxil->DXILLibrary.pShaderBytecode, dxil->DXILLibrary.BytecodeLength),
+            rdcstr(), GraphicsAPI::D3D12, ~0U, ~0U);
+
+        rdcarray<ShaderEntryPoint> entries = container.GetEntryPoints();
+
+        for(const ShaderEntryPoint &e : entries)
+          AddExport(e.name);
+      }
+
+      // TODO: register local root signature subobjects into dxilLocalRootSigs. Override
+      // anything in there, unlike the import from a collection below.
+    }
+    else if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_EXISTING_COLLECTION)
+    {
+      D3D12_EXISTING_COLLECTION_DESC *coll = (D3D12_EXISTING_COLLECTION_DESC *)subobjects[i].pDesc;
+
+      WrappedID3D12StateObject *stateObj = (WrappedID3D12StateObject *)coll->pExistingCollection;
+
+      if(coll->NumExports > 0)
+      {
+        for(UINT e = 0; e < coll->NumExports; e++)
+          InheritCollectionExport(stateObj->exports, StringFormat::Wide2UTF8(coll->pExports[e].Name),
+                                  StringFormat::Wide2UTF8(coll->pExports[e].ExportToRename
+                                                              ? coll->pExports[e].ExportToRename
+                                                              : coll->pExports[e].Name));
+      }
+      else
+      {
+        InheritAllCollectionExports(stateObj->exports);
+      }
+
+      // inherit explicit associations from the collection as lowest priority
+      inheritedRootSigAssocs.append(stateObj->exports->danglingRootSigAssocs);
+      inheritedDXILRootSigAssocs.append(stateObj->exports->danglingDXILRootSigAssocs);
+
+      for(auto it = stateObj->exports->danglingDXILLocalRootSigs.begin();
+          it != stateObj->exports->danglingDXILLocalRootSigs.end(); ++it)
+      {
+        // don't override any local root signatures with the same name we already have. Not sure
+        // how this conflict should be resolved properly?
+        if(dxilLocalRootSigs.find(it->first) == dxilLocalRootSigs.end())
+          dxilLocalRootSigs[it->first] = it->second;
+      }
+    }
+    else if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE)
+    {
+      // ignore these if an explicit default association has been made
+      if(!explicitDefault)
+      {
+        // if multiple root signatures are defined, then there can't be an unspecified default
+        unassocDefaultValid = defaultRoot != NULL;
+        defaultRoot = ((D3D12_LOCAL_ROOT_SIGNATURE *)subobjects[i].pDesc)->pLocalRootSignature;
+      }
+    }
+    else if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION)
+    {
+      D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION *assoc =
+          (D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION *)subobjects[i].pDesc;
+
+      const D3D12_STATE_SUBOBJECT *other = assoc->pSubobjectToAssociate;
+
+      // only care about associating local root signatures
+      if(other->Type == D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE)
+      {
+        ID3D12RootSignature *root = ((D3D12_LOCAL_ROOT_SIGNATURE *)other->pDesc)->pLocalRootSignature;
+
+        WrappedID3D12RootSignature *wrappedRoot = (WrappedID3D12RootSignature *)root;
+
+        // if there are no exports this is an explicit default association. We assume this
+        // matches and doesn't conflict
+        if(assoc->NumExports == NULL)
+        {
+          explicitDefault = true;
+          defaultRoot = root;
+        }
+        else
+        {
+          // otherwise record the explicit associations - these may refer to exports that
+          // haven't been seen yet so we record them locally
+          for(UINT e = 0; e < assoc->NumExports; e++)
+            explicitRootSigAssocs.push_back(
+                {StringFormat::Wide2UTF8(assoc->pExports[e]), wrappedRoot->localRootSigIdx});
+        }
+      }
+    }
+    else if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_DXIL_SUBOBJECT_TO_EXPORTS_ASSOCIATION)
+    {
+      D3D12_DXIL_SUBOBJECT_TO_EXPORTS_ASSOCIATION *assoc =
+          (D3D12_DXIL_SUBOBJECT_TO_EXPORTS_ASSOCIATION *)subobjects[i].pDesc;
+
+      rdcstr other = StringFormat::Wide2UTF8(assoc->SubobjectToAssociate);
+
+      // we can't tell yet if this is a local root signature or not so we have to store it regardless
+      {
+        // if there are no exports this is an explicit default association, but we don't know if
+        // it's for a local root signature...
+        if(assoc->NumExports == NULL)
+        {
+          explicitDefaultDxilAssocs.push_back(other);
+        }
+        else
+        {
+          // otherwise record the explicit associations - these may refer to exports that
+          // haven't been seen yet so we record them locally
+          for(UINT e = 0; e < assoc->NumExports; e++)
+            explicitDxilAssocs.push_back({StringFormat::Wide2UTF8(assoc->pExports[e]), other});
+        }
+      }
+    }
+  }
+
+  // now that we have all exports registered, apply all associations we have in order of
+  // priority to get the right
+
+  for(size_t i = 0; i < explicitRootSigAssocs.size(); i++)
+  {
+    ApplyRoot(SubObjectPriority::CodeExplicitAssociation, explicitRootSigAssocs[i].first,
+              explicitRootSigAssocs[i].second);
+  }
+
+  if(explicitDefault)
+  {
+    WrappedID3D12RootSignature *wrappedRoot = (WrappedID3D12RootSignature *)defaultRoot;
+
+    ApplyDefaultRoot(SubObjectPriority::CodeExplicitDefault, wrappedRoot->localRootSigIdx);
+  }
+  // shouldn't be possible to have both explicit and implicit defaults?
+  else if(unassocDefaultValid)
+  {
+    WrappedID3D12RootSignature *wrappedRoot = (WrappedID3D12RootSignature *)defaultRoot;
+
+    ApplyDefaultRoot(SubObjectPriority::CodeImplicitDefault, wrappedRoot->localRootSigIdx);
+  }
+
+  for(size_t i = 0; i < explicitDxilAssocs.size(); i++)
+  {
+    auto it = dxilLocalRootSigs.find(explicitDxilAssocs[i].second);
+
+    if(it == dxilLocalRootSigs.end())
+      continue;
+
+    uint32_t localRootSigIdx = it->second;
+
+    ApplyRoot(SubObjectPriority::DXILExplicitAssociation, explicitDxilAssocs[i].first,
+              localRootSigIdx);
+  }
+
+  for(size_t i = 0; i < explicitDefaultDxilAssocs.size(); i++)
+  {
+    auto it = dxilLocalRootSigs.find(explicitDefaultDxilAssocs[i]);
+
+    if(it == dxilLocalRootSigs.end())
+      continue;
+
+    uint32_t localRootSigIdx = it->second;
+
+    ApplyDefaultRoot(SubObjectPriority::DXILExplicitDefault, localRootSigIdx);
+
+    // only expect one local root signature - the array is because we can't tell the type of the
+    // default subobject when we encounter it
+    break;
+  }
+
+  if(unassocDXILDefaultValid)
+  {
+    ApplyDefaultRoot(SubObjectPriority::DXILImplicitDefault, dxilDefaultRoot);
+  }
+
+  // we assume it's not possible to inherit two different explicit associations for a single export
+
+  for(size_t i = 0; i < inheritedRootSigAssocs.size(); i++)
+  {
+    ApplyRoot(SubObjectPriority::CollectionExplicitAssociation, inheritedRootSigAssocs[i].first,
+              inheritedRootSigAssocs[i].second);
+  }
+  for(size_t i = 0; i < inheritedDXILRootSigAssocs.size(); i++)
+  {
+    auto it = dxilLocalRootSigs.find(inheritedDXILRootSigAssocs[i].second);
+
+    if(it == dxilLocalRootSigs.end())
+      continue;
+
+    uint32_t localRootSigIdx = it->second;
+
+    ApplyRoot(SubObjectPriority::CollectionExplicitAssociation, inheritedDXILRootSigAssocs[i].first,
+              localRootSigIdx);
+  }
+
+  danglingRootSigAssocs.swap(inheritedRootSigAssocs);
+  danglingDXILRootSigAssocs.swap(inheritedDXILRootSigAssocs);
+  danglingDXILLocalRootSigs.swap(dxilLocalRootSigs);
+
+  UpdateHitGroupAssociations();
+}
+
+void D3D12ShaderExportDatabase::AddExport(const rdcstr &exportName)
+{
+  void *identifier = NULL;
+  if(m_StateObjectProps)
+    identifier = m_StateObjectProps->GetShaderIdentifier(StringFormat::UTF82Wide(exportName).c_str());
+  const bool complete = identifier != NULL;
+
+  {
+    // store the wrapped identifier here in this database, ready to return to the application in
+    // this object or any child objects.
+    wrappedIdentifiers.push_back({objectOriginalId, (uint32_t)ownExports.size()});
+
+    // store the unwrapping information to go into the giant lookup table
+    ownExports.push_back({});
+    // if there's a real identifier then store it. But we track this regardless so that we can
+    // know the root signature for hitgroup-component shaders. If this export is inherited then it
+    // will be detected as incomplete and copied and patched in the child
+    if(identifier)
+      memcpy(ownExports.back().real, identifier, sizeof(ShaderIdentifier));
+    // a local root signature may never get specified, so default to none
+    ownExports.back().rootSigPrio = SubObjectPriority::NotYetDefined;
+    ownExports.back().localRootSigIndex = 0xffff;
+  }
+
+  if(exportName.size() > 2 && exportName[0] == '\x1' && exportName[1] == '?')
+  {
+    int idx = exportName.indexOf('@');
+    if(idx > 2)
+    {
+      exportLookups.emplace_back(exportName, exportName.substr(2, idx - 2), complete);
+      return;
+    }
+  }
+  exportLookups.emplace_back(exportName, rdcstr(), complete);
+}
+
+void D3D12ShaderExportDatabase::InheritCollectionExport(D3D12ShaderExportDatabase *existing,
+                                                        const rdcstr &nameToExport,
+                                                        const rdcstr &nameInExisting)
+{
+  if(!parents.contains(existing))
+  {
+    parents.push_back(existing);
+    existing->AddRef();
+  }
+
+  for(size_t i = 0; i < existing->exportLookups.size(); i++)
+  {
+    if(existing->exportLookups[i].name == nameInExisting ||
+       existing->exportLookups[i].altName == nameInExisting)
+    {
+      InheritExport(nameInExisting, existing, i);
+
+      // if we renamed, now that we found the right export in the existing collection use the
+      // desired name going forward. This may still find the existing identifier as that hasn't
+      // necessarily changed
+      if(nameToExport != nameInExisting)
+      {
+        exportLookups.back().name = nameToExport;
+        exportLookups.back().altName.clear();
+
+        if(exportLookups.back().hitgroup)
+          hitGroups.back().first = nameToExport;
+      }
+    }
+  }
+}
+
+void D3D12ShaderExportDatabase::InheritExport(const rdcstr &exportName,
+                                              D3D12ShaderExportDatabase *existing, size_t i)
+{
+  void *identifier = NULL;
+  if(m_StateObjectProps)
+    identifier = m_StateObjectProps->GetShaderIdentifier(StringFormat::UTF82Wide(exportName).c_str());
+
+  wrappedIdentifiers.push_back(existing->wrappedIdentifiers[i]);
+  exportLookups.push_back(existing->exportLookups[i]);
+
+  // if this export wasn't previously complete, consider it exported in this object
+  // note that identifier may be NULL if this is a shader that can't be used on its own like any
+  // hit, but we want to keep it in our export list so we can track its root signature to update
+  // the hit group's root signature. Since there is only one level of collection => RT PSO this
+  // won't cause too much wasted exports
+  // we don't inherit non-complete identifiers when doing AddToStateObject so this doesn't apply
+  if(!exportLookups.back().complete)
+  {
+    ownExports.push_back({});
+
+    // we expect this identifier to have come from the object we're inheriting
+    RDCASSERTEQUAL(wrappedIdentifiers.back().id, existing->objectOriginalId);
+    // which means we can copy any root signature it had associated even if it wasn't complete
+    ownExports.back() = existing->ownExports[wrappedIdentifiers.back().index];
+
+    // now set the identifier, if we got one
+    if(identifier)
+      memcpy(ownExports.back().real, identifier, sizeof(ShaderIdentifier));
+
+    // and re-point this to point to ourselves when queried as we have the best data for it.
+    wrappedIdentifiers.back() = {objectOriginalId, (uint32_t)ownExports.size()};
+
+    // if this is an incomplete hitgroup, also grab the hitgroup component data
+    if(exportLookups.back().hitgroup)
+    {
+      for(size_t h = 0; h < existing->hitGroups.size(); h++)
+      {
+        if(existing->hitGroups[h].first == exportName)
+        {
+          hitGroups.push_back(existing->hitGroups[h]);
+          break;
+        }
+      }
+    }
+  }
+}
+
+void D3D12ShaderExportDatabase::ApplyRoot(SubObjectPriority priority, const rdcstr &exportName,
+                                          uint32_t localRootSigIndex)
+{
+  for(size_t i = 0; i < exportLookups.size(); i++)
+  {
+    if(exportLookups[i].name == exportName || exportLookups[i].altName == exportName)
+    {
+      ApplyRoot(wrappedIdentifiers[i], priority, localRootSigIndex);
+      break;
+    }
+  }
+}
+
+void D3D12ShaderExportDatabase::ApplyRoot(const ShaderIdentifier &identifier,
+                                          SubObjectPriority priority, uint32_t localRootSigIndex)
+{
+  if(identifier.id == objectOriginalId)
+  {
+    // set this anywhere we have a looser/lower priority association already (including the most
+    // common case presumably where one isn't set at all)
+    ExportedIdentifier &exported = ownExports[identifier.index];
+    if(exported.rootSigPrio < priority)
+    {
+      exported.rootSigPrio = priority;
+      exported.localRootSigIndex = (uint16_t)localRootSigIndex;
+    }
+  }
+}
+
+void D3D12ShaderExportDatabase::AddLastHitGroupShaders(rdcarray<rdcstr> &&shaders)
+{
+  exportLookups.back().hitgroup = true;
+  hitGroups.emplace_back(exportLookups.back().name, shaders);
+}
+
+void D3D12ShaderExportDatabase::UpdateHitGroupAssociations()
+{
+  // for each hit group
+  for(size_t h = 0; h < hitGroups.size(); h++)
+  {
+    // find it in the exports, as it could have been dangling before
+    for(size_t e = 0; e < exportLookups.size(); e++)
+    {
+      if(hitGroups[h].first == exportLookups[e].name)
+      {
+        // if the export is our own (ie. not complete and finished in a parent), we might need to
+        // update its root sig
+        if(wrappedIdentifiers[e].id == objectOriginalId)
+        {
+          // if the hit group got a code association already we assume it must match, but a DXIL
+          // association or a default association could be overridden since it's unclear if a
+          // hitgroup is a 'candidate' for default
+          if(ownExports[wrappedIdentifiers[e].index].rootSigPrio !=
+             SubObjectPriority::CodeExplicitAssociation)
+          {
+            // for each export, find it and try to update the root signature
+            for(const rdcstr &shaderExport : hitGroups[h].second)
+            {
+              for(size_t e2 = 0; e2 < exportLookups.size(); e2++)
+              {
+                if(shaderExport == exportLookups[e2].name || shaderExport == exportLookups[e2].altName)
+                {
+                  RDCASSERTEQUAL(wrappedIdentifiers[e2].id, objectOriginalId);
+                  uint32_t idx = wrappedIdentifiers[e2].index;
+                  ApplyRoot(wrappedIdentifiers[e], ownExports[idx].rootSigPrio,
+                            ownExports[idx].localRootSigIndex);
+
+                  // don't keep looking at exports, we found this shader
+                  break;
+                }
+              }
+
+              // if we've inherited an explicit code association from a component shader, that
+              // also must match so we can stop looking. Otherwise we keep looking to try and find
+              // a 'better' association that can't be overridden
+              if(ownExports[wrappedIdentifiers[e].index].rootSigPrio ==
+                 SubObjectPriority::CodeExplicitAssociation)
+                break;
+            }
+          }
+        }
+
+        // found this hit group, don't keep looking
+        break;
+      }
+    }
+  }
+}
+
+void D3D12ShaderExportDatabase::InheritAllCollectionExports(D3D12ShaderExportDatabase *existing)
+{
+  if(!parents.contains(existing))
+  {
+    parents.push_back(existing);
+    existing->AddRef();
+  }
+
+  wrappedIdentifiers.reserve(wrappedIdentifiers.size() + existing->wrappedIdentifiers.size());
+  exportLookups.reserve(exportLookups.size() + existing->exportLookups.size());
+  for(size_t i = 0; i < existing->exportLookups.size(); i++)
+  {
+    InheritExport(existing->exportLookups[i].name, existing, i);
+  }
+}
+
+void D3D12ShaderExportDatabase::ApplyDefaultRoot(SubObjectPriority priority,
+                                                 uint32_t localRootSigIndex)
+{
+  for(size_t i = 0; i < wrappedIdentifiers.size(); i++)
+    ApplyRoot(wrappedIdentifiers[i], priority, localRootSigIndex);
 }
 
 UINT GetPlaneForSubresource(ID3D12Resource *res, int Subresource)
