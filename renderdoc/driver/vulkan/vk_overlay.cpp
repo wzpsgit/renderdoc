@@ -61,6 +61,13 @@ struct VulkanQuadOverdrawCallback : public VulkanActionCallback
       m_pDriver->vkDestroyPipeline(dev, it->second.pipe, NULL);
       m_pDriver->vkDestroyPipelineLayout(dev, it->second.pipeLayout, NULL);
     }
+
+    for(auto it = m_ShaderCache.begin(); it != m_ShaderCache.end(); ++it)
+    {
+      if(it->second.shad != VK_NULL_HANDLE)
+        m_pDriver->vkDestroyShaderEXT(dev, it->second.shad, NULL);
+      m_pDriver->vkDestroyPipelineLayout(dev, it->second.pipeLayout, NULL);
+    }
   }
   void PreDraw(uint32_t eid, ActionFlags flags, VkCommandBuffer cmd)
   {
@@ -78,30 +85,41 @@ struct VulkanQuadOverdrawCallback : public VulkanActionCallback
 
     // check cache first
     CachedPipeline pipe = m_PipelineCache[pipestate.graphics.pipeline];
+    CachedShader shad = m_ShaderCache[pipestate.shaderObjects[4]];
 
     // if we don't get a hit, create a modified pipeline
-    if(pipe.pipe == VK_NULL_HANDLE)
+    if(pipestate.graphics.shaderObject ? shad.shad == VK_NULL_HANDLE : pipe.pipe == VK_NULL_HANDLE)
     {
       const VulkanCreationInfo::Pipeline &p =
           m_pDriver->GetDebugManager()->GetPipelineInfo(pipestate.graphics.pipeline);
 
+      const ResourceId layoutID =
+          (pipestate.graphics.shaderObject)
+              ? pipestate.graphics.descSets[pipestate.graphics.lastBoundSet].pipeLayout
+              : p.vertLayout;
+
+      const VulkanCreationInfo::PipelineLayout &layout =
+          m_pDriver->GetDebugManager()->GetPipelineLayoutInfo(layoutID);
+
+      const rdcarray<ResourceId> &origDescSetLayouts =
+          (pipestate.graphics.shaderObject) ? layout.descSetLayouts : p.descSetLayouts;
+
       VkDescriptorSetLayout *descSetLayouts;
 
       // descSet will be the index of our new descriptor set
-      uint32_t descSet = (uint32_t)p.descSetLayouts.size();
+      uint32_t descSet = (uint32_t)origDescSetLayouts.size();
 
       descSetLayouts = new VkDescriptorSetLayout[descSet + 1];
 
       for(uint32_t i = 0; i < descSet; i++)
         descSetLayouts[i] = m_pDriver->GetResourceManager()->GetCurrentHandle<VkDescriptorSetLayout>(
-            p.descSetLayouts[i]);
+            origDescSetLayouts[i]);
 
       // this layout has storage image and
       descSetLayouts[descSet] = m_DescSetLayout;
 
       // don't have to handle separate vert/frag layouts as push constant ranges must be identical
-      const rdcarray<VkPushConstantRange> &push =
-          m_pDriver->GetDebugManager()->GetPipelineLayoutInfo(p.vertLayout).pushRanges;
+      const rdcarray<VkPushConstantRange> &push = layout.pushRanges;
 
       VkPipelineLayoutCreateInfo pipeLayoutInfo = {
           VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -114,41 +132,46 @@ struct VulkanQuadOverdrawCallback : public VulkanActionCallback
       };
 
       // create pipeline layout with same descriptor set layouts, plus our mesh output set
-      vkr = m_pDriver->vkCreatePipelineLayout(m_pDriver->GetDev(), &pipeLayoutInfo, NULL,
-                                              &pipe.pipeLayout);
+      if(pipestate.graphics.shaderObject)
+        vkr = m_pDriver->vkCreatePipelineLayout(m_pDriver->GetDev(), &pipeLayoutInfo, NULL,
+                                                &shad.pipeLayout);
+      else
+        vkr = m_pDriver->vkCreatePipelineLayout(m_pDriver->GetDev(), &pipeLayoutInfo, NULL,
+                                                &pipe.pipeLayout);
       m_pDriver->CheckVkResult(vkr);
-
-      SAFE_DELETE_ARRAY(descSetLayouts);
 
       VkGraphicsPipelineCreateInfo pipeCreateInfo;
       m_pDriver->GetShaderCache()->MakeGraphicsPipelineInfo(pipeCreateInfo,
                                                             pipestate.graphics.pipeline);
 
-      // repoint pipeline layout
-      pipeCreateInfo.layout = pipe.pipeLayout;
-
-      // disable colour writes/blends
-      VkPipelineColorBlendStateCreateInfo *cb =
-          (VkPipelineColorBlendStateCreateInfo *)pipeCreateInfo.pColorBlendState;
-      for(uint32_t i = 0; i < cb->attachmentCount; i++)
+      if(!pipestate.graphics.shaderObject)
       {
-        VkPipelineColorBlendAttachmentState *att =
-            (VkPipelineColorBlendAttachmentState *)&cb->pAttachments[i];
-        att->blendEnable = false;
-        att->colorWriteMask = 0x0;
+        // repoint pipeline layout
+        pipeCreateInfo.layout = pipe.pipeLayout;
+
+        // disable colour writes/blends
+        VkPipelineColorBlendStateCreateInfo *cb =
+            (VkPipelineColorBlendStateCreateInfo *)pipeCreateInfo.pColorBlendState;
+        for(uint32_t i = 0; i < cb->attachmentCount; i++)
+        {
+          VkPipelineColorBlendAttachmentState *att =
+              (VkPipelineColorBlendAttachmentState *)&cb->pAttachments[i];
+          att->blendEnable = false;
+          att->colorWriteMask = 0x0;
+        }
+
+        // disable depth/stencil writes but keep any tests enabled
+        VkPipelineDepthStencilStateCreateInfo *ds =
+            (VkPipelineDepthStencilStateCreateInfo *)pipeCreateInfo.pDepthStencilState;
+        ds->depthWriteEnable = false;
+        ds->front.passOp = ds->front.failOp = ds->front.depthFailOp = VK_STENCIL_OP_KEEP;
+        ds->back.passOp = ds->back.failOp = ds->back.depthFailOp = VK_STENCIL_OP_KEEP;
+
+        // don't discard
+        VkPipelineRasterizationStateCreateInfo *rs =
+            (VkPipelineRasterizationStateCreateInfo *)pipeCreateInfo.pRasterizationState;
+        rs->rasterizerDiscardEnable = false;
       }
-
-      // disable depth/stencil writes but keep any tests enabled
-      VkPipelineDepthStencilStateCreateInfo *ds =
-          (VkPipelineDepthStencilStateCreateInfo *)pipeCreateInfo.pDepthStencilState;
-      ds->depthWriteEnable = false;
-      ds->front.passOp = ds->front.failOp = ds->front.depthFailOp = VK_STENCIL_OP_KEEP;
-      ds->back.passOp = ds->back.failOp = ds->back.depthFailOp = VK_STENCIL_OP_KEEP;
-
-      // don't discard
-      VkPipelineRasterizationStateCreateInfo *rs =
-          (VkPipelineRasterizationStateCreateInfo *)pipeCreateInfo.pRasterizationState;
-      rs->rasterizerDiscardEnable = false;
 
       rdcarray<uint32_t> spirv =
           *m_pDriver->GetShaderCache()->GetBuiltinBlob(BuiltinShader::QuadWriteFS);
@@ -170,70 +193,134 @@ struct VulkanQuadOverdrawCallback : public VulkanActionCallback
         it += WordCount;
       }
 
-      VkShaderModuleCreateInfo modinfo = {
-          VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-          NULL,
-          0,
-          spirv.size() * sizeof(uint32_t),
-          &spirv[0],
-      };
-
-      VkShaderModule module;
-
-      VkDevice dev = m_pDriver->GetDev();
-
-      vkr = m_pDriver->vkCreateShaderModule(dev, &modinfo, NULL, &module);
-      m_pDriver->CheckVkResult(vkr);
-
-      bool found = false;
-      for(uint32_t i = 0; i < pipeCreateInfo.stageCount; i++)
+      if(pipestate.graphics.shaderObject)
       {
-        VkPipelineShaderStageCreateInfo &sh =
-            (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[i];
-        if(sh.stage == VK_SHADER_STAGE_FRAGMENT_BIT)
+        VkDevice dev = m_pDriver->GetDev();
+
+        VkShaderCreateInfoEXT shadCreateInfo;
+        m_pDriver->GetShaderCache()->MakeShaderObjectInfo(shadCreateInfo, pipestate.shaderObjects[4]);
+
+        shadCreateInfo.pSetLayouts = descSetLayouts;
+        shadCreateInfo.setLayoutCount = descSet + 1;
+        shadCreateInfo.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
+        shadCreateInfo.codeSize = spirv.size() * sizeof(uint32_t);
+        shadCreateInfo.pCode = &spirv[0];
+        shadCreateInfo.pName = "main";
+        shadCreateInfo.pSpecializationInfo = NULL;
+
+        vkr = m_pDriver->vkCreateShadersEXT(dev, 1, &shadCreateInfo, NULL, &shad.shad);
+        m_pDriver->CheckVkResult(vkr);
+
+        shad.descSet = descSet;
+
+        m_ShaderCache[pipestate.shaderObjects[4]] = shad;
+      }
+      else
+      {
+        VkShaderModuleCreateInfo modinfo = {
+            VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            NULL,
+            0,
+            spirv.size() * sizeof(uint32_t),
+            &spirv[0],
+        };
+
+        VkShaderModule module;
+
+        VkDevice dev = m_pDriver->GetDev();
+
+        vkr = m_pDriver->vkCreateShaderModule(dev, &modinfo, NULL, &module);
+        m_pDriver->CheckVkResult(vkr);
+
+        bool found = false;
+        for(uint32_t i = 0; i < pipeCreateInfo.stageCount; i++)
         {
+          VkPipelineShaderStageCreateInfo &sh =
+              (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[i];
+          if(sh.stage == VK_SHADER_STAGE_FRAGMENT_BIT)
+          {
+            sh.module = module;
+            sh.pName = "main";
+            found = true;
+            break;
+          }
+        }
+
+        if(!found)
+        {
+          // we know this is safe because it's pointing to a static array that's
+          // big enough for all shaders
+
+          VkPipelineShaderStageCreateInfo &sh =
+              (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[pipeCreateInfo.stageCount++];
+          sh.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+          sh.pNext = NULL;
+          sh.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
           sh.module = module;
           sh.pName = "main";
-          found = true;
-          break;
+          sh.pSpecializationInfo = NULL;
         }
+
+        vkr = m_pDriver->vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &pipeCreateInfo, NULL,
+                                                   &pipe.pipe);
+        m_pDriver->CheckVkResult(vkr);
+
+        m_pDriver->vkDestroyShaderModule(dev, module, NULL);
+
+        pipe.descSet = descSet;
+
+        m_PipelineCache[pipestate.graphics.pipeline] = pipe;
       }
 
-      if(!found)
-      {
-        // we know this is safe because it's pointing to a static array that's
-        // big enough for all shaders
-
-        VkPipelineShaderStageCreateInfo &sh =
-            (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[pipeCreateInfo.stageCount++];
-        sh.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        sh.pNext = NULL;
-        sh.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        sh.module = module;
-        sh.pName = "main";
-        sh.pSpecializationInfo = NULL;
-      }
-
-      vkr = m_pDriver->vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &pipeCreateInfo, NULL,
-                                                 &pipe.pipe);
-      m_pDriver->CheckVkResult(vkr);
-
-      m_pDriver->vkDestroyShaderModule(dev, module, NULL);
-
-      pipe.descSet = descSet;
-
-      m_PipelineCache[pipestate.graphics.pipeline] = pipe;
+      SAFE_DELETE_ARRAY(descSetLayouts);
     }
 
     // modify state for first draw call
-    pipestate.graphics.pipeline = GetResID(pipe.pipe);
-    RDCASSERT(pipestate.graphics.descSets.size() >= pipe.descSet);
-    pipestate.graphics.descSets.resize(pipe.descSet + 1);
-    pipestate.graphics.descSets[pipe.descSet].pipeLayout = GetResID(pipe.pipeLayout);
-    pipestate.graphics.descSets[pipe.descSet].descSet = GetResID(m_DescSet);
+    if(pipestate.graphics.shaderObject)
+    {
+      pipestate.shaderObjects[4] = GetResID(shad.shad);
+      pipestate.graphics.lastBoundSet = shad.descSet;
+      pipestate.graphics.pipeline = ResourceId();
+      RDCASSERT(pipestate.graphics.descSets.size() >= shad.descSet);
+      pipestate.graphics.descSets.resize(shad.descSet + 1);
+      pipestate.graphics.descSets[shad.descSet].pipeLayout = GetResID(shad.pipeLayout);
+      pipestate.graphics.descSets[shad.descSet].descSet = GetResID(m_DescSet);
+    }
+    else
+    {
+      pipestate.graphics.pipeline = GetResID(pipe.pipe);
+      RDCASSERT(pipestate.graphics.descSets.size() >= pipe.descSet);
+      pipestate.graphics.descSets.resize(pipe.descSet + 1);
+      pipestate.graphics.descSets[pipe.descSet].pipeLayout = GetResID(pipe.pipeLayout);
+      pipestate.graphics.descSets[pipe.descSet].descSet = GetResID(m_DescSet);
+    }
+
+    // modify dynamic state
+    {
+      // disable colour writes/blends
+      for(uint32_t i = 0; i < pipestate.colorBlendEnable.size(); i++)
+        pipestate.colorBlendEnable[i] = false;
+
+      for(uint32_t i = 0; i < pipestate.colorWriteMask.size(); i++)
+        pipestate.colorWriteMask[i] = 0x0;
+
+      // disable depth/stencil writes but keep any tests enabled
+      pipestate.depthWriteEnable = false;
+      pipestate.front.passOp = pipestate.front.failOp = pipestate.front.depthFailOp =
+          VK_STENCIL_OP_KEEP;
+      pipestate.back.passOp = pipestate.back.failOp = pipestate.back.depthFailOp = VK_STENCIL_OP_KEEP;
+
+      // don't discard
+      pipestate.rastDiscardEnable = false;
+    }
 
     if(cmd)
-      pipestate.BindPipeline(m_pDriver, cmd, VulkanRenderState::BindGraphics, false);
+    {
+      if(pipestate.graphics.shaderObject)
+        pipestate.BindShaderObjects(m_pDriver, cmd, VulkanRenderState::BindGraphics);
+      else
+        pipestate.BindPipeline(m_pDriver, cmd, VulkanRenderState::BindGraphics, false);
+    }
   }
 
   bool PostDraw(uint32_t eid, ActionFlags flags, VkCommandBuffer cmd)
@@ -245,8 +332,12 @@ struct VulkanQuadOverdrawCallback : public VulkanActionCallback
     m_pDriver->GetCmdRenderState() = m_PrevState;
 
     RDCASSERT(cmd);
-    m_pDriver->GetCmdRenderState().BindPipeline(m_pDriver, cmd, VulkanRenderState::BindGraphics,
-                                                false);
+    if(m_PrevState.graphics.shaderObject)
+      m_pDriver->GetCmdRenderState().BindShaderObjects(m_pDriver, cmd,
+                                                       VulkanRenderState::BindGraphics);
+    else
+      m_pDriver->GetCmdRenderState().BindPipeline(m_pDriver, cmd, VulkanRenderState::BindGraphics,
+                                                  false);
 
     return true;
   }
@@ -293,6 +384,14 @@ struct VulkanQuadOverdrawCallback : public VulkanActionCallback
     VkPipeline pipe;
   };
   std::map<ResourceId, CachedPipeline> m_PipelineCache;
+  // cache modified shader objects
+  struct CachedShader
+  {
+    uint32_t descSet;
+    VkPipelineLayout pipeLayout;
+    VkShaderEXT shad;
+  };
+  std::map<ResourceId, CachedShader> m_ShaderCache;
   VulkanRenderState m_PrevState;
 };
 
@@ -348,6 +447,69 @@ void VulkanDebugManager::PatchFixedColShader(VkShaderModule &mod, float col[4])
   };
 
   VkResult vkr = m_pDriver->vkCreateShaderModule(m_Device, &modinfo, NULL, &mod);
+  CheckVkResult(vkr);
+}
+
+void VulkanDebugManager::PatchFixedColShaderObject(VkShaderEXT &shad, float col[4])
+{
+  union
+  {
+    uint32_t *spirv;
+    float *data;
+  } alias;
+
+  rdcarray<uint32_t> spv = *m_pDriver->GetShaderCache()->GetBuiltinBlob(BuiltinShader::FixedColFS);
+
+  alias.spirv = &spv[0];
+  size_t spirvLength = spv.size();
+
+  int patched = 0;
+
+  size_t it = 5;
+  while(it < spirvLength)
+  {
+    uint16_t WordCount = alias.spirv[it] >> rdcspv::WordCountShift;
+    rdcspv::Op opcode = rdcspv::Op(alias.spirv[it] & rdcspv::OpCodeMask);
+
+    if(opcode == rdcspv::Op::Constant)
+    {
+      if(alias.data[it + 3] >= 1.0f && alias.data[it + 3] <= 1.5f)
+        alias.data[it + 3] = col[0];
+      else if(alias.data[it + 3] >= 2.0f && alias.data[it + 3] <= 2.5f)
+        alias.data[it + 3] = col[1];
+      else if(alias.data[it + 3] >= 3.0f && alias.data[it + 3] <= 3.5f)
+        alias.data[it + 3] = col[2];
+      else if(alias.data[it + 3] >= 4.0f && alias.data[it + 3] <= 4.5f)
+        alias.data[it + 3] = col[3];
+      else
+        RDCERR("Unexpected constant value");
+
+      patched++;
+    }
+
+    it += WordCount;
+  }
+
+  if(patched != 4)
+    RDCERR("Didn't patch all constants");
+
+  VkShaderCreateInfoEXT shadInfo = {VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT,
+                                    NULL,
+                                    0,
+                                    VK_SHADER_STAGE_FRAGMENT_BIT,
+                                    0,
+                                    VK_SHADER_CODE_TYPE_SPIRV_EXT,
+                                    spv.size() * sizeof(uint32_t),
+                                    alias.spirv,
+                                    "main",
+                                    0,
+                                    NULL,
+                                    0,
+                                    NULL,
+                                    NULL};
+
+  VkResult vkr = m_pDriver->vkCreateShadersEXT(m_Device, 1, &shadInfo, NULL, &shad);
+
   CheckVkResult(vkr);
 }
 
@@ -826,7 +988,7 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
     DoPipelineBarrier(cmd, 1, &barrier);
 
-    if(!pipeInfo.rasterizerDiscardEnable)
+    if(!state.rastDiscardEnable)
     {
       vkr = vt->EndCommandBuffer(Unwrap(cmd));
       CheckVkResult(vkr);
@@ -845,22 +1007,35 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       m_pDriver->GetShaderCache()->MakeGraphicsPipelineInfo(pipeCreateInfo,
                                                             prevstate.graphics.pipeline);
 
+      // make patched shader object
+      VkShaderEXT shad = VK_NULL_HANDLE;
+
+      if(state.graphics.shaderObject)
+        GetDebugManager()->PatchFixedColShaderObject(shad, highlightCol);
+
       // disable all tests possible
       VkPipelineDepthStencilStateCreateInfo *ds =
           (VkPipelineDepthStencilStateCreateInfo *)pipeCreateInfo.pDepthStencilState;
-      ds->depthTestEnable = false;
-      ds->depthWriteEnable = false;
-      ds->stencilTestEnable = false;
-      ds->depthBoundsTestEnable = false;
+      if(ds)
+      {
+        ds->depthTestEnable = false;
+        ds->depthWriteEnable = false;
+        ds->stencilTestEnable = false;
+        ds->depthBoundsTestEnable = false;
+      }
 
       VkPipelineRasterizationStateCreateInfo *rs =
           (VkPipelineRasterizationStateCreateInfo *)pipeCreateInfo.pRasterizationState;
-      rs->cullMode = VK_CULL_MODE_NONE;
-      rs->rasterizerDiscardEnable = false;
+      if(rs)
+      {
+        rs->cullMode = VK_CULL_MODE_NONE;
+        rs->rasterizerDiscardEnable = false;
+      }
 
       VkPipelineMultisampleStateCreateInfo *msaa =
           (VkPipelineMultisampleStateCreateInfo *)pipeCreateInfo.pMultisampleState;
-      msaa->pSampleMask = NULL;
+      if(msaa)
+        msaa->pSampleMask = NULL;
 
       // disable tests in dynamic state too
       state.depthTestEnable = VK_FALSE;
@@ -876,7 +1051,9 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
       if(m_pDriver->GetDeviceEnabledFeatures().depthClamp)
       {
-        rs->depthClampEnable = true;
+        if(rs)
+          rs->depthClampEnable = true;
+        state.depthClampEnable = true;
       }
 
       // disable line stipple
@@ -888,13 +1065,15 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       {
         lineRasterState->stippledLineEnable = VK_FALSE;
       }
+      state.stippledLineEnable = false;
 
       uint32_t patchedIndexCount = 0;
       GPUBuffer patchedIB;
 
       if(overlay == DebugOverlay::Wireframe)
       {
-        rs->lineWidth = 1.0f;
+        if(rs)
+          rs->lineWidth = 1.0f;
 
         if(mainDraw == NULL)
         {
@@ -902,8 +1081,12 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
         }
         else if(m_pDriver->GetDeviceEnabledFeatures().fillModeNonSolid)
         {
-          rs->polygonMode = VK_POLYGON_MODE_LINE;
-          state.polygonMode = rs->polygonMode;
+          if(rs)
+            rs->polygonMode = VK_POLYGON_MODE_LINE;
+          state.polygonMode = VK_POLYGON_MODE_LINE;
+
+          if(m_pDriver->ShaderObject())
+            state.dynamicStates[VkDynamicLineWidth] = true;
         }
         else if(prevstate.primitiveTopology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
                 prevstate.primitiveTopology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
@@ -921,15 +1104,22 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
           VkPipelineInputAssemblyStateCreateInfo *ia =
               (VkPipelineInputAssemblyStateCreateInfo *)pipeCreateInfo.pInputAssemblyState;
 
-          ia->topology = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+          if(ia)
+            ia->topology = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+          state.primitiveTopology = VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
 
           // thankfully, primitive restart is always supported! This makes the index buffer a bit
           // more
           // compact in the common cases where we don't need to repeat two indices for a triangle's
           // three lines, instead we have a single restart index after each triangle.
-          ia->primitiveRestartEnable = true;
+          if(ia)
+            ia->primitiveRestartEnable = true;
+          state.primRestartEnable = true;
 
           GetDebugManager()->PatchLineStripIndexBuffer(mainDraw, patchedIB, patchedIndexCount);
+
+          if(m_pDriver->ShaderObject())
+            state.dynamicStates[VkDynamicLineWidth] = true;
         }
         else
         {
@@ -940,18 +1130,21 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
       VkPipelineColorBlendStateCreateInfo *cb =
           (VkPipelineColorBlendStateCreateInfo *)pipeCreateInfo.pColorBlendState;
-      cb->logicOpEnable = false;
-      cb->attachmentCount = 1;    // only one colour attachment
-      for(uint32_t i = 0; i < cb->attachmentCount; i++)
+      if(cb)
       {
-        VkPipelineColorBlendAttachmentState *att =
-            (VkPipelineColorBlendAttachmentState *)&cb->pAttachments[i];
-        att->blendEnable = false;
-        att->colorWriteMask = 0xf;
+        cb->logicOpEnable = false;
+        cb->attachmentCount = 1;    // only one colour attachment
+        for(uint32_t i = 0; i < cb->attachmentCount; i++)
+        {
+          VkPipelineColorBlendAttachmentState *att =
+              (VkPipelineColorBlendAttachmentState *)&cb->pAttachments[i];
+          att->blendEnable = false;
+          att->colorWriteMask = 0xf;
+        }
       }
 
       // set scissors to max for drawcall
-      if(overlay == DebugOverlay::Drawcall)
+      if(overlay == DebugOverlay::Drawcall && pipeCreateInfo.pViewportState)
       {
         for(size_t i = 0; i < pipeCreateInfo.pViewportState->scissorCount; i++)
         {
@@ -970,40 +1163,46 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       // don't use dynamic rendering
       RemoveNextStruct(&pipeCreateInfo, VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO);
 
-      bool found = false;
-      for(uint32_t i = 0; i < pipeCreateInfo.stageCount; i++)
+      if(!state.graphics.shaderObject)
       {
-        VkPipelineShaderStageCreateInfo &sh =
-            (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[i];
-        if(sh.stage == VK_SHADER_STAGE_FRAGMENT_BIT)
+        bool found = false;
+        for(uint32_t i = 0; i < pipeCreateInfo.stageCount; i++)
         {
+          VkPipelineShaderStageCreateInfo &sh =
+              (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[i];
+          if(sh.stage == VK_SHADER_STAGE_FRAGMENT_BIT)
+          {
+            sh.module = mod;
+            sh.pName = "main";
+            found = true;
+            break;
+          }
+        }
+
+        if(!found)
+        {
+          // we know this is safe because it's pointing to a static array that's
+          // big enough for all shaders
+
+          VkPipelineShaderStageCreateInfo &sh =
+              (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[pipeCreateInfo.stageCount++];
+          sh.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+          sh.pNext = NULL;
+          sh.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
           sh.module = mod;
           sh.pName = "main";
-          found = true;
-          break;
+          sh.pSpecializationInfo = NULL;
         }
-      }
-
-      if(!found)
-      {
-        // we know this is safe because it's pointing to a static array that's
-        // big enough for all shaders
-
-        VkPipelineShaderStageCreateInfo &sh =
-            (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[pipeCreateInfo.stageCount++];
-        sh.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        sh.pNext = NULL;
-        sh.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        sh.module = mod;
-        sh.pName = "main";
-        sh.pSpecializationInfo = NULL;
       }
 
       VkPipeline pipe = VK_NULL_HANDLE;
 
-      vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo, NULL,
-                                                 &pipe);
-      CheckVkResult(vkr);
+      if(!state.graphics.shaderObject)
+      {
+        vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo,
+                                                   NULL, &pipe);
+        CheckVkResult(vkr);
+      }
 
       // modify state
       state.SetRenderPass(GetResID(m_Overlay.NoDepthRP));
@@ -1014,6 +1213,12 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       state.dynamicRendering.flags &= ~VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT;
 
       state.graphics.pipeline = GetResID(pipe);
+
+      if(state.graphics.shaderObject)
+      {
+        state.graphics.pipeline = ResourceId();
+        state.shaderObjects[4] = GetResID(shad);
+      }
 
       // set dynamic scissors in case pipeline was using them
       if(overlay == DebugOverlay::Drawcall)
@@ -1080,6 +1285,9 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
       patchedIB.Destroy();
 
+      if(shad != VK_NULL_HANDLE)
+        m_pDriver->vkDestroyShaderEXT(m_Device, shad, NULL);
+
       m_pDriver->vkDestroyPipeline(m_Device, pipe, NULL);
       m_pDriver->vkDestroyShaderModule(m_Device, mod, NULL);
     }
@@ -1114,7 +1322,7 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
     black[3] = 0.0f;
 
-    if(!pipeInfo.rasterizerDiscardEnable)
+    if(!state.rastDiscardEnable)
     {
       vkr = vt->EndCommandBuffer(Unwrap(cmd));
       CheckVkResult(vkr);
@@ -1127,15 +1335,22 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       // make patched shader
       VkShaderModule mod[2] = {0};
       VkPipeline pipe[2] = {0};
+      VkShaderEXT shad[2] = {0};
 
       // first shader, no culling, writes red
-      GetDebugManager()->PatchFixedColShader(mod[0], highlightCol);
+      if(!state.graphics.shaderObject)
+        GetDebugManager()->PatchFixedColShader(mod[0], highlightCol);
+      else
+        GetDebugManager()->PatchFixedColShaderObject(shad[0], highlightCol);
 
       highlightCol[0] = 0.0f;
       highlightCol[1] = 1.0f;
 
       // second shader, normal culling, writes green
-      GetDebugManager()->PatchFixedColShader(mod[1], highlightCol);
+      if(!state.graphics.shaderObject)
+        GetDebugManager()->PatchFixedColShader(mod[1], highlightCol);
+      else
+        GetDebugManager()->PatchFixedColShaderObject(shad[1], highlightCol);
 
       // make patched pipeline
       VkGraphicsPipelineCreateInfo pipeCreateInfo;
@@ -1143,22 +1358,88 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       m_pDriver->GetShaderCache()->MakeGraphicsPipelineInfo(pipeCreateInfo,
                                                             prevstate.graphics.pipeline);
 
-      // disable all tests possible
-      VkPipelineDepthStencilStateCreateInfo *ds =
-          (VkPipelineDepthStencilStateCreateInfo *)pipeCreateInfo.pDepthStencilState;
-      ds->depthTestEnable = false;
-      ds->depthWriteEnable = false;
-      ds->stencilTestEnable = false;
-      ds->depthBoundsTestEnable = false;
+      if(!state.graphics.shaderObject)
+      {
+        // disable all tests possible
+        VkPipelineDepthStencilStateCreateInfo *ds =
+            (VkPipelineDepthStencilStateCreateInfo *)pipeCreateInfo.pDepthStencilState;
+        ds->depthTestEnable = false;
+        ds->depthWriteEnable = false;
+        ds->stencilTestEnable = false;
+        ds->depthBoundsTestEnable = false;
 
-      VkPipelineRasterizationStateCreateInfo *rs =
-          (VkPipelineRasterizationStateCreateInfo *)pipeCreateInfo.pRasterizationState;
-      rs->cullMode = VK_CULL_MODE_NONE;    // first render without any culling
-      rs->rasterizerDiscardEnable = false;
+        VkPipelineRasterizationStateCreateInfo *rs =
+            (VkPipelineRasterizationStateCreateInfo *)pipeCreateInfo.pRasterizationState;
+        rs->cullMode = VK_CULL_MODE_NONE;    // first render without any culling
+        rs->rasterizerDiscardEnable = false;
 
-      VkPipelineMultisampleStateCreateInfo *msaa =
-          (VkPipelineMultisampleStateCreateInfo *)pipeCreateInfo.pMultisampleState;
-      msaa->pSampleMask = NULL;
+        VkPipelineMultisampleStateCreateInfo *msaa =
+            (VkPipelineMultisampleStateCreateInfo *)pipeCreateInfo.pMultisampleState;
+        msaa->pSampleMask = NULL;
+
+        if(m_pDriver->GetDeviceEnabledFeatures().depthClamp)
+          rs->depthClampEnable = true;
+
+        VkPipelineColorBlendStateCreateInfo *cb =
+            (VkPipelineColorBlendStateCreateInfo *)pipeCreateInfo.pColorBlendState;
+        cb->logicOpEnable = false;
+        cb->attachmentCount = 1;    // only one colour attachment
+        for(uint32_t i = 0; i < cb->attachmentCount; i++)
+        {
+          VkPipelineColorBlendAttachmentState *att =
+              (VkPipelineColorBlendAttachmentState *)&cb->pAttachments[i];
+          att->blendEnable = false;
+          att->colorWriteMask = 0xf;
+        }
+
+        // set our renderpass and shader
+        pipeCreateInfo.renderPass = m_Overlay.NoDepthRP;
+        pipeCreateInfo.subpass = 0;
+
+        // don't use dynamic rendering
+        RemoveNextStruct(&pipeCreateInfo, VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO);
+
+        VkPipelineShaderStageCreateInfo *fragShader = NULL;
+        for(uint32_t i = 0; i < pipeCreateInfo.stageCount; i++)
+        {
+          VkPipelineShaderStageCreateInfo &sh =
+              (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[i];
+          if(sh.stage == VK_SHADER_STAGE_FRAGMENT_BIT)
+          {
+            sh.module = mod[0];
+            sh.pName = "main";
+            fragShader = &sh;
+            break;
+          }
+        }
+
+        if(fragShader == NULL)
+        {
+          // we know this is safe because it's pointing to a static array that's
+          // big enough for all shaders
+
+          VkPipelineShaderStageCreateInfo &sh =
+              (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[pipeCreateInfo.stageCount++];
+          sh.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+          sh.pNext = NULL;
+          sh.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+          sh.module = mod[0];
+          sh.pName = "main";
+          sh.pSpecializationInfo = NULL;
+
+          fragShader = &sh;
+        }
+
+        vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo,
+                                                   NULL, &pipe[0]);
+        CheckVkResult(vkr);
+
+        fragShader->module = mod[1];
+
+        vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo,
+                                                   NULL, &pipe[1]);
+        CheckVkResult(vkr);
+      }
 
       // disable tests in dynamic state too
       state.depthTestEnable = VK_FALSE;
@@ -1168,68 +1449,9 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       state.depthBoundsTestEnable = VK_FALSE;
       state.cullMode = VK_CULL_MODE_NONE;
 
+      // enable dynamic depth clamp
       if(m_pDriver->GetDeviceEnabledFeatures().depthClamp)
-        rs->depthClampEnable = true;
-
-      VkPipelineColorBlendStateCreateInfo *cb =
-          (VkPipelineColorBlendStateCreateInfo *)pipeCreateInfo.pColorBlendState;
-      cb->logicOpEnable = false;
-      cb->attachmentCount = 1;    // only one colour attachment
-      for(uint32_t i = 0; i < cb->attachmentCount; i++)
-      {
-        VkPipelineColorBlendAttachmentState *att =
-            (VkPipelineColorBlendAttachmentState *)&cb->pAttachments[i];
-        att->blendEnable = false;
-        att->colorWriteMask = 0xf;
-      }
-
-      // set our renderpass and shader
-      pipeCreateInfo.renderPass = m_Overlay.NoDepthRP;
-      pipeCreateInfo.subpass = 0;
-
-      // don't use dynamic rendering
-      RemoveNextStruct(&pipeCreateInfo, VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO);
-
-      VkPipelineShaderStageCreateInfo *fragShader = NULL;
-      for(uint32_t i = 0; i < pipeCreateInfo.stageCount; i++)
-      {
-        VkPipelineShaderStageCreateInfo &sh =
-            (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[i];
-        if(sh.stage == VK_SHADER_STAGE_FRAGMENT_BIT)
-        {
-          sh.module = mod[0];
-          sh.pName = "main";
-          fragShader = &sh;
-          break;
-        }
-      }
-
-      if(fragShader == NULL)
-      {
-        // we know this is safe because it's pointing to a static array that's
-        // big enough for all shaders
-
-        VkPipelineShaderStageCreateInfo &sh =
-            (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[pipeCreateInfo.stageCount++];
-        sh.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        sh.pNext = NULL;
-        sh.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        sh.module = mod[0];
-        sh.pName = "main";
-        sh.pSpecializationInfo = NULL;
-
-        fragShader = &sh;
-      }
-
-      vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo, NULL,
-                                                 &pipe[0]);
-      CheckVkResult(vkr);
-
-      fragShader->module = mod[1];
-
-      vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo, NULL,
-                                                 &pipe[1]);
-      CheckVkResult(vkr);
+        state.depthClampEnable = true;
 
       // modify state
       state.SetRenderPass(GetResID(m_Overlay.NoDepthRP));
@@ -1238,6 +1460,12 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
       state.graphics.pipeline = GetResID(pipe[0]);
       state.scissors = prevstate.scissors;
+
+      if(state.graphics.shaderObject)
+      {
+        state.graphics.pipeline = ResourceId();
+        state.shaderObjects[4] = GetResID(shad[0]);
+      }
 
       for(VkRect2D &sc : state.scissors)
       {
@@ -1251,6 +1479,12 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
       state.graphics.pipeline = GetResID(pipe[1]);
       state.scissors = prevstate.scissors;
+
+      if(state.graphics.shaderObject)
+      {
+        state.graphics.pipeline = ResourceId();
+        state.shaderObjects[4] = GetResID(shad[1]);
+      }
 
       m_pDriver->ReplayLog(0, eventId, eReplay_OnlyDraw);
 
@@ -1377,6 +1611,8 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
       for(int i = 0; i < 2; i++)
       {
+        if(shad[i] != VK_NULL_HANDLE)
+          m_pDriver->vkDestroyShaderEXT(m_Device, shad[i], NULL);
         m_pDriver->vkDestroyPipeline(m_Device, pipe[i], NULL);
         m_pDriver->vkDestroyShaderModule(m_Device, mod[i], NULL);
       }
@@ -1412,7 +1648,7 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
     highlightCol[1] = 0.0f;
     highlightCol[3] = 1.0f;
 
-    if(!pipeInfo.rasterizerDiscardEnable)
+    if(!state.rastDiscardEnable)
     {
       vkr = vt->EndCommandBuffer(Unwrap(cmd));
       CheckVkResult(vkr);
@@ -1423,42 +1659,116 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       // make patched shader
       VkShaderModule mod[2] = {0};
       VkPipeline pipe[2] = {0};
+      VkShaderEXT shad[2] = {0};
 
       // first shader, no culling, writes red
-      GetDebugManager()->PatchFixedColShader(mod[0], highlightCol);
+      if(!state.graphics.shaderObject)
+        GetDebugManager()->PatchFixedColShader(mod[0], highlightCol);
+      else
+        GetDebugManager()->PatchFixedColShaderObject(shad[0], highlightCol);
 
       highlightCol[0] = 0.0f;
       highlightCol[1] = 1.0f;
 
       // second shader, normal culling, writes green
-      GetDebugManager()->PatchFixedColShader(mod[1], highlightCol);
+      if(!state.graphics.shaderObject)
+        GetDebugManager()->PatchFixedColShader(mod[1], highlightCol);
+      else
+        GetDebugManager()->PatchFixedColShaderObject(shad[1], highlightCol);
+
+      // save original state
+      VkCullModeFlags origCullMode = prevstate.cullMode;
 
       // make patched pipeline
       VkGraphicsPipelineCreateInfo pipeCreateInfo;
 
-      m_pDriver->GetShaderCache()->MakeGraphicsPipelineInfo(pipeCreateInfo,
-                                                            prevstate.graphics.pipeline);
+      if(!state.graphics.shaderObject)
+      {
+        m_pDriver->GetShaderCache()->MakeGraphicsPipelineInfo(pipeCreateInfo,
+                                                              prevstate.graphics.pipeline);
 
-      // disable all tests possible
-      VkPipelineDepthStencilStateCreateInfo *ds =
-          (VkPipelineDepthStencilStateCreateInfo *)pipeCreateInfo.pDepthStencilState;
-      ds->depthTestEnable = false;
-      ds->depthWriteEnable = false;
-      ds->stencilTestEnable = false;
-      ds->depthBoundsTestEnable = false;
+        // disable all tests possible
+        VkPipelineDepthStencilStateCreateInfo *ds =
+            (VkPipelineDepthStencilStateCreateInfo *)pipeCreateInfo.pDepthStencilState;
+        ds->depthTestEnable = false;
+        ds->depthWriteEnable = false;
+        ds->stencilTestEnable = false;
+        ds->depthBoundsTestEnable = false;
 
-      VkPipelineRasterizationStateCreateInfo *rs =
-          (VkPipelineRasterizationStateCreateInfo *)pipeCreateInfo.pRasterizationState;
-      VkCullModeFlags origCullMode = prevstate.cullMode;
-      rs->cullMode = VK_CULL_MODE_NONE;    // first render without any culling
-      rs->rasterizerDiscardEnable = false;
+        VkPipelineRasterizationStateCreateInfo *rs =
+            (VkPipelineRasterizationStateCreateInfo *)pipeCreateInfo.pRasterizationState;
+        rs->cullMode = VK_CULL_MODE_NONE;    // first render without any culling
+        rs->rasterizerDiscardEnable = false;
 
-      VkPipelineMultisampleStateCreateInfo *msaa =
-          (VkPipelineMultisampleStateCreateInfo *)pipeCreateInfo.pMultisampleState;
-      msaa->pSampleMask = NULL;
+        VkPipelineMultisampleStateCreateInfo *msaa =
+            (VkPipelineMultisampleStateCreateInfo *)pipeCreateInfo.pMultisampleState;
+        msaa->pSampleMask = NULL;
 
-      if(m_pDriver->GetDeviceEnabledFeatures().depthClamp)
-        rs->depthClampEnable = true;
+        if(m_pDriver->GetDeviceEnabledFeatures().depthClamp)
+          rs->depthClampEnable = true;
+
+        VkPipelineColorBlendStateCreateInfo *cb =
+            (VkPipelineColorBlendStateCreateInfo *)pipeCreateInfo.pColorBlendState;
+        cb->logicOpEnable = false;
+        cb->attachmentCount = 1;    // only one colour attachment
+        for(uint32_t i = 0; i < cb->attachmentCount; i++)
+        {
+          VkPipelineColorBlendAttachmentState *att =
+              (VkPipelineColorBlendAttachmentState *)&cb->pAttachments[i];
+          att->blendEnable = false;
+          att->colorWriteMask = 0xf;
+        }
+
+        // set our renderpass and shader
+        pipeCreateInfo.renderPass = m_Overlay.NoDepthRP;
+        pipeCreateInfo.subpass = 0;
+
+        // don't use dynamic rendering
+        RemoveNextStruct(&pipeCreateInfo, VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO);
+
+        VkPipelineShaderStageCreateInfo *fragShader = NULL;
+
+        for(uint32_t i = 0; i < pipeCreateInfo.stageCount; i++)
+        {
+          VkPipelineShaderStageCreateInfo &sh =
+              (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[i];
+          if(sh.stage == VK_SHADER_STAGE_FRAGMENT_BIT)
+          {
+            sh.module = mod[0];
+            sh.pName = "main";
+            fragShader = &sh;
+            break;
+          }
+        }
+
+        if(fragShader == NULL)
+        {
+          // we know this is safe because it's pointing to a static array that's
+          // big enough for all shaders
+
+          VkPipelineShaderStageCreateInfo &sh =
+              (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[pipeCreateInfo.stageCount++];
+          sh.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+          sh.pNext = NULL;
+          sh.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+          sh.module = mod[0];
+          sh.pName = "main";
+          sh.pSpecializationInfo = NULL;
+
+          fragShader = &sh;
+        }
+
+        vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo,
+                                                   NULL, &pipe[0]);
+        CheckVkResult(vkr);
+
+        fragShader->module = mod[1];
+        rs->cullMode = origCullMode;
+
+        vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo,
+                                                   NULL, &pipe[1]);
+        CheckVkResult(vkr);
+      }
 
       // disable tests in dynamic state too
       state.depthTestEnable = VK_FALSE;
@@ -1468,67 +1778,9 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       state.depthBoundsTestEnable = VK_FALSE;
       state.cullMode = VK_CULL_MODE_NONE;
 
-      VkPipelineColorBlendStateCreateInfo *cb =
-          (VkPipelineColorBlendStateCreateInfo *)pipeCreateInfo.pColorBlendState;
-      cb->logicOpEnable = false;
-      cb->attachmentCount = 1;    // only one colour attachment
-      for(uint32_t i = 0; i < cb->attachmentCount; i++)
-      {
-        VkPipelineColorBlendAttachmentState *att =
-            (VkPipelineColorBlendAttachmentState *)&cb->pAttachments[i];
-        att->blendEnable = false;
-        att->colorWriteMask = 0xf;
-      }
-
-      // set our renderpass and shader
-      pipeCreateInfo.renderPass = m_Overlay.NoDepthRP;
-      pipeCreateInfo.subpass = 0;
-
-      // don't use dynamic rendering
-      RemoveNextStruct(&pipeCreateInfo, VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO);
-
-      VkPipelineShaderStageCreateInfo *fragShader = NULL;
-
-      for(uint32_t i = 0; i < pipeCreateInfo.stageCount; i++)
-      {
-        VkPipelineShaderStageCreateInfo &sh =
-            (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[i];
-        if(sh.stage == VK_SHADER_STAGE_FRAGMENT_BIT)
-        {
-          sh.module = mod[0];
-          sh.pName = "main";
-          fragShader = &sh;
-          break;
-        }
-      }
-
-      if(fragShader == NULL)
-      {
-        // we know this is safe because it's pointing to a static array that's
-        // big enough for all shaders
-
-        VkPipelineShaderStageCreateInfo &sh =
-            (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[pipeCreateInfo.stageCount++];
-        sh.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        sh.pNext = NULL;
-        sh.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        sh.module = mod[0];
-        sh.pName = "main";
-        sh.pSpecializationInfo = NULL;
-
-        fragShader = &sh;
-      }
-
-      vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo, NULL,
-                                                 &pipe[0]);
-      CheckVkResult(vkr);
-
-      fragShader->module = mod[1];
-      rs->cullMode = origCullMode;
-
-      vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo, NULL,
-                                                 &pipe[1]);
-      CheckVkResult(vkr);
+      // enable dynamic depth clamp
+      if(m_pDriver->GetDeviceEnabledFeatures().depthClamp)
+        state.depthClampEnable = true;
 
       // modify state
       state.SetRenderPass(GetResID(m_Overlay.NoDepthRP));
@@ -1537,10 +1789,22 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
       state.graphics.pipeline = GetResID(pipe[0]);
 
+      if(state.graphics.shaderObject)
+      {
+        state.graphics.pipeline = ResourceId();
+        state.shaderObjects[4] = GetResID(shad[0]);
+      }
+
       m_pDriver->ReplayLog(0, eventId, eReplay_OnlyDraw);
 
       state.graphics.pipeline = GetResID(pipe[1]);
       state.cullMode = origCullMode;
+
+      if(state.graphics.shaderObject)
+      {
+        state.graphics.pipeline = ResourceId();
+        state.shaderObjects[4] = GetResID(shad[1]);
+      }
 
       m_pDriver->ReplayLog(0, eventId, eReplay_OnlyDraw);
 
@@ -1561,6 +1825,8 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
       for(int i = 0; i < 2; i++)
       {
+        if(shad[i] != VK_NULL_HANDLE)
+          m_pDriver->vkDestroyShaderEXT(m_Device, shad[i], NULL);
         m_pDriver->vkDestroyPipeline(m_Device, pipe[i], NULL);
         m_pDriver->vkDestroyShaderModule(m_Device, mod[i], NULL);
       }
@@ -1599,7 +1865,7 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       DoPipelineBarrier(cmd, 1, &barrier);
     }
 
-    if(!pipeInfo.rasterizerDiscardEnable)
+    if(!state.rastDiscardEnable)
     {
       vkr = vt->EndCommandBuffer(Unwrap(cmd));
       CheckVkResult(vkr);
@@ -1648,7 +1914,7 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
         if(useDepthWriteStencilPass)
         {
           useDepthWriteStencilPass = false;
-          const VulkanCreationInfo::Pipeline::Shader &ps = pipeInfo.shaders[4];
+          const VulkanCreationInfo::ShaderEntry &ps = pipeInfo.shaders[4];
           if(ps.module != ResourceId())
           {
             ShaderReflection *reflection = ps.refl;
@@ -1985,16 +2251,27 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
       // make patched shader
       VkShaderModule failmod = {}, passmod = {};
+      VkShaderEXT failshad = {}, passshad = {};
       VkPipeline failpipe = {}, passpipe = {}, depthWriteStencilPipe = {};
 
       // first shader, no depth/stencil testing, writes red
-      GetDebugManager()->PatchFixedColShader(failmod, highlightCol);
+      if(!state.graphics.shaderObject)
+        GetDebugManager()->PatchFixedColShader(failmod, highlightCol);
+      else
+        GetDebugManager()->PatchFixedColShaderObject(failshad, highlightCol);
 
       highlightCol[0] = 0.0f;
       highlightCol[1] = 1.0f;
 
       // second shader, enabled depth/stencil testing, writes green
-      GetDebugManager()->PatchFixedColShader(passmod, highlightCol);
+      if(!state.graphics.shaderObject)
+        GetDebugManager()->PatchFixedColShader(passmod, highlightCol);
+      else
+        GetDebugManager()->PatchFixedColShaderObject(passshad, highlightCol);
+
+      // save original state
+      VkBool32 origDepthTest = prevstate.depthTestEnable;
+      VkBool32 origStencilTest = prevstate.stencilTestEnable;
 
       // make patched pipeline
       VkGraphicsPipelineCreateInfo pipeCreateInfo;
@@ -2002,144 +2279,145 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       m_pDriver->GetShaderCache()->MakeGraphicsPipelineInfo(pipeCreateInfo,
                                                             prevstate.graphics.pipeline);
 
-      // disable all tests possible
-      VkPipelineDepthStencilStateCreateInfo *ds =
-          (VkPipelineDepthStencilStateCreateInfo *)pipeCreateInfo.pDepthStencilState;
-      VkBool32 origDepthTest = prevstate.depthTestEnable;
-      ds->depthTestEnable = false;
-      ds->depthWriteEnable = false;
-      VkBool32 origStencilTest = prevstate.stencilTestEnable;
-      ds->stencilTestEnable = false;
-      ds->depthBoundsTestEnable = false;
-
-      VkPipelineMultisampleStateCreateInfo *msaa =
-          (VkPipelineMultisampleStateCreateInfo *)pipeCreateInfo.pMultisampleState;
-      msaa->pSampleMask = NULL;
-
-      VkPipelineColorBlendStateCreateInfo *cb =
-          (VkPipelineColorBlendStateCreateInfo *)pipeCreateInfo.pColorBlendState;
-      cb->logicOpEnable = false;
-      cb->attachmentCount = 1;    // only one colour attachment
-      for(uint32_t i = 0; i < cb->attachmentCount; i++)
+      if(!state.graphics.shaderObject)
       {
-        VkPipelineColorBlendAttachmentState *att =
-            (VkPipelineColorBlendAttachmentState *)&cb->pAttachments[i];
-        att->blendEnable = false;
-        att->colorWriteMask = 0xf;
-      }
+        // disable all tests possible
+        VkPipelineDepthStencilStateCreateInfo *ds =
+            (VkPipelineDepthStencilStateCreateInfo *)pipeCreateInfo.pDepthStencilState;
+        ds->depthTestEnable = false;
+        ds->depthWriteEnable = false;
+        ds->stencilTestEnable = false;
+        ds->depthBoundsTestEnable = false;
 
-      // subpass 0 in either render pass
-      pipeCreateInfo.subpass = 0;
+        VkPipelineMultisampleStateCreateInfo *msaa =
+            (VkPipelineMultisampleStateCreateInfo *)pipeCreateInfo.pMultisampleState;
+        msaa->pSampleMask = NULL;
 
-      VkPipelineShaderStageCreateInfo orgFragShader = {};
-      VkPipelineShaderStageCreateInfo *fragShader = NULL;
-
-      for(uint32_t i = 0; i < pipeCreateInfo.stageCount; i++)
-      {
-        VkPipelineShaderStageCreateInfo &sh =
-            (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[i];
-        if(sh.stage == VK_SHADER_STAGE_FRAGMENT_BIT)
-        {
-          orgFragShader = sh;
-          sh.pName = "main";
-          fragShader = &sh;
-          break;
-        }
-      }
-
-      if(fragShader == NULL)
-      {
-        useDepthWriteStencilPass = false;
-        // we know this is safe because it's pointing to a static array that's
-        // big enough for all shaders
-
-        VkPipelineShaderStageCreateInfo &sh =
-            (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[pipeCreateInfo.stageCount++];
-        sh.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        sh.pNext = NULL;
-        sh.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        sh.pName = "main";
-        sh.pSpecializationInfo = NULL;
-
-        fragShader = &sh;
-      }
-
-      fragShader->module = passmod;
-
-      if(depthRP != VK_NULL_HANDLE)
-      {
-        if(overlay == DebugOverlay::Depth)
-          ds->depthTestEnable = origDepthTest;
-        else
-        {
-          ds->front.passOp = ds->front.failOp = ds->front.depthFailOp = VK_STENCIL_OP_KEEP;
-          ds->back.passOp = ds->back.failOp = ds->back.depthFailOp = VK_STENCIL_OP_KEEP;
-          ds->stencilTestEnable = origStencilTest;
-        }
-        pipeCreateInfo.renderPass = depthRP;
-      }
-      else
-      {
-        pipeCreateInfo.renderPass = m_Overlay.NoDepthRP;
-      }
-
-      // don't use dynamic rendering
-      RemoveNextStruct(&pipeCreateInfo, VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO);
-
-      vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo, NULL,
-                                                 &passpipe);
-      CheckVkResult(vkr);
-
-      fragShader->module = failmod;
-
-      // set our renderpass and shader
-      pipeCreateInfo.renderPass = m_Overlay.NoDepthRP;
-
-      // disable culling/discard and enable depth clamp. That way we show any failures due to these
-      VkPipelineRasterizationStateCreateInfo *rs =
-          (VkPipelineRasterizationStateCreateInfo *)pipeCreateInfo.pRasterizationState;
-      VkPipelineRasterizationStateCreateInfo orgRS = *rs;
-      rs->cullMode = VK_CULL_MODE_NONE;
-      rs->rasterizerDiscardEnable = false;
-
-      if(m_pDriver->GetDeviceEnabledFeatures().depthClamp)
-        rs->depthClampEnable = true;
-
-      vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo, NULL,
-                                                 &failpipe);
-      CheckVkResult(vkr);
-
-      if(useDepthWriteStencilPass)
-      {
-        pipeCreateInfo.renderPass = depthRP;
-        *rs = orgRS;
-
-        // disable colour write
+        VkPipelineColorBlendStateCreateInfo *cb =
+            (VkPipelineColorBlendStateCreateInfo *)pipeCreateInfo.pColorBlendState;
+        cb->logicOpEnable = false;
+        cb->attachmentCount = 1;    // only one colour attachment
         for(uint32_t i = 0; i < cb->attachmentCount; i++)
         {
           VkPipelineColorBlendAttachmentState *att =
               (VkPipelineColorBlendAttachmentState *)&cb->pAttachments[i];
           att->blendEnable = false;
-          att->colorWriteMask = 0x0;
+          att->colorWriteMask = 0xf;
         }
 
-        // Write stencil 0x1 for depth passing pixels
-        ds->stencilTestEnable = true;
-        ds->front.compareOp = VK_COMPARE_OP_ALWAYS;
-        ds->front.failOp = VK_STENCIL_OP_KEEP;
-        ds->front.depthFailOp = VK_STENCIL_OP_KEEP;
-        ds->front.passOp = VK_STENCIL_OP_REPLACE;
-        ds->front.compareMask = 0xff;
-        ds->front.reference = 0x1;
-        ds->front.writeMask = 0xff;
-        ds->back = ds->front;
+        // subpass 0 in either render pass
+        pipeCreateInfo.subpass = 0;
 
-        // Use original shader
-        *fragShader = orgFragShader;
+        VkPipelineShaderStageCreateInfo orgFragShader = {};
+        VkPipelineShaderStageCreateInfo *fragShader = NULL;
+
+        for(uint32_t i = 0; i < pipeCreateInfo.stageCount; i++)
+        {
+          VkPipelineShaderStageCreateInfo &sh =
+              (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[i];
+          if(sh.stage == VK_SHADER_STAGE_FRAGMENT_BIT)
+          {
+            orgFragShader = sh;
+            sh.pName = "main";
+            fragShader = &sh;
+            break;
+          }
+        }
+
+        if(fragShader == NULL)
+        {
+          useDepthWriteStencilPass = false;
+          // we know this is safe because it's pointing to a static array that's
+          // big enough for all shaders
+
+          VkPipelineShaderStageCreateInfo &sh =
+              (VkPipelineShaderStageCreateInfo &)pipeCreateInfo.pStages[pipeCreateInfo.stageCount++];
+          sh.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+          sh.pNext = NULL;
+          sh.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+          sh.pName = "main";
+          sh.pSpecializationInfo = NULL;
+
+          fragShader = &sh;
+        }
+
+        fragShader->module = passmod;
+
+        if(depthRP != VK_NULL_HANDLE)
+        {
+          if(overlay == DebugOverlay::Depth)
+            ds->depthTestEnable = origDepthTest;
+          else
+          {
+            ds->front.passOp = ds->front.failOp = ds->front.depthFailOp = VK_STENCIL_OP_KEEP;
+            ds->back.passOp = ds->back.failOp = ds->back.depthFailOp = VK_STENCIL_OP_KEEP;
+            ds->stencilTestEnable = origStencilTest;
+          }
+          pipeCreateInfo.renderPass = depthRP;
+        }
+        else
+        {
+          pipeCreateInfo.renderPass = m_Overlay.NoDepthRP;
+        }
+
+        // don't use dynamic rendering
+        RemoveNextStruct(&pipeCreateInfo, VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO);
 
         vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo,
-                                                   NULL, &depthWriteStencilPipe);
+                                                   NULL, &passpipe);
         CheckVkResult(vkr);
+
+        fragShader->module = failmod;
+
+        // set our renderpass and shader
+        pipeCreateInfo.renderPass = m_Overlay.NoDepthRP;
+
+        // disable culling/discard and enable depth clamp. That way we show any failures due to these
+        VkPipelineRasterizationStateCreateInfo *rs =
+            (VkPipelineRasterizationStateCreateInfo *)pipeCreateInfo.pRasterizationState;
+        VkPipelineRasterizationStateCreateInfo orgRS = *rs;
+        rs->cullMode = VK_CULL_MODE_NONE;
+        rs->rasterizerDiscardEnable = false;
+
+        if(m_pDriver->GetDeviceEnabledFeatures().depthClamp)
+          rs->depthClampEnable = true;
+
+        vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo,
+                                                   NULL, &failpipe);
+        CheckVkResult(vkr);
+
+        if(useDepthWriteStencilPass)
+        {
+          pipeCreateInfo.renderPass = depthRP;
+          *rs = orgRS;
+
+          // disable colour write
+          for(uint32_t i = 0; i < cb->attachmentCount; i++)
+          {
+            VkPipelineColorBlendAttachmentState *att =
+                (VkPipelineColorBlendAttachmentState *)&cb->pAttachments[i];
+            att->blendEnable = false;
+            att->colorWriteMask = 0x0;
+          }
+
+          // Write stencil 0x1 for depth passing pixels
+          ds->stencilTestEnable = true;
+          ds->front.compareOp = VK_COMPARE_OP_ALWAYS;
+          ds->front.failOp = VK_STENCIL_OP_KEEP;
+          ds->front.depthFailOp = VK_STENCIL_OP_KEEP;
+          ds->front.passOp = VK_STENCIL_OP_REPLACE;
+          ds->front.compareMask = 0xff;
+          ds->front.reference = 0x1;
+          ds->front.writeMask = 0xff;
+          ds->back = ds->front;
+
+          // Use original shader
+          *fragShader = orgFragShader;
+
+          vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1, &pipeCreateInfo,
+                                                     NULL, &depthWriteStencilPipe);
+          CheckVkResult(vkr);
+        }
       }
 
       // modify state
@@ -2155,6 +2433,16 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       state.stencilTestEnable = VK_FALSE;
       state.depthBoundsTestEnable = VK_FALSE;
       state.cullMode = VK_CULL_MODE_NONE;
+
+      // enable dynamic depth clamp
+      if(m_pDriver->GetDeviceEnabledFeatures().depthClamp)
+        state.depthClampEnable = true;
+
+      if(state.graphics.shaderObject)
+      {
+        state.graphics.pipeline = ResourceId();
+        state.shaderObjects[4] = GetResID(failshad);
+      }
 
       m_pDriver->ReplayLog(0, eventId, eReplay_OnlyDraw);
 
@@ -2236,6 +2524,12 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
         cmd = VK_NULL_HANDLE;
       }
 
+      if(state.graphics.shaderObject)
+      {
+        state.graphics.pipeline = ResourceId();
+        state.shaderObjects[4] = GetResID(passshad);
+      }
+
       m_pDriver->ReplayLog(0, eventId, eReplay_OnlyDraw);
 
       if(useDepthWriteStencilPass)
@@ -2301,6 +2595,11 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       m_pDriver->vkDestroyPipeline(m_Device, depthWriteStencilPipe, NULL);
       m_pDriver->vkDestroyImage(m_Device, dsTempImage, NULL);
       m_pDriver->vkFreeMemory(m_Device, dsTempImageMem, NULL);
+
+      if(failshad != VK_NULL_HANDLE)
+        m_pDriver->vkDestroyShaderEXT(m_Device, failshad, NULL);
+      if(passshad != VK_NULL_HANDLE)
+        m_pDriver->vkDestroyShaderEXT(m_Device, passshad, NULL);
 
       if(depthRP != VK_NULL_HANDLE)
       {
@@ -2417,7 +2716,8 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
       }
 
       // Try to clear depth as well, to help debug shadow rendering
-      if(state.graphics.pipeline != ResourceId() && IsDepthOrStencilFormat(iminfo.format))
+      if((state.graphics.pipeline != ResourceId() || state.graphics.shaderObject) &&
+         IsDepthOrStencilFormat(iminfo.format))
       {
         VkCompareOp depthCompareOp = state.depthCompareOp;
 
@@ -2474,7 +2774,7 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
   }
   else if(overlay == DebugOverlay::QuadOverdrawPass || overlay == DebugOverlay::QuadOverdrawDraw)
   {
-    if(m_Overlay.m_QuadResolvePipeline[0] != VK_NULL_HANDLE && !pipeInfo.rasterizerDiscardEnable)
+    if(m_Overlay.m_QuadResolvePipeline[0] != VK_NULL_HANDLE && !state.rastDiscardEnable)
     {
       VulkanRenderState prevstate = state;
 
@@ -2723,7 +3023,7 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
   }
   else if(overlay == DebugOverlay::TriangleSizePass || overlay == DebugOverlay::TriangleSizeDraw)
   {
-    if(!pipeInfo.rasterizerDiscardEnable)
+    if(!state.rastDiscardEnable)
     {
       VulkanRenderState prevstate = state;
 
@@ -3022,38 +3322,129 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
         // don't use dynamic rendering
         RemoveNextStruct(&pipeCreateInfo, VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO);
 
-        uint32_t &dynamicStateCount = (uint32_t &)pipeCreateInfo.pDynamicState->dynamicStateCount;
-        VkDynamicState *dynamicStateList =
-            (VkDynamicState *)pipeCreateInfo.pDynamicState->pDynamicStates;
-
-        // remove any dynamic states we don't want
-        for(uint32_t i = 0; i < dynamicStateCount;)
+        if(pipeCreateInfo.pDynamicState)
         {
-          // we are controlling the vertex binding so we don't need the stride or input to be
-          // dynamic.
-          // Similarly we're controlling the topology so that doesn't need to be dynamic
-          if(dynamicStateList[i] == VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE ||
-             dynamicStateList[i] == VK_DYNAMIC_STATE_VERTEX_INPUT_EXT ||
-             dynamicStateList[i] == VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY)
+          uint32_t &dynamicStateCount = (uint32_t &)pipeCreateInfo.pDynamicState->dynamicStateCount;
+          VkDynamicState *dynamicStateList =
+              (VkDynamicState *)pipeCreateInfo.pDynamicState->pDynamicStates;
+
+          // remove any dynamic states we don't want
+          for(uint32_t i = 0; i < dynamicStateCount;)
           {
-            // swap with the last item if this isn't the last one
-            if(i != dynamicStateCount - 1)
-              std::swap(dynamicStateList[i], dynamicStateList[dynamicStateCount - 1]);
+            // we are controlling the vertex binding so we don't need the stride or input to be
+            // dynamic.
+            // Similarly we're controlling the topology so that doesn't need to be dynamic
+            if(dynamicStateList[i] == VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE ||
+               dynamicStateList[i] == VK_DYNAMIC_STATE_VERTEX_INPUT_EXT ||
+               dynamicStateList[i] == VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY)
+            {
+              // swap with the last item if this isn't the last one
+              if(i != dynamicStateCount - 1)
+                std::swap(dynamicStateList[i], dynamicStateList[dynamicStateCount - 1]);
 
-            // then pop the last item.
-            dynamicStateCount--;
+              // then pop the last item.
+              dynamicStateCount--;
 
-            // process this item again. If we swapped we'll then consider that dynamic state, and if
-            // we didn't then this was the last item and i will be past dynamicStateCount now
-            continue;
+              // process this item again. If we swapped we'll then consider that dynamic state, and
+              // if we didn't then this was the last item and i will be past dynamicStateCount now
+              continue;
+            }
+
+            i++;
           }
-
-          i++;
         }
 
         typedef rdcpair<uint32_t, Topology> PipeKey;
 
         std::map<PipeKey, VkPipeline> pipes;
+
+        // shader object vertex state
+        VkVertexInputBindingDescription2EXT soBinds[2];
+        VkVertexInputAttributeDescription2EXT soAttrs[2];
+
+        VkShaderStageFlagBits stageFlags[3] = {
+            VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT, VK_SHADER_STAGE_GEOMETRY_BIT};
+        VkShaderEXT shaders[3] = {0};
+        VkShaderEXT unwrappedShaders[3] = {0};
+
+        if(state.graphics.shaderObject)
+        {
+          // create the tri-size shader objects
+          const VulkanCreationInfo::PipelineLayout &layoutInfo =
+              createinfo.m_PipelineLayout[GetResID(m_Overlay.m_TriSizePipeLayout)];
+
+          rdcarray<VkDescriptorSetLayout> descSetLayouts;
+          for(ResourceId setLayout : layoutInfo.descSetLayouts)
+            descSetLayouts.push_back(
+                m_pDriver->GetResourceManager()->GetCurrentHandle<VkDescriptorSetLayout>(setLayout));
+
+          VkShaderCreateInfoEXT shadInfo = {
+              VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT,
+              NULL,
+              0,
+              VK_SHADER_STAGE_VERTEX_BIT,
+              VK_SHADER_STAGE_GEOMETRY_BIT,
+              VK_SHADER_CODE_TYPE_SPIRV_EXT,
+              shaderCache->GetBuiltinBlob(BuiltinShader::MeshVS)->size() * sizeof(uint32_t),
+              shaderCache->GetBuiltinBlob(BuiltinShader::MeshVS)->data(),
+              "main",
+              (uint32_t)descSetLayouts.size(),
+              descSetLayouts.data(),
+              (uint32_t)layoutInfo.pushRanges.size(),
+              layoutInfo.pushRanges.data(),
+              NULL};
+
+          vkr = m_pDriver->vkCreateShadersEXT(m_Device, 1, &shadInfo, NULL, &shaders[0]);
+
+          shadInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+          shadInfo.nextStage = 0;
+          shadInfo.codeSize =
+              shaderCache->GetBuiltinBlob(BuiltinShader::TrisizeFS)->size() * sizeof(uint32_t);
+          shadInfo.pCode = shaderCache->GetBuiltinBlob(BuiltinShader::TrisizeFS)->data();
+
+          vkr = m_pDriver->vkCreateShadersEXT(m_Device, 1, &shadInfo, NULL, &shaders[1]);
+
+          shadInfo.stage = VK_SHADER_STAGE_GEOMETRY_BIT;
+          shadInfo.nextStage = VK_SHADER_STAGE_FRAGMENT_BIT;
+          shadInfo.codeSize =
+              shaderCache->GetBuiltinBlob(BuiltinShader::TrisizeGS)->size() * sizeof(uint32_t);
+          shadInfo.pCode = shaderCache->GetBuiltinBlob(BuiltinShader::TrisizeGS)->data();
+
+          vkr = m_pDriver->vkCreateShadersEXT(m_Device, 1, &shadInfo, NULL, &shaders[2]);
+
+          // vertex state
+          // primary
+          soBinds[0] = {VK_STRUCTURE_TYPE_VERTEX_INPUT_BINDING_DESCRIPTION_2_EXT,
+                        0,
+                        0,
+                        0,
+                        VK_VERTEX_INPUT_RATE_VERTEX,
+                        1};
+          // secondary
+          soBinds[1] = {VK_STRUCTURE_TYPE_VERTEX_INPUT_BINDING_DESCRIPTION_2_EXT,
+                        0,
+                        1,
+                        0,
+                        VK_VERTEX_INPUT_RATE_VERTEX,
+                        1};
+
+          soAttrs[0] = {VK_STRUCTURE_TYPE_VERTEX_INPUT_ATTRIBUTE_DESCRIPTION_2_EXT,
+                        0,
+                        0,
+                        0,
+                        VK_FORMAT_R32G32B32A32_SFLOAT,
+                        0};
+          soAttrs[1] = {VK_STRUCTURE_TYPE_VERTEX_INPUT_ATTRIBUTE_DESCRIPTION_2_EXT,
+                        0,
+                        1,
+                        0,
+                        VK_FORMAT_R32G32B32A32_SFLOAT,
+                        0};
+
+          unwrappedShaders[0] = Unwrap(shaders[0]);
+          unwrappedShaders[1] = Unwrap(shaders[1]);
+          unwrappedShaders[2] = Unwrap(shaders[2]);
+        }
 
         for(size_t i = 0; i < events.size(); i++)
         {
@@ -3098,11 +3489,12 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
               ia.topology = MakeVkPrimitiveTopology(fmt.topology);
 
               binds[0].stride = binds[1].stride = fmt.vertexByteStride;
+              soBinds[0].stride = soBinds[1].stride = fmt.vertexByteStride;
 
               PipeKey key = make_rdcpair(fmt.vertexByteStride, fmt.topology);
               VkPipeline pipe = pipes[key];
 
-              if(pipe == VK_NULL_HANDLE)
+              if(pipe == VK_NULL_HANDLE && !state.graphics.shaderObject)
               {
                 vkr = m_pDriver->vkCreateGraphicsPipelines(m_Device, VK_NULL_HANDLE, 1,
                                                            &pipeCreateInfo, NULL, &pipe);
@@ -3121,7 +3513,10 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
                                         Unwrap(m_Overlay.m_TriSizePipeLayout), 0, 1,
                                         UnwrapPtr(m_Overlay.m_TriSizeDescSet), 2, offsets);
 
-              vt->CmdBindPipeline(Unwrap(cmd), VK_PIPELINE_BIND_POINT_GRAPHICS, Unwrap(pipe));
+              if(state.graphics.shaderObject)
+                vt->CmdBindShadersEXT(Unwrap(cmd), 3, stageFlags, unwrappedShaders);
+              else
+                vt->CmdBindPipeline(Unwrap(cmd), VK_PIPELINE_BIND_POINT_GRAPHICS, Unwrap(pipe));
 
               const VkPipelineDynamicStateCreateInfo *dyn = pipeCreateInfo.pDynamicState;
 
@@ -3352,6 +3747,228 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
                 }
               }
 
+              if(state.graphics.shaderObject)
+              {
+                if(!state.views.empty() && state.dynamicStates[VkDynamicViewport])
+                {
+                  vt->CmdSetViewport(Unwrap(cmd), 0, (uint32_t)state.views.size(), &state.views[0]);
+                }
+                if(!state.scissors.empty() && state.dynamicStates[VkDynamicScissor])
+                {
+                  vt->CmdSetScissor(Unwrap(cmd), 0, (uint32_t)state.scissors.size(),
+                                    &state.scissors[0]);
+                }
+                if(state.dynamicStates[VkDynamicLineWidth])
+                {
+                  vt->CmdSetLineWidth(Unwrap(cmd), state.lineWidth);
+                }
+                if(state.dynamicStates[VkDynamicDepthBias])
+                {
+                  vt->CmdSetDepthBias(Unwrap(cmd), state.bias.depth, state.bias.biasclamp,
+                                      state.bias.slope);
+                }
+                if(state.dynamicStates[VkDynamicBlendConstants])
+                {
+                  vt->CmdSetBlendConstants(Unwrap(cmd), state.blendConst);
+                }
+                if(state.dynamicStates[VkDynamicDepthBounds])
+                {
+                  vt->CmdSetDepthBounds(Unwrap(cmd), state.mindepth, state.maxdepth);
+                }
+                if(state.dynamicStates[VkDynamicStencilCompareMask])
+                {
+                  vt->CmdSetStencilCompareMask(Unwrap(cmd), VK_STENCIL_FACE_BACK_BIT,
+                                               state.back.compare);
+                  vt->CmdSetStencilCompareMask(Unwrap(cmd), VK_STENCIL_FACE_FRONT_BIT,
+                                               state.front.compare);
+                }
+                if(state.dynamicStates[VkDynamicStencilWriteMask])
+                {
+                  vt->CmdSetStencilWriteMask(Unwrap(cmd), VK_STENCIL_FACE_BACK_BIT, state.back.write);
+                  vt->CmdSetStencilWriteMask(Unwrap(cmd), VK_STENCIL_FACE_FRONT_BIT,
+                                             state.front.write);
+                }
+                if(state.dynamicStates[VkDynamicStencilReference])
+                {
+                  vt->CmdSetStencilReference(Unwrap(cmd), VK_STENCIL_FACE_BACK_BIT, state.back.ref);
+                  vt->CmdSetStencilReference(Unwrap(cmd), VK_STENCIL_FACE_FRONT_BIT, state.front.ref);
+                }
+                if(state.dynamicStates[VkDynamicViewportCount])
+                {
+                  vt->CmdSetViewportWithCountEXT(Unwrap(cmd), (uint32_t)state.views.size(),
+                                                 state.views.data());
+                }
+                if(state.dynamicStates[VkDynamicScissorCount])
+                {
+                  vt->CmdSetScissorWithCountEXT(Unwrap(cmd), (uint32_t)state.scissors.size(),
+                                                state.scissors.data());
+                }
+                if(state.dynamicStates[VkDynamicCullMode])
+                {
+                  vt->CmdSetCullModeEXT(Unwrap(cmd), state.cullMode);
+                }
+                if(state.dynamicStates[VkDynamicFrontFace])
+                {
+                  vt->CmdSetFrontFaceEXT(Unwrap(cmd), state.frontFace);
+                }
+
+                // overriding topology
+                vt->CmdSetPrimitiveTopologyEXT(Unwrap(cmd), MakeVkPrimitiveTopology(fmt.topology));
+
+                // VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE unnecessary since utilizing vertex input
+
+                if(state.dynamicStates[VkDynamicDepthTestEnable])
+                {
+                  vt->CmdSetDepthTestEnableEXT(Unwrap(cmd), state.depthTestEnable);
+                }
+                if(state.dynamicStates[VkDynamicDepthWriteEnable])
+                {
+                  vt->CmdSetDepthWriteEnableEXT(Unwrap(cmd), state.depthWriteEnable);
+                }
+                if(state.dynamicStates[VkDynamicDepthCompareOp])
+                {
+                  vt->CmdSetDepthCompareOpEXT(Unwrap(cmd), state.depthCompareOp);
+                }
+                if(state.dynamicStates[VkDynamicDepthBoundsTestEnable])
+                {
+                  vt->CmdSetDepthBoundsTestEnableEXT(Unwrap(cmd), state.depthBoundsTestEnable);
+                }
+                if(state.dynamicStates[VkDynamicStencilTestEnable])
+                {
+                  vt->CmdSetStencilTestEnableEXT(Unwrap(cmd), state.stencilTestEnable);
+                }
+                if(state.dynamicStates[VkDynamicStencilOp])
+                {
+                  vt->CmdSetStencilOpEXT(Unwrap(cmd), VK_STENCIL_FACE_FRONT_BIT, state.front.failOp,
+                                         state.front.passOp, state.front.depthFailOp,
+                                         state.front.compareOp);
+                  vt->CmdSetStencilOpEXT(Unwrap(cmd), VK_STENCIL_FACE_BACK_BIT, state.front.failOp,
+                                         state.front.passOp, state.front.depthFailOp,
+                                         state.front.compareOp);
+                }
+                if(!state.colorWriteEnable.empty() && state.dynamicStates[VkDynamicColorWriteEXT])
+                {
+                  vt->CmdSetColorWriteEnableEXT(Unwrap(cmd), (uint32_t)state.colorWriteEnable.size(),
+                                                state.colorWriteEnable.data());
+                }
+                if(state.dynamicStates[VkDynamicDepthBiasEnable])
+                {
+                  vt->CmdSetDepthBiasEnableEXT(Unwrap(cmd), state.depthBiasEnable);
+                }
+                if(state.dynamicStates[VkDynamicLogicOpEXT])
+                {
+                  vt->CmdSetLogicOpEXT(Unwrap(cmd), state.logicOp);
+                }
+                if(state.dynamicStates[VkDynamicControlPointsEXT])
+                {
+                  vt->CmdSetPatchControlPointsEXT(Unwrap(cmd), state.patchControlPoints);
+                }
+                if(state.dynamicStates[VkDynamicPrimRestart])
+                {
+                  vt->CmdSetPrimitiveRestartEnableEXT(Unwrap(cmd), state.primRestartEnable);
+                }
+                if(state.dynamicStates[VkDynamicRastDiscard])
+                {
+                  vt->CmdSetRasterizerDiscardEnableEXT(Unwrap(cmd), state.rastDiscardEnable);
+                }
+
+                // overriding vertex input
+                vt->CmdSetVertexInputEXT(Unwrap(cmd), 2, soBinds, 2, soAttrs);
+
+                if(state.dynamicStates[VkDynamicAttachmentFeedbackLoopEnableEXT])
+                {
+                  vt->CmdSetAttachmentFeedbackLoopEnableEXT(Unwrap(cmd), state.feedbackAspects);
+                }
+                if(state.dynamicStates[VkDynamicAlphaToCoverageEXT])
+                {
+                  vt->CmdSetAlphaToCoverageEnableEXT(Unwrap(cmd), state.alphaToCoverageEnable);
+                }
+                if(state.dynamicStates[VkDynamicAlphaToOneEXT])
+                {
+                  vt->CmdSetAlphaToOneEnableEXT(Unwrap(cmd), state.alphaToOneEnable);
+                }
+                if(!state.colorBlendEnable.empty() &&
+                   state.dynamicStates[VkDynamicColorBlendEnableEXT])
+                {
+                  vt->CmdSetColorBlendEnableEXT(Unwrap(cmd), 0,
+                                                (uint32_t)state.colorBlendEnable.size(),
+                                                state.colorBlendEnable.data());
+                }
+                if(!state.colorBlendEquation.empty() &&
+                   state.dynamicStates[VkDynamicColorBlendEquationEXT])
+                {
+                  vt->CmdSetColorBlendEquationEXT(Unwrap(cmd), 0,
+                                                  (uint32_t)state.colorBlendEquation.size(),
+                                                  state.colorBlendEquation.data());
+                }
+                if(!state.colorWriteMask.empty() && state.dynamicStates[VkDynamicColorWriteMaskEXT])
+                {
+                  vt->CmdSetColorWriteMaskEXT(Unwrap(cmd), 0, (uint32_t)state.colorWriteMask.size(),
+                                              state.colorWriteMask.data());
+                }
+                if(state.dynamicStates[VkDynamicConservativeRastModeEXT])
+                {
+                  vt->CmdSetConservativeRasterizationModeEXT(Unwrap(cmd), state.conservativeRastMode);
+                }
+                if(state.dynamicStates[VkDynamicDepthClampEnableEXT])
+                {
+                  vt->CmdSetDepthClampEnableEXT(Unwrap(cmd), state.depthClampEnable);
+                }
+                if(state.dynamicStates[VkDynamicDepthClipEnableEXT])
+                {
+                  vt->CmdSetDepthClipEnableEXT(Unwrap(cmd), state.depthClipEnable);
+                }
+                if(state.dynamicStates[VkDynamicDepthClipNegativeOneEXT])
+                {
+                  vt->CmdSetDepthClipNegativeOneToOneEXT(Unwrap(cmd), state.negativeOneToOne);
+                }
+                if(state.dynamicStates[VkDynamicOverstimationSizeEXT])
+                {
+                  vt->CmdSetExtraPrimitiveOverestimationSizeEXT(Unwrap(cmd),
+                                                                state.primOverestimationSize);
+                }
+                if(state.dynamicStates[VkDynamicLineRastModeEXT])
+                {
+                  vt->CmdSetLineRasterizationModeEXT(Unwrap(cmd), state.lineRasterMode);
+                }
+                if(state.dynamicStates[VkDynamicLineStippleEnableEXT])
+                {
+                  vt->CmdSetLineStippleEnableEXT(Unwrap(cmd), state.stippledLineEnable);
+                }
+                if(state.dynamicStates[VkDynamicLogicOpEnableEXT])
+                {
+                  vt->CmdSetLogicOpEnableEXT(Unwrap(cmd), state.logicOpEnable);
+                }
+                if(state.dynamicStates[VkDynamicPolygonModeEXT])
+                {
+                  vt->CmdSetPolygonModeEXT(Unwrap(cmd), state.polygonMode);
+                }
+                if(state.dynamicStates[VkDynamicProvokingVertexModeEXT])
+                {
+                  vt->CmdSetProvokingVertexModeEXT(Unwrap(cmd), state.provokingVertexMode);
+                }
+                if(state.dynamicStates[VkDynamicRasterizationSamplesEXT])
+                {
+                  vt->CmdSetRasterizationSamplesEXT(Unwrap(cmd), state.rastSamples);
+                }
+                if(state.dynamicStates[VkDynamicRasterizationStreamEXT])
+                {
+                  vt->CmdSetRasterizationStreamEXT(Unwrap(cmd), state.rasterStream);
+                }
+                if(state.dynamicStates[VkDynamicSampleLocationsEnableEXT])
+                {
+                  vt->CmdSetSampleLocationsEnableEXT(Unwrap(cmd), state.sampleLocEnable);
+                }
+                if(state.dynamicStates[VkDynamicSampleMaskEXT])
+                {
+                  vt->CmdSetSampleMaskEXT(Unwrap(cmd), state.rastSamples, state.sampleMask.data());
+                }
+                if(state.dynamicStates[VkDynamicTessDomainOriginEXT])
+                {
+                  vt->CmdSetTessellationDomainOriginEXT(Unwrap(cmd), state.domainOrigin);
+                }
+              }
+
               if(fmt.indexByteStride)
               {
                 VkIndexType idxtype = VK_INDEX_TYPE_UINT16;
@@ -3401,6 +4018,12 @@ ResourceId VulkanReplay::RenderOverlay(ResourceId texid, FloatVector clearCol, D
 
         for(auto it = pipes.begin(); it != pipes.end(); ++it)
           m_pDriver->vkDestroyPipeline(m_Device, it->second, NULL);
+
+        for(uint32_t i = 0; i < 3; i++)
+        {
+          if(shaders[i] != VK_NULL_HANDLE)
+            m_pDriver->vkDestroyShaderEXT(m_Device, shaders[i], NULL);
+        }
       }
 
       // restore back to normal

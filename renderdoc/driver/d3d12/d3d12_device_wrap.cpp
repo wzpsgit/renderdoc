@@ -490,6 +490,8 @@ bool WrappedID3D12Device::Serialise_CreateGraphicsPipelineState(
 
       wrapped->graphics = new D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC(Descriptor);
 
+      wrapped->FetchRootSig(GetShaderCache());
+
       D3D12_SHADER_BYTECODE *shaders[] = {
           &wrapped->graphics->VS, &wrapped->graphics->HS, &wrapped->graphics->DS,
           &wrapped->graphics->GS, &wrapped->graphics->PS,
@@ -637,6 +639,8 @@ void WrappedID3D12Device::ProcessCreatedGraphicsPSO(ID3D12PipelineState *real,
 
     wrapped->graphics = new D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC(*pDesc);
 
+    wrapped->FetchRootSig(GetShaderCache());
+
     D3D12_SHADER_BYTECODE *shaders[] = {
         &wrapped->graphics->VS, &wrapped->graphics->HS, &wrapped->graphics->DS,
         &wrapped->graphics->GS, &wrapped->graphics->PS, &wrapped->graphics->AS,
@@ -778,6 +782,8 @@ bool WrappedID3D12Device::Serialise_CreateComputePipelineState(
 
       wrapped->compute = new D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC(Descriptor);
 
+      wrapped->FetchRootSig(GetShaderCache());
+
       WrappedID3D12Shader *entry = WrappedID3D12Shader::AddShader(wrapped->compute->CS, this);
       entry->AddRef();
 
@@ -860,6 +866,8 @@ void WrappedID3D12Device::ProcessCreatedComputePSO(ID3D12PipelineState *real, ui
 
     wrapped->compute = new D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC(*pDesc);
 
+    wrapped->FetchRootSig(GetShaderCache());
+
     WrappedID3D12Shader *sh = WrappedID3D12Shader::AddShader(wrapped->compute->CS, this);
     sh->AddRef();
     wrapped->compute->CS.pShaderBytecode = sh;
@@ -912,6 +920,14 @@ bool WrappedID3D12Device::Serialise_CreateDescriptorHeap(
   SERIALISE_ELEMENT_LOCAL(pHeap, ((WrappedID3D12DescriptorHeap *)*ppvHeap)->GetResourceID())
       .TypedAs("ID3D12DescriptorHeap *"_lit);
 
+  uint64_t originalGPUBase = 0;
+  if(ser.IsWriting())
+    originalGPUBase = ((WrappedID3D12DescriptorHeap *)*ppvHeap)->GetOriginalGPUBase();
+  if(ser.VersionAtLeast(0x12))
+  {
+    SERIALISE_ELEMENT(originalGPUBase).Hidden();
+  }
+
   SERIALISE_CHECK_READ_ERRORS();
 
   if(IsReplayingAndReading())
@@ -943,7 +959,7 @@ bool WrappedID3D12Device::Serialise_CreateDescriptorHeap(
 
     if(patched && FAILED(hr))
     {
-      RDCERR(
+      RDCWARN(
           "RenderDoc needs extra descriptors for patching during analysis,"
           "but heap failed to expand any further even at tier 3");
       PatchedDesc.NumDescriptors = Descriptor.NumDescriptors;
@@ -959,7 +975,12 @@ bool WrappedID3D12Device::Serialise_CreateDescriptorHeap(
     }
     else
     {
-      ret = new WrappedID3D12DescriptorHeap(ret, this, PatchedDesc, Descriptor.NumDescriptors);
+      WrappedID3D12DescriptorHeap *wrapped =
+          new WrappedID3D12DescriptorHeap(ret, this, PatchedDesc, Descriptor.NumDescriptors);
+
+      wrapped->SetOriginalGPUBase(originalGPUBase);
+
+      ret = wrapped;
 
       GetResourceManager()->AddLiveResource(pHeap, ret);
 
@@ -1792,70 +1813,8 @@ bool WrappedID3D12Device::Serialise_CreateCommandSignature(SerialiserType &ser,
     }
     else
     {
-      WrappedID3D12CommandSignature *wrapped = new WrappedID3D12CommandSignature(ret, this);
-
-      wrapped->sig.ByteStride = Descriptor.ByteStride;
-      wrapped->sig.arguments.assign(Descriptor.pArgumentDescs, Descriptor.NumArgumentDescs);
-
-      wrapped->sig.graphics = true;
-      wrapped->sig.PackedByteSize = 0;
-
-      // From MSDN, command signatures are either graphics or compute so just search for dispatches:
-      // "A given command signature is either an action or a compute command signature. If a command
-      // signature contains a drawing operation, then it is a graphics command signature. Otherwise,
-      // the command signature must contain a dispatch operation, and it is a compute command
-      // signature."
-      for(uint32_t i = 0; i < Descriptor.NumArgumentDescs; i++)
-      {
-        switch(Descriptor.pArgumentDescs[i].Type)
-        {
-          case D3D12_INDIRECT_ARGUMENT_TYPE_DRAW:
-          {
-            wrapped->sig.PackedByteSize += sizeof(D3D12_DRAW_ARGUMENTS);
-            break;
-          }
-          case D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED:
-          {
-            wrapped->sig.PackedByteSize += sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
-            break;
-          }
-          case D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH:
-          {
-            wrapped->sig.PackedByteSize += sizeof(D3D12_DISPATCH_ARGUMENTS);
-            wrapped->sig.graphics = false;
-            break;
-          }
-          case D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH:
-          {
-            wrapped->sig.PackedByteSize += sizeof(D3D12_DISPATCH_MESH_ARGUMENTS);
-            break;
-          }
-          case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT:
-          {
-            wrapped->sig.PackedByteSize +=
-                sizeof(uint32_t) * Descriptor.pArgumentDescs[i].Constant.Num32BitValuesToSet;
-            break;
-          }
-          case D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW:
-          {
-            wrapped->sig.PackedByteSize += sizeof(D3D12_VERTEX_BUFFER_VIEW);
-            break;
-          }
-          case D3D12_INDIRECT_ARGUMENT_TYPE_INDEX_BUFFER_VIEW:
-          {
-            wrapped->sig.PackedByteSize += sizeof(D3D12_INDEX_BUFFER_VIEW);
-            break;
-          }
-          case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW:
-          case D3D12_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW:
-          case D3D12_INDIRECT_ARGUMENT_TYPE_UNORDERED_ACCESS_VIEW:
-          {
-            wrapped->sig.PackedByteSize += sizeof(D3D12_GPU_VIRTUAL_ADDRESS);
-            break;
-          }
-          default: RDCERR("Unexpected argument type! %d", Descriptor.pArgumentDescs[i].Type); break;
-        }
-      }
+      WrappedID3D12CommandSignature *wrapped =
+          new WrappedID3D12CommandSignature(ret, this, Descriptor);
 
       ret = wrapped;
 
@@ -1902,7 +1861,7 @@ HRESULT WrappedID3D12Device::CreateCommandSignature(const D3D12_COMMAND_SIGNATUR
         return ret;
       }
 
-      wrapped = new WrappedID3D12CommandSignature(real, this);
+      wrapped = new WrappedID3D12CommandSignature(real, this, *pDesc);
     }
 
     if(IsCaptureMode(m_State))
@@ -1925,6 +1884,10 @@ HRESULT WrappedID3D12Device::CreateCommandSignature(const D3D12_COMMAND_SIGNATUR
     {
       GetResourceManager()->AddLiveResource(wrapped->GetResourceID(), wrapped);
     }
+
+    if(pDesc->pArgumentDescs[pDesc->NumArgumentDescs - 1].Type ==
+       D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_RAYS)
+      wrapped->sig.raytraced = true;
 
     *ppvCommandSignature = (ID3D12CommandSignature *)wrapped;
   }
@@ -2345,10 +2308,12 @@ HRESULT WrappedID3D12Device::CheckFeatureSupport(D3D12_FEATURE Feature, void *pF
 
     // don't support raytracing
     if(!D3D12_Experimental_EnableRTSupport())
+    {
       opts->RaytracingTier = D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
 
-    if(dolog)
-      RDCLOG("Forcing no raytracing tier support");
+      if(dolog)
+        RDCLOG("Forcing no raytracing tier support");
+    }
 
     return S_OK;
   }
@@ -2363,7 +2328,7 @@ HRESULT WrappedID3D12Device::CheckFeatureSupport(D3D12_FEATURE Feature, void *pF
     opts->SamplerFeedbackTier = D3D12_SAMPLER_FEEDBACK_TIER_NOT_SUPPORTED;
 
     if(dolog)
-      RDCLOG("Forcing no mesh shading or sampler feedback tier support");
+      RDCLOG("Forcing no sampler feedback tier support");
 
     return S_OK;
   }

@@ -146,7 +146,7 @@ enum class SamplerFeedbackType : uint8_t
   MipRegionUsed = 1,
   LastEntry = 2
 };
-
 };    // namespace DXIL
 
 DECLARE_STRINGISE_TYPE(DXIL::ComponentType);
+DECLARE_STRINGISE_TYPE(DXIL::ResourceClass);

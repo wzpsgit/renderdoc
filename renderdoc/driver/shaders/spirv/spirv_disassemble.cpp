@@ -330,6 +330,26 @@ rdcstr Reflector::Disassemble(const rdcstr &entryPoint,
           break;
         }
 
+        // split the interface list onto separate lines to avoid hugely long lines on some shaders
+        case Op::EntryPoint:
+        {
+          OpEntryPoint decoded(it);
+          ret += rdcstr("EntryPoint("_lit) + ParamToStr(idName, decoded.executionModel) + ", " +
+                 ParamToStr(idName, decoded.entryPoint) + ", " + ParamToStr(idName, decoded.name) +
+                 ", {\n";
+          lineNum++;
+          for(size_t i = 0; i < decoded.iface.size(); i++)
+          {
+            ret += "    " + ParamToStr(idName, decoded.iface[i]);
+            if(i + 1 < decoded.iface.size())
+              ret += ", ";
+            ret += "\n";
+            lineNum++;
+          }
+          ret += "  })";
+          break;
+        }
+
         // ignore these operations entirely
         case Op::SourceContinued:
         case Op::Line:
@@ -1563,6 +1583,7 @@ rdcstr Reflector::Disassemble(const rdcstr &entryPoint,
         }
 
         case Op::ExtInst:
+        case Op::ExtInstWithForwardRefsKHR:
         {
           OpExtInst decoded(it);
 

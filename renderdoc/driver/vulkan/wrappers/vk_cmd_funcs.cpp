@@ -1190,6 +1190,8 @@ bool WrappedVulkan::Serialise_vkBeginCommandBuffer(SerialiserType &ser, VkComman
           GetCmdRenderState().xfbcounters.clear();
           GetCmdRenderState().conditionalRendering.buffer = ResourceId();
 
+          m_PushCommandBuffer = m_LastCmdBufferID;
+
           rerecord = true;
         }
         else if(submit->beginEvent <= m_LastEventID)
@@ -3096,10 +3098,27 @@ bool WrappedVulkan::Serialise_vkCmdBindPipeline(SerialiserType &ser, VkCommandBu
           if(pipelineBindPoint == VK_PIPELINE_BIND_POINT_COMPUTE)
           {
             renderstate.compute.pipeline = liveid;
+            renderstate.compute.shaderObject = false;
+
+            // disturb compute shader bound via vkCmdBindShadersEXT, if any
+            renderstate.shaderObjects[(uint32_t)ShaderStage::Compute] = ResourceId();
+          }
+          else if(pipelineBindPoint == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+          {
+            renderstate.rt.pipeline = liveid;
           }
           else
           {
             renderstate.graphics.pipeline = liveid;
+            renderstate.graphics.shaderObject = false;
+
+            // disturb graphics shaders bound via vkCmdBindShadersEXT, if any
+            for(uint32_t i = 0; i < (uint32_t)ShaderStage::Count; i++)
+            {
+              if(i == (uint32_t)ShaderStage::Compute)
+                continue;
+              renderstate.shaderObjects[i] = ResourceId();
+            }
 
             const VulkanCreationInfo::Pipeline &pipeInfo = m_CreationInfo.m_Pipeline[liveid];
 
@@ -3416,10 +3435,17 @@ bool WrappedVulkan::Serialise_vkCmdBindPipeline(SerialiserType &ser, VkCommandBu
       if(pipelineBindPoint == VK_PIPELINE_BIND_POINT_COMPUTE)
       {
         m_BakedCmdBufferInfo[m_LastCmdBufferID].state.compute.pipeline = liveid;
+        m_BakedCmdBufferInfo[m_LastCmdBufferID].state.compute.shaderObject = false;
+      }
+      else if(pipelineBindPoint == VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR)
+      {
+        m_BakedCmdBufferInfo[m_LastCmdBufferID].state.rt.pipeline = liveid;
+        m_BakedCmdBufferInfo[m_LastCmdBufferID].state.rt.shaderObject = false;
       }
       else
       {
         m_BakedCmdBufferInfo[m_LastCmdBufferID].state.graphics.pipeline = liveid;
+        m_BakedCmdBufferInfo[m_LastCmdBufferID].state.graphics.shaderObject = false;
 
         const VulkanCreationInfo::Pipeline &pipeInfo = m_CreationInfo.m_Pipeline[liveid];
 
@@ -3498,18 +3524,14 @@ bool WrappedVulkan::Serialise_vkCmdBindDescriptorSets(
         {
           VulkanRenderState &renderstate = GetCmdRenderState();
 
-          rdcarray<VulkanStatePipeline::DescriptorAndOffsets> &descsets =
-              (pipelineBindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS) ? renderstate.graphics.descSets
-                                                                     : renderstate.compute.descSets;
+          VulkanStatePipeline &pipeline = renderstate.GetPipeline(pipelineBindPoint);
+          rdcarray<VulkanStatePipeline::DescriptorAndOffsets> &descsets = pipeline.descSets;
 
           // expand as necessary
           if(descsets.size() < firstSet + setCount)
             descsets.resize(firstSet + setCount);
 
-          if(pipelineBindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS)
-            renderstate.graphics.lastBoundSet = firstSet;
-          else
-            renderstate.compute.lastBoundSet = firstSet;
+          pipeline.lastBoundSet = firstSet;
 
           const rdcarray<ResourceId> &descSetLayouts =
               m_CreationInfo.m_PipelineLayout[GetResID(layout)].descSetLayouts;
@@ -3541,9 +3563,7 @@ bool WrappedVulkan::Serialise_vkCmdBindDescriptorSets(
     {
       // track while reading, as we need to track resource usage
       rdcarray<VulkanStatePipeline::DescriptorAndOffsets> &descsets =
-          (pipelineBindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS)
-              ? m_BakedCmdBufferInfo[m_LastCmdBufferID].state.graphics.descSets
-              : m_BakedCmdBufferInfo[m_LastCmdBufferID].state.compute.descSets;
+          m_BakedCmdBufferInfo[m_LastCmdBufferID].state.GetPipeline(pipelineBindPoint).descSets;
 
       // expand as necessary
       if(descsets.size() < firstSet + setCount)
@@ -5460,18 +5480,14 @@ bool WrappedVulkan::Serialise_vkCmdPushDescriptorSetKHR(SerialiserType &ser,
 
         {
           VulkanRenderState &renderstate = GetCmdRenderState();
-          rdcarray<VulkanStatePipeline::DescriptorAndOffsets> &descsets =
-              (pipelineBindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS) ? renderstate.graphics.descSets
-                                                                     : renderstate.compute.descSets;
+          VulkanStatePipeline &pipeline = renderstate.GetPipeline(pipelineBindPoint);
+          rdcarray<VulkanStatePipeline::DescriptorAndOffsets> &descsets = pipeline.descSets;
 
           // expand as necessary
           if(descsets.size() < set + 1)
             descsets.resize(set + 1);
 
-          if(pipelineBindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS)
-            renderstate.graphics.lastBoundSet = set;
-          else
-            renderstate.compute.lastBoundSet = set;
+          pipeline.lastBoundSet = set;
 
           descsets[set].pipeLayout = GetResID(layout);
           descsets[set].descSet = setId;
@@ -5488,9 +5504,7 @@ bool WrappedVulkan::Serialise_vkCmdPushDescriptorSetKHR(SerialiserType &ser,
     {
       // track while reading, as we need to track resource usage
       rdcarray<VulkanStatePipeline::DescriptorAndOffsets> &descsets =
-          (pipelineBindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS)
-              ? m_BakedCmdBufferInfo[m_LastCmdBufferID].state.graphics.descSets
-              : m_BakedCmdBufferInfo[m_LastCmdBufferID].state.compute.descSets;
+          m_BakedCmdBufferInfo[m_LastCmdBufferID].state.GetPipeline(pipelineBindPoint).descSets;
 
       // expand as necessary
       if(descsets.size() < set + 1)
@@ -5750,18 +5764,14 @@ bool WrappedVulkan::Serialise_vkCmdPushDescriptorSetWithTemplateKHR(
 
         {
           VulkanRenderState &renderstate = GetCmdRenderState();
-          rdcarray<VulkanStatePipeline::DescriptorAndOffsets> &descsets =
-              (bindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS) ? renderstate.graphics.descSets
-                                                             : renderstate.compute.descSets;
+          VulkanStatePipeline &pipeline = renderstate.GetPipeline(bindPoint);
+          rdcarray<VulkanStatePipeline::DescriptorAndOffsets> &descsets = pipeline.descSets;
 
           // expand as necessary
           if(descsets.size() < set + 1)
             descsets.resize(set + 1);
 
-          if(bindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS)
-            renderstate.graphics.lastBoundSet = set;
-          else
-            renderstate.compute.lastBoundSet = set;
+          pipeline.lastBoundSet = set;
 
           descsets[set].pipeLayout = GetResID(layout);
           descsets[set].descSet = setId;
@@ -5778,10 +5788,7 @@ bool WrappedVulkan::Serialise_vkCmdPushDescriptorSetWithTemplateKHR(
     {
       // track while reading, as we need to track resource usage
       rdcarray<VulkanStatePipeline::DescriptorAndOffsets> &descsets =
-          (m_CreationInfo.m_DescUpdateTemplate[GetResID(descriptorUpdateTemplate)].bindPoint ==
-           VK_PIPELINE_BIND_POINT_GRAPHICS)
-              ? m_BakedCmdBufferInfo[m_LastCmdBufferID].state.graphics.descSets
-              : m_BakedCmdBufferInfo[m_LastCmdBufferID].state.compute.descSets;
+          m_BakedCmdBufferInfo[m_LastCmdBufferID].state.GetPipeline(bindPoint).descSets;
 
       // expand as necessary
       if(descsets.size() < set + 1)
@@ -8045,14 +8052,19 @@ bool WrappedVulkan::Serialise_vkCmdBindShadersEXT(SerialiserType &ser,
           {
             int stageIndex = StageIndex(pStages[i]);
 
+            renderstate.shaderObjects[stageIndex] =
+                pShaders && (pShaders[i] != VK_NULL_HANDLE) ? GetResID(pShaders[i]) : ResourceId();
+
             // calling vkCmdBindShadersEXT disturbs the corresponding pipeline bind points
             // such that any pipelines previously bound to those points are no longer bound
             if(stageIndex == (int)ShaderStage::Compute)
             {
+              renderstate.compute.shaderObject = true;
               renderstate.compute.pipeline = ResourceId();
             }
             else
             {
+              renderstate.graphics.shaderObject = true;
               renderstate.graphics.pipeline = ResourceId();
             }
           }
@@ -8070,13 +8082,18 @@ bool WrappedVulkan::Serialise_vkCmdBindShadersEXT(SerialiserType &ser,
       {
         int stageIndex = StageIndex(pStages[i]);
 
+        m_BakedCmdBufferInfo[m_LastCmdBufferID].state.shaderObjects[stageIndex] =
+            pShaders && (pShaders[i] != VK_NULL_HANDLE) ? GetResID(pShaders[i]) : ResourceId();
+
         if(stageIndex == (int)ShaderStage::Compute)
         {
           m_BakedCmdBufferInfo[m_LastCmdBufferID].state.compute.pipeline = ResourceId();
+          m_BakedCmdBufferInfo[m_LastCmdBufferID].state.compute.shaderObject = true;
         }
         else
         {
           m_BakedCmdBufferInfo[m_LastCmdBufferID].state.graphics.pipeline = ResourceId();
+          m_BakedCmdBufferInfo[m_LastCmdBufferID].state.graphics.shaderObject = true;
         }
       }
     }

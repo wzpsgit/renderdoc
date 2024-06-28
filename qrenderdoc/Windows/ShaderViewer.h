@@ -218,6 +218,10 @@ private:
 
   void MarkModification();
 
+  void ConfigureBookmarkMenu();
+  void UpdateBookmarkMenu(QMenu *menu, QAction *nextAction, QAction *prevAction,
+                          QAction *clearAction);
+
   void PopulateCompileTools();
   void PopulateCompileToolParameters();
   bool ProcessIncludeDirectives(QString &source, const rdcstrpairs &files);
@@ -237,6 +241,14 @@ private:
   void cacheResources();
 
   ShaderEncoding currentEncoding();
+
+  void ToggleBookmark();
+  void NextBookmark();
+  void PreviousBookmark();
+  void ClearAllBookmarks();
+  bool HasBookmarks();
+
+  void SetFindTextFromCurrentWord();
 
   QString m_TooltipVarPath;
   int m_TooltipVarIndex = -1;
@@ -326,9 +338,14 @@ private:
 
   QList<QPair<ScintillaEdit *, int>> m_FindAllResults;
 
+  static const int BOOKMARK_MAX_MENU_ENTRY_LENGTH = 40;    // max length of bookmark names in menu
+  static const int BOOKMARK_MAX_MENU_ENTRY_COUNT = 30;     // max number of bookmarks listed in menu
+  QMap<ScintillaEdit *, QList<sptr_t>> m_Bookmarks;
+
   static const int CURRENT_MARKER = 0;
   static const int BREAKPOINT_MARKER = 2;
   static const int FINISHED_MARKER = 4;
+  static const int BOOKMARK_MARKER = 6;
 
   static const int CURRENT_INDICATOR = 20;
   static const int FINISHED_INDICATOR = 21;

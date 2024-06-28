@@ -1243,7 +1243,7 @@ protected:
     else
     {
       viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-      uint32_t bs = GetByteSize(1, 1, 1, format, 0);
+      uint32_t bs = (uint32_t)GetByteSize(1, 1, 1, format, 0);
 
       if(bs == 1)
         viewInfo.format = VK_FORMAT_R8_UINT;
@@ -1517,6 +1517,9 @@ struct VulkanOcclusionCallback : public VulkanPixelHistoryCallback
       return;
     VulkanRenderState prevState = m_pDriver->GetCmdRenderState();
     VulkanRenderState &pipestate = m_pDriver->GetCmdRenderState();
+
+    if(prevState.graphics.shaderObject)
+      return;
 
     VkPipeline pipe = GetPixelOcclusionPipeline(eid, prevState.graphics.pipeline,
                                                 GetColorAttachmentIndex(prevState));

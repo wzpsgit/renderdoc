@@ -2497,6 +2497,8 @@ bool WrappedID3D12Device::Serialise_BeginCaptureFrame(SerialiserType &ser)
     m_InitialResourceStates = m_ResourceStates;
 
     GetDebugManager()->PrepareExecuteIndirectPatching(m_OrigGPUAddresses);
+    GetResourceManager()->GetRaytracingResourceAndUtilHandler()->PrepareRayDispatchBuffer(
+        &m_OrigGPUAddresses);
   }
 
   std::map<ResourceId, SubresourceStateVector> initialStates;
@@ -2590,6 +2592,9 @@ void WrappedID3D12Device::StartFrameCapture(DeviceOwnedWindow devWnd)
     initStateCurList = NULL;
 
     GPUSyncAllQueues();
+
+    // wait until we've synced all queues to check for these
+    GetResourceManager()->GetRaytracingResourceAndUtilHandler()->CheckPendingASBuilds();
 
     GetResourceManager()->PrepareInitialContents();
 
@@ -2697,19 +2702,6 @@ bool WrappedID3D12Device::EndFrameCapture(DeviceOwnedWindow devWnd)
 
   rdcarray<WrappedID3D12CommandQueue *> queues;
 
-  // There is no easy way to mark resource referenced in the AS input and the dispatch tables.
-  // We could be more selective and only force-reference acceleration structure buffers - resources
-  // in the AS state - but this would not include scratch buffers (which could be done by hand) and
-  // build input buffers (which can't).
-  // we don't do this with the forced reference system as we want this to be retroactive - only
-  // after seeing an AS build do we mark all buffers referenced but buffers could be created before
-  // an AS is built.
-  CaptureOptions opts = RenderDoc::Inst().GetCaptureOptions();
-  if(!opts.refAllResources && m_HaveSeenASBuild)
-  {
-    WrappedID3D12Resource::MarkAllBufferResourceFrameReferenced(GetResourceManager());
-  }
-
   // transition back to IDLE and readback initial states atomically
   {
     SCOPED_WRITELOCK(m_CapTransitionLock);
@@ -2722,7 +2714,13 @@ bool WrappedID3D12Device::EndFrameCapture(DeviceOwnedWindow devWnd)
     for(auto it = queues.begin(); it != queues.end(); ++it)
       ContainsExecuteIndirect |= (*it)->GetResourceRecord()->ContainsExecuteIndirect;
 
-    if(ContainsExecuteIndirect)
+    // There is no easy way to mark resource referenced in the AS input and the dispatch tables.
+    // We could be more selective and only force-reference acceleration structure buffers -
+    // resources in the AS state - but this would not include scratch buffers (which could be done
+    // by hand) and build input buffers (which can't). we don't do this with the forced reference
+    // system as we want this to be retroactive - only after seeing an AS build do we mark all
+    // buffers referenced but buffers could be created before an AS is built.
+    if(ContainsExecuteIndirect || m_HaveSeenASBuild)
       WrappedID3D12Resource::RefBuffers(GetResourceManager());
 
     m_State = CaptureState::BackgroundCapturing;
@@ -3666,14 +3664,13 @@ void WrappedID3D12Device::SetName(ID3D12DeviceChild *pResource, const char *Name
 }
 
 template <typename SerialiserType>
-bool WrappedID3D12Device::Serialise_CreateAS(
-    SerialiserType &ser, ID3D12Resource *pResource, UINT64 resourceOffset,
-    const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO &preBldInfo,
-    D3D12AccelerationStructure *as)
+bool WrappedID3D12Device::Serialise_CreateAS(SerialiserType &ser, ID3D12Resource *pResource,
+                                             UINT64 resourceOffset, UINT64 byteSize,
+                                             D3D12AccelerationStructure *as)
 {
   SERIALISE_ELEMENT(pResource);
   SERIALISE_ELEMENT(resourceOffset);
-  SERIALISE_ELEMENT(preBldInfo);
+  SERIALISE_ELEMENT(byteSize);
   SERIALISE_ELEMENT_LOCAL(asId, as->GetResourceID());
 
   SERIALISE_CHECK_READ_ERRORS();
@@ -3682,7 +3679,7 @@ bool WrappedID3D12Device::Serialise_CreateAS(
   {
     WrappedID3D12Resource *asbWrappedResource = (WrappedID3D12Resource *)pResource;
     D3D12AccelerationStructure *accStructAtOffset = NULL;
-    if(asbWrappedResource->CreateAccStruct(resourceOffset, preBldInfo, &accStructAtOffset))
+    if(asbWrappedResource->CreateAccStruct(resourceOffset, byteSize, &accStructAtOffset))
     {
       GetResourceManager()->AddLiveResource(asId, accStructAtOffset);
 
@@ -3701,18 +3698,15 @@ bool WrappedID3D12Device::Serialise_CreateAS(
   return true;
 }
 
-template bool WrappedID3D12Device::Serialise_CreateAS(
-    ReadSerialiser &ser, ID3D12Resource *pResource, UINT64 resourceOffset,
-    const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO &preBldInfo,
-    D3D12AccelerationStructure *as);
-template bool WrappedID3D12Device::Serialise_CreateAS(
-    WriteSerialiser &ser, ID3D12Resource *pResource, UINT64 resourceOffset,
-    const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO &preBldInfo,
-    D3D12AccelerationStructure *as);
+template bool WrappedID3D12Device::Serialise_CreateAS(ReadSerialiser &ser, ID3D12Resource *pResource,
+                                                      UINT64 resourceOffset, UINT64 byteSize,
+                                                      D3D12AccelerationStructure *as);
+template bool WrappedID3D12Device::Serialise_CreateAS(WriteSerialiser &ser, ID3D12Resource *pResource,
+                                                      UINT64 resourceOffset, UINT64 byteSize,
+                                                      D3D12AccelerationStructure *as);
 
 void WrappedID3D12Device::CreateAS(ID3D12Resource *pResource, UINT64 resourceOffset,
-                                   const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO &preBldInfo,
-                                   D3D12AccelerationStructure *as)
+                                   UINT64 byteSize, D3D12AccelerationStructure *as)
 {
   if(IsCaptureMode(m_State))
   {
@@ -3723,7 +3717,7 @@ void WrappedID3D12Device::CreateAS(ID3D12Resource *pResource, UINT64 resourceOff
     {
       WriteSerialiser &ser = GetThreadSerialiser();
       SCOPED_SERIALISE_CHUNK(D3D12Chunk::CreateAS);
-      Serialise_CreateAS(ser, pResource, resourceOffset, preBldInfo, as);
+      Serialise_CreateAS(ser, pResource, resourceOffset, byteSize, as);
       record->AddChunk(scope.Get());
     }
   }
@@ -3821,6 +3815,47 @@ void WrappedID3D12Device::SetShaderExtUAV(GPUVendor vendor, uint32_t reg, uint32
 
 INSTANTIATE_FUNCTION_SERIALISED(void, WrappedID3D12Device, SetShaderExtUAV, GPUVendor vendor,
                                 uint32_t reg, uint32_t space, bool global);
+
+template <typename SerialiserType>
+bool WrappedID3D12Device::Serialise_SetPipelineStackSize(SerialiserType &ser,
+                                                         ID3D12StateObject *pStateObject,
+                                                         UINT64 StackSize)
+{
+  SERIALISE_ELEMENT(pStateObject);
+  SERIALISE_ELEMENT(StackSize);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading() && pStateObject)
+  {
+    ID3D12StateObjectProperties *properties = NULL;
+    pStateObject->QueryInterface(__uuidof(ID3D12StateObjectProperties), (void **)&properties);
+
+    properties->SetPipelineStackSize(StackSize);
+
+    SAFE_RELEASE(properties);
+  }
+
+  return true;
+}
+
+void WrappedID3D12Device::SetPipelineStackSize(ID3D12StateObject *pStateObject, UINT64 StackSize)
+{
+  if(IsCaptureMode(m_State))
+  {
+    D3D12ResourceRecord *record = GetRecord(pStateObject);
+
+    {
+      WriteSerialiser &ser = GetThreadSerialiser();
+      SCOPED_SERIALISE_CHUNK(D3D12Chunk::StateObject_SetPipelineStackSize);
+      Serialise_SetPipelineStackSize(ser, pStateObject, StackSize);
+      record->AddChunk(scope.Get());
+    }
+  }
+}
+
+INSTANTIATE_FUNCTION_SERIALISED(void, WrappedID3D12Device, SetPipelineStackSize,
+                                ID3D12StateObject *pStateObject, UINT64 StackSize);
 
 void WrappedID3D12Device::SetShaderExt(GPUVendor vendor)
 {
@@ -4044,6 +4079,8 @@ void WrappedID3D12Device::CreateInternalResources()
     }
   }
 
+  GetResourceManager()->GetRaytracingResourceAndUtilHandler()->CreateInternalResources();
+
   // we don't want replay-only shaders added in WrappedID3D12Shader to pollute the list of resources
   WrappedID3D12Shader::InternalResources(true);
 
@@ -4135,7 +4172,8 @@ void WrappedID3D12Device::CreateInternalResources()
 
   m_GPUSyncCounter = 0;
 
-  GetShaderCache()->SetDevConfiguration(m_Replay->GetDevConfiguration());
+  if(IsReplayMode(m_State))
+    GetShaderCache()->SetDevConfiguration(m_Replay->GetDevConfiguration());
 
   if(m_TextRenderer == NULL)
     m_TextRenderer = new D3D12TextRenderer(this);
@@ -4459,6 +4497,8 @@ bool WrappedID3D12Device::ProcessChunk(ReadSerialiser &ser, D3D12Chunk context)
     case D3D12Chunk::Device_AddToStateObject:
       return Serialise_AddToStateObject(ser, NULL, NULL, IID(), NULL);
     case D3D12Chunk::CreateAS: return Serialise_CreateAS(ser, NULL, 0, {}, NULL);
+    case D3D12Chunk::StateObject_SetPipelineStackSize:
+      return Serialise_SetPipelineStackSize(ser, NULL, 0);
 
     // in order to get a warning if we miss a case, we explicitly handle the list/queue chunks here.
     // If we actually encounter one it's an error (we should hit CaptureBegin first and switch to
@@ -4962,8 +5002,9 @@ void WrappedID3D12Device::ReplayLog(uint32_t startEventID, uint32_t endEventID,
 
     for(PatchedRayDispatch::Resources &r : cmd.m_RayDispatches)
     {
-      r.lookupBuffer->Release();
-      r.patchScratchBuffer->Release();
+      SAFE_RELEASE(r.lookupBuffer);
+      SAFE_RELEASE(r.patchScratchBuffer);
+      SAFE_RELEASE(r.argumentBuffer);
     }
     cmd.m_RayDispatches.clear();
 

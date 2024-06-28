@@ -200,7 +200,8 @@ private:
   static rdcstr GetChunkName(uint32_t idx);
   D3D12ResourceManager *GetResourceManager() { return m_pDevice->GetResourceManager(); }
 
-  rdcarray<std::function<bool()>> m_accStructPostBuildQueueFunc;
+  rdcarray<std::function<bool()>> m_ImmediateASCallbacks;
+  rdcarray<std::function<bool()>> m_PendingASCallbacks;
 public:
   ALLOCATE_WITH_WRAPPED_POOL(WrappedID3D12GraphicsCommandList);
 
@@ -249,22 +250,31 @@ public:
 
   bool ValidateRootGPUVA(D3D12_GPU_VIRTUAL_ADDRESS buffer);
 
-  void EnqueueAccStructPostBuild(const std::function<bool()> &postBldExec)
+  void AddSubmissionASBuildCallback(bool waitForSubmission, const std::function<bool()> &postBldExec)
   {
-    m_accStructPostBuildQueueFunc.push_back(postBldExec);
+    if(waitForSubmission)
+      m_PendingASCallbacks.push_back(postBldExec);
+    else
+      m_ImmediateASCallbacks.push_back(postBldExec);
   }
 
-  bool ExecuteAccStructPostBuilds()
+  bool ExecuteImmediateASBuildCallbacks()
   {
     bool success = true;
 
-    for(std::function<bool()> &func : m_accStructPostBuildQueueFunc)
+    for(std::function<bool()> &func : m_ImmediateASCallbacks)
     {
       success &= func();
     }
 
-    m_accStructPostBuildQueueFunc.clear();
+    m_ImmediateASCallbacks.clear();
     return success;
+  }
+
+  void TakeWaitingASBuildCallbacks(rdcarray<std::function<bool()>> &callbacks)
+  {
+    callbacks.append(std::move(m_PendingASCallbacks));
+    m_PendingASCallbacks.clear();
   }
 
   //////////////////////////////
@@ -579,8 +589,12 @@ public:
                                 _In_ SIZE_T ExecutionParametersDataSizeInBytes);
 
   bool PatchAccStructBlasAddress(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *accStructInput,
-                                 ID3D12GraphicsCommandList4 *dxrCmd,
+                                 ID3D12GraphicsCommandList4 *list,
                                  BakedCmdListInfo::PatchRaytracing *patchRaytracing);
+
+  bool ProcessASBuildAfterSubmission(ResourceId asbWrappedResourceId,
+                                     D3D12BufferOffset asbWrappedResourceBufferOffset,
+                                     UINT64 byteSize);
 
   IMPLEMENT_FUNCTION_SERIALISED(
       virtual void STDMETHODCALLTYPE, BuildRaytracingAccelerationStructure,

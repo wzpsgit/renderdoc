@@ -685,6 +685,10 @@ bool CreateDescriptorWritesForSlotData(WrappedVulkan *vk, rdcarray<VkWriteDescri
     if(descType == VK_DESCRIPTOR_TYPE_MAX_ENUM)
       continue;
 
+    // skip immutable sampler-only descriptors
+    if(immutableSamplers && descType == VK_DESCRIPTOR_TYPE_SAMPLER)
+      continue;
+
     // the current write is either empty, in which case we can just set it to what we
     // want,
     // or it's the same type in which case we're appending to its array
@@ -818,12 +822,14 @@ bool CreateDescriptorWritesForSlotData(WrappedVulkan *vk, rdcarray<VkWriteDescri
   return ret;
 }
 
-void VulkanCreationInfo::Pipeline::Shader::ProcessStaticDescriptorAccess(
+void VulkanCreationInfo::ShaderEntry::ProcessStaticDescriptorAccess(
     ResourceId pushStorage, ResourceId specStorage, rdcarray<DescriptorAccess> &descriptorAccess,
     rdcarray<const DescSetLayout *> setLayoutInfos) const
 {
   if(!refl)
     return;
+
+  const uint32_t descSetLayoutsCount = (uint32_t)setLayoutInfos.size();
 
   DescriptorAccess access;
   access.stage = refl->stage;
@@ -867,6 +873,11 @@ void VulkanCreationInfo::Pipeline::Shader::ProcessStaticDescriptorAccess(
     }
     else
     {
+      // Ignore bindings which are not in the descriptor set layouts
+      if((bind.fixedBindSetOrSpace >= descSetLayoutsCount) ||
+         bind.fixedBindNumber >= setLayoutInfos[bind.fixedBindSetOrSpace]->bindings.size())
+        continue;
+
       access.descriptorStore = ResourceId();
 
       // VkShaderStageFlagBits and ShaderStageMask are identical bit-for-bit.
@@ -894,6 +905,11 @@ void VulkanCreationInfo::Pipeline::Shader::ProcessStaticDescriptorAccess(
     if(bind.bindArraySize > 1)
       continue;
 
+    // Ignore bindings which are not in the descriptor set layouts
+    if((bind.fixedBindSetOrSpace >= descSetLayoutsCount) ||
+       bind.fixedBindNumber >= setLayoutInfos[bind.fixedBindSetOrSpace]->bindings.size())
+      continue;
+
     // VkShaderStageFlagBits and ShaderStageMask are identical bit-for-bit.
     // this might be deliberate if the binding is never actually used dynamically, only
     // statically used bindings must be declared
@@ -915,6 +931,11 @@ void VulkanCreationInfo::Pipeline::Shader::ProcessStaticDescriptorAccess(
     const ShaderResource &bind = refl->readOnlyResources[i];
     // arrayed descriptors will be handled with bindless feedback
     if(bind.bindArraySize > 1)
+      continue;
+
+    // Ignore bindings which are not in the descriptor set layouts
+    if((bind.fixedBindSetOrSpace >= descSetLayoutsCount) ||
+       bind.fixedBindNumber >= setLayoutInfos[bind.fixedBindSetOrSpace]->bindings.size())
       continue;
 
     // VkShaderStageFlagBits and ShaderStageMask are identical bit-for-bit.
@@ -940,6 +961,11 @@ void VulkanCreationInfo::Pipeline::Shader::ProcessStaticDescriptorAccess(
     if(bind.bindArraySize > 1)
       continue;
 
+    // Ignore bindings which are not in the descriptor set layouts
+    if((bind.fixedBindSetOrSpace >= descSetLayoutsCount) ||
+       bind.fixedBindNumber >= setLayoutInfos[bind.fixedBindSetOrSpace]->bindings.size())
+      continue;
+
     // VkShaderStageFlagBits and ShaderStageMask are identical bit-for-bit.
     // this might be deliberate if the binding is never actually used dynamically, only
     // statically used bindings must be declared
@@ -956,6 +982,89 @@ void VulkanCreationInfo::Pipeline::Shader::ProcessStaticDescriptorAccess(
   }
 }
 
+void VulkanCreationInfo::ShaderObject::Init(VulkanResourceManager *resourceMan,
+                                            VulkanCreationInfo &info, ResourceId id,
+                                            const VkShaderCreateInfoEXT *pCreateInfo)
+{
+  flags = pCreateInfo->flags;
+
+  shad.module = id;
+
+  shad.stage = StageFromIndex(StageIndex(pCreateInfo->stage));
+
+  nextStage = pCreateInfo->nextStage;
+
+  codeType = pCreateInfo->codeType;
+
+  // fake ShaderModule for SPIR-V processing and reflection
+  VkShaderModuleCreateInfo smInfo = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, NULL, 0};
+
+  if(codeType & VK_SHADER_CODE_TYPE_SPIRV_EXT)
+  {
+    smInfo.codeSize = pCreateInfo->codeSize;
+    smInfo.pCode = (const uint32_t *)pCreateInfo->pCode;
+  }
+
+  info.m_ShaderModule[id].Init(resourceMan, info, &smInfo);
+
+  shad.entryPoint = pCreateInfo->pName;
+
+  // descriptor set layouts
+  if(pCreateInfo->pSetLayouts)
+  {
+    descSetLayouts.resize(pCreateInfo->setLayoutCount);
+    for(uint32_t i = 0; i < pCreateInfo->setLayoutCount; i++)
+      descSetLayouts[i] = GetResID(pCreateInfo->pSetLayouts[i]);
+  }
+
+  // push constants
+  if(pCreateInfo->pPushConstantRanges)
+  {
+    pushRanges.reserve(pCreateInfo->pushConstantRangeCount);
+    for(uint32_t i = 0; i < pCreateInfo->pushConstantRangeCount; i++)
+      pushRanges.push_back(pCreateInfo->pPushConstantRanges[i]);
+  }
+
+  ShaderModuleReflectionKey key(shad.stage, shad.entryPoint, ResourceId());
+
+  // specialization info
+  if(pCreateInfo->pSpecializationInfo)
+  {
+    key = ShaderModuleReflectionKey(shad.stage, shad.entryPoint, id);
+
+    const byte *data = (const byte *)pCreateInfo->pSpecializationInfo->pData;
+
+    const VkSpecializationMapEntry *maps = pCreateInfo->pSpecializationInfo->pMapEntries;
+    for(uint32_t s = 0; s < pCreateInfo->pSpecializationInfo->mapEntryCount; s++)
+    {
+      SpecConstant spec;
+      spec.specID = maps[s].constantID;
+      memcpy(&spec.value, data + maps[s].offset, maps[s].size);
+      spec.dataSize = maps[s].size;
+      shad.specialization.push_back(spec);
+
+      virtualSpecialisationByteSize =
+          RDCMAX(virtualSpecialisationByteSize, uint32_t((spec.specID + 1) * sizeof(uint64_t)));
+    }
+  }
+
+  ShaderModuleReflection &reflData = info.m_ShaderModule[id].m_Reflections[key];
+
+  reflData.Init(resourceMan, id, info.m_ShaderModule[id].spirv, shad.entryPoint, pCreateInfo->stage,
+                shad.specialization);
+
+  shad.refl = reflData.refl;
+  shad.patchData = &reflData.patchData;
+
+  rdcarray<const DescSetLayout *> setLayoutInfos;
+  for(ResourceId setLayout : descSetLayouts)
+    setLayoutInfos.push_back(&info.m_DescSetLayout[setLayout]);
+
+  shad.ProcessStaticDescriptorAccess(info.pushConstantDescriptorStorage,
+                                     resourceMan->GetOriginalID(id), staticDescriptorAccess,
+                                     setLayoutInfos);
+}
+
 void VulkanCreationInfo::Pipeline::Init(VulkanResourceManager *resourceMan,
                                         VulkanCreationInfo &info, ResourceId id,
                                         const VkGraphicsPipelineCreateInfo *pCreateInfo)
@@ -966,17 +1075,16 @@ void VulkanCreationInfo::Pipeline::Init(VulkanResourceManager *resourceMan,
 
   // this is used to e.g. filter specified dynamic states so we only consider the ones valid for
   // this pipeline. If we're not using libraries, all states are valid
-  VkGraphicsPipelineLibraryFlagsEXT availStages =
-      VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT |
-      VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT |
-      VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT |
-      VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT;
+  availStages = VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT |
+                VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT |
+                VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT |
+                VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT;
 
   const VkGraphicsPipelineLibraryCreateInfoEXT *graphicsLibraryCreate =
       (const VkGraphicsPipelineLibraryCreateInfoEXT *)FindNextStruct(
           pCreateInfo, VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT);
   if(graphicsLibraryCreate)
-    availStages = libraryFlags = graphicsLibraryCreate->flags;
+    availStages = graphicsLibraryCreate->flags;
 
   vertLayout = fragLayout = GetResID(pCreateInfo->layout);
   renderpass = GetResID(pCreateInfo->renderPass);
@@ -1033,7 +1141,7 @@ void VulkanCreationInfo::Pipeline::Init(VulkanResourceManager *resourceMan,
     // convert shader bit to shader index
     int stageIndex = StageIndex(pCreateInfo->pStages[i].stage);
 
-    Shader &shad = shaders[stageIndex];
+    ShaderEntry &shad = shaders[stageIndex];
 
     VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *subgroupSize =
         (VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *)FindNextStruct(
@@ -1451,7 +1559,7 @@ void VulkanCreationInfo::Pipeline::Init(VulkanResourceManager *resourceMan,
       for(size_t i = 0; i < VkDynamicCount; i++)
         dynamicStates[i] |= pipeInfo.dynamicStates[i];
 
-      if(pipeInfo.libraryFlags & VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT)
+      if(pipeInfo.availStages & VK_GRAPHICS_PIPELINE_LIBRARY_VERTEX_INPUT_INTERFACE_BIT_EXT)
       {
         vertexBindings = pipeInfo.vertexBindings;
         vertexAttrs = pipeInfo.vertexAttrs;
@@ -1460,7 +1568,7 @@ void VulkanCreationInfo::Pipeline::Init(VulkanResourceManager *resourceMan,
         primitiveRestartEnable = pipeInfo.primitiveRestartEnable;
       }
 
-      if(pipeInfo.libraryFlags & VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT)
+      if(pipeInfo.availStages & VK_GRAPHICS_PIPELINE_LIBRARY_PRE_RASTERIZATION_SHADERS_BIT_EXT)
       {
         renderpass = pipeInfo.renderpass;
         subpass = pipeInfo.subpass;
@@ -1511,7 +1619,7 @@ void VulkanCreationInfo::Pipeline::Init(VulkanResourceManager *resourceMan,
         flags |= pipeInfo.flags;
       }
 
-      if(pipeInfo.libraryFlags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT)
+      if(pipeInfo.availStages & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT)
       {
         renderpass = pipeInfo.renderpass;
         subpass = pipeInfo.subpass;
@@ -1540,7 +1648,7 @@ void VulkanCreationInfo::Pipeline::Init(VulkanResourceManager *resourceMan,
         flags |= pipeInfo.flags;
       }
 
-      if(pipeInfo.libraryFlags & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT)
+      if(pipeInfo.availStages & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT)
       {
         renderpass = pipeInfo.renderpass;
         subpass = pipeInfo.subpass;
@@ -1633,7 +1741,7 @@ void VulkanCreationInfo::Pipeline::Init(VulkanResourceManager *resourceMan,
   for(ResourceId setLayout : descSetLayouts)
     setLayoutInfos.push_back(&info.m_DescSetLayout[setLayout]);
 
-  for(const Shader &shad : shaders)
+  for(const ShaderEntry &shad : shaders)
     shad.ProcessStaticDescriptorAccess(info.pushConstantDescriptorStorage,
                                        resourceMan->GetOriginalID(id), staticDescriptorAccess,
                                        setLayoutInfos);
@@ -1655,7 +1763,7 @@ void VulkanCreationInfo::Pipeline::Init(VulkanResourceManager *resourceMan, Vulk
   // VkPipelineShaderStageCreateInfo
   {
     ResourceId shadid = GetResID(pCreateInfo->stage.module);
-    Shader &shad = shaders[5];    // 5 is the compute shader's index (VS, TCS, TES, GS, FS, CS)
+    ShaderEntry &shad = shaders[5];    // 5 is the compute shader's index (VS, TCS, TES, GS, FS, CS)
 
     VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *subgroupSize =
         (VkPipelineShaderStageRequiredSubgroupSizeCreateInfo *)FindNextStruct(
@@ -1743,10 +1851,67 @@ void VulkanCreationInfo::Pipeline::Init(VulkanResourceManager *resourceMan, Vulk
   for(ResourceId setLayout : descSetLayouts)
     setLayoutInfos.push_back(&info.m_DescSetLayout[setLayout]);
 
-  for(const Shader &shad : shaders)
+  for(const ShaderEntry &shad : shaders)
     shad.ProcessStaticDescriptorAccess(info.pushConstantDescriptorStorage,
                                        resourceMan->GetOriginalID(id), staticDescriptorAccess,
                                        setLayoutInfos);
+}
+
+void VulkanCreationInfo::Pipeline::Init(VulkanResourceManager *resourceMan,
+                                        VulkanCreationInfo &info, ResourceId id,
+                                        const VkRayTracingPipelineCreateInfoKHR *pCreateInfo)
+{
+  flags = pCreateInfo->flags;
+
+  graphicsPipe = false;
+
+  compLayout = GetResID(pCreateInfo->layout);
+
+  descSetLayouts = info.m_PipelineLayout[compLayout].descSetLayouts;
+
+  topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+  primitiveRestartEnable = false;
+
+  patchControlPoints = 0;
+
+  tessellationDomainOrigin = VK_TESSELLATION_DOMAIN_ORIGIN_UPPER_LEFT;
+
+  viewportCount = 0;
+
+  // VkPipelineRasterStateCreateInfo
+  depthClampEnable = false;
+  rasterizerDiscardEnable = false;
+  polygonMode = VK_POLYGON_MODE_FILL;
+  cullMode = VK_CULL_MODE_NONE;
+  frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+  // VkPipelineRasterizationConservativeStateCreateInfoEXT
+  conservativeRasterizationMode = VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT;
+  extraPrimitiveOverestimationSize = 0.0f;
+
+  // VkPipelineMultisampleStateCreateInfo
+  rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+  sampleShadingEnable = false;
+  minSampleShading = 1.0f;
+  sampleMask = ~0U;
+
+  // VkPipelineDepthStencilStateCreateInfo
+  depthTestEnable = false;
+  depthWriteEnable = false;
+  depthCompareOp = VK_COMPARE_OP_ALWAYS;
+  depthBoundsEnable = false;
+  stencilTestEnable = false;
+  RDCEraseEl(front);
+  RDCEraseEl(back);
+
+  // VkPipelineColorBlendStateCreateInfo
+  alphaToCoverageEnable = false;
+  logicOpEnable = false;
+  logicOp = VK_LOGIC_OP_NO_OP;
+
+  rdcarray<const DescSetLayout *> setLayoutInfos;
+  for(ResourceId setLayout : descSetLayouts)
+    setLayoutInfos.push_back(&info.m_DescSetLayout[setLayout]);
 }
 
 void VulkanCreationInfo::PipelineLayout::Init(VulkanResourceManager *resourceMan,

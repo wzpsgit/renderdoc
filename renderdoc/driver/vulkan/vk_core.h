@@ -483,6 +483,8 @@ private:
   bool m_AccelerationStructures = false;
   bool m_ShaderObject = false;
 
+  uint32_t m_RTCaptureReplayHandleSize = 0;
+
   PFN_vkSetDeviceLoaderData m_SetDeviceLoaderData;
 
   InstanceDeviceInfo m_EnabledExtensions;
@@ -1348,6 +1350,7 @@ public:
   bool MeshShaders() const { return m_MeshShaders; }
   bool ListRestart() const { return m_ListRestart; }
   bool AccelerationStructures() const { return m_AccelerationStructures; }
+  bool ShaderObject() const { return m_ShaderObject; }
   VulkanRenderState &GetRenderState() { return m_RenderState; }
   void SetActionCB(VulkanActionCallback *cb) { m_ActionCallback = cb; }
   void SetSubmitChain(void *submitChain) { m_SubmitChain = submitChain; }
@@ -2955,4 +2958,40 @@ public:
 
   VkResult vkGetShaderBinaryDataEXT(VkDevice device, VkShaderEXT shader, size_t *pDataSize,
                                     void *pData);
+
+  // VK_KHR_ray_tracing_pipeline
+  IMPLEMENT_FUNCTION_SERIALISED(void, vkCmdTraceRaysKHR, VkCommandBuffer commandBuffer,
+                                const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+                                const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+                                const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+                                const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable,
+                                uint32_t width, uint32_t height, uint32_t depth);
+
+  IMPLEMENT_FUNCTION_SERIALISED(VkResult, vkCreateRayTracingPipelinesKHR, VkDevice device,
+                                VkDeferredOperationKHR deferredOperation,
+                                VkPipelineCache pipelineCache, uint32_t createInfoCount,
+                                const VkRayTracingPipelineCreateInfoKHR *pCreateInfos,
+                                const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines);
+
+  IMPLEMENT_FUNCTION_SERIALISED(void, vkCmdTraceRaysIndirectKHR, VkCommandBuffer commandBuffer,
+                                const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+                                const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+                                const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+                                const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable,
+                                VkDeviceAddress indirectDeviceAddress);
+
+  IMPLEMENT_FUNCTION_SERIALISED(void, vkCmdSetRayTracingPipelineStackSizeKHR,
+                                VkCommandBuffer commandBuffer, uint32_t pipelineStackSize);
+
+  VkResult vkGetRayTracingShaderGroupHandlesKHR(VkDevice device, VkPipeline pipeline,
+                                                uint32_t firstGroup, uint32_t groupCount,
+                                                size_t dataSize, void *pData);
+
+  VkResult vkGetRayTracingCaptureReplayShaderGroupHandlesKHR(VkDevice device, VkPipeline pipeline,
+                                                             uint32_t firstGroup, uint32_t groupCount,
+                                                             size_t dataSize, void *pData);
+
+  VkDeviceSize vkGetRayTracingShaderGroupStackSizeKHR(VkDevice device, VkPipeline pipeline,
+                                                      uint32_t group,
+                                                      VkShaderGroupShaderKHR groupShader);
 };

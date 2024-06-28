@@ -774,10 +774,26 @@ void RDTreeView::drawBranches(QPainter *painter, const QRect &rect, const QModel
   opt.rect = allLinesRect;
   opt.showDecorationSelected = true;
   opt.backgroundBrush = index.data(Qt::BackgroundRole).value<QBrush>();
+  QVariant foreColVar = index.data(Qt::ForegroundRole);
+  QColor foreCol;
+
+  if(foreColVar.isValid())
+  {
+    foreCol = foreColVar.value<QBrush>().color();
+    opt.palette.setColor(QPalette::Foreground, foreCol);
+    opt.palette.setColor(QPalette::Text, foreCol);
+  }
+
   style()->drawPrimitive(QStyle::PE_PanelItemViewItem, &opt, painter, this);
+
+  QPen oldPen = painter->pen();
 
   if(m_VisibleBranches)
   {
+    // set the desired colour for RDTweakedNativeStyle via a huge hack - see
+    // RDTweakedNativeStyle::drawPrimitive for QStyle::PE_IndicatorBranch
+    if(foreColVar.isValid())
+      painter->setPen(QPen(foreCol, 1234.5));
     QTreeView::drawBranches(painter, rect, index);
   }
   else
@@ -804,12 +820,13 @@ void RDTreeView::drawBranches(QPainter *painter, const QRect &rect, const QModel
     if(isExpanded(index))
       branchopt.state |= QStyle::State_Open;
 
+    branchopt.palette = opt.palette;
+
     style()->drawPrimitive(QStyle::PE_IndicatorBranch, &branchopt, painter, this);
   }
 
   // we now iterate from the top-most parent down, moving in from the left
   // we draw this after calling into drawBranches() so we paint on top of the built-in lines
-  QPen oldPen = painter->pen();
   while(!parents.isEmpty())
   {
     parent = parents.pop();

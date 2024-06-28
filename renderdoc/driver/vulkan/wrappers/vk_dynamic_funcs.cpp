@@ -3380,7 +3380,6 @@ bool WrappedVulkan::Serialise_vkCmdSetSampleMaskEXT(SerialiserType &ser,
 
           renderstate.dynamicStates[VkDynamicSampleMaskEXT] = true;
 
-          renderstate.rastSamples = samples;
           renderstate.sampleMask.assign(pSampleMask, ((samples - 1) / 32) + 1);
         }
       }
@@ -3499,6 +3498,72 @@ void WrappedVulkan::vkCmdSetViewportWScalingEnableNV(VkCommandBuffer commandBuff
                                                      VkBool32 viewportWScalingEnable)
 {
   ILLEGAL_EDS3_CALL(vkCmdSetViewportWScalingEnableNV);
+}
+
+template <typename SerialiserType>
+bool WrappedVulkan::Serialise_vkCmdSetRayTracingPipelineStackSizeKHR(SerialiserType &ser,
+                                                                     VkCommandBuffer commandBuffer,
+                                                                     uint32_t pipelineStackSize)
+{
+  SERIALISE_ELEMENT(commandBuffer);
+  SERIALISE_ELEMENT(pipelineStackSize).Important();
+
+  Serialise_DebugMessages(ser);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
+
+    if(IsActiveReplaying(m_State))
+    {
+      if(InRerecordRange(m_LastCmdBufferID))
+      {
+        commandBuffer = RerecordCmdBuf(m_LastCmdBufferID);
+
+        {
+          VulkanRenderState &renderstate = GetCmdRenderState();
+
+          renderstate.dynamicStates[VkDynamicRayTracingStackSizeKHR] = true;
+
+          renderstate.rtStackSize = pipelineStackSize;
+        }
+      }
+      else
+      {
+        commandBuffer = VK_NULL_HANDLE;
+      }
+    }
+
+    if(commandBuffer != VK_NULL_HANDLE)
+      ObjDisp(commandBuffer)
+          ->CmdSetRayTracingPipelineStackSizeKHR(Unwrap(commandBuffer), pipelineStackSize);
+  }
+
+  return true;
+}
+
+void WrappedVulkan::vkCmdSetRayTracingPipelineStackSizeKHR(VkCommandBuffer commandBuffer,
+                                                           uint32_t pipelineStackSize)
+{
+  SCOPED_DBG_SINK();
+
+  SERIALISE_TIME_CALL(
+      ObjDisp(commandBuffer)
+          ->CmdSetRayTracingPipelineStackSizeKHR(Unwrap(commandBuffer), pipelineStackSize));
+
+  if(IsCaptureMode(m_State))
+  {
+    VkResourceRecord *record = GetRecord(commandBuffer);
+
+    CACHE_THREAD_SERIALISER();
+
+    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdSetRayTracingPipelineStackSizeKHR);
+    Serialise_vkCmdSetRayTracingPipelineStackSizeKHR(ser, commandBuffer, pipelineStackSize);
+
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
+  }
 }
 
 INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetViewport, VkCommandBuffer commandBuffer,
@@ -3640,3 +3705,5 @@ INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetSampleMaskEXT, VkCommandBuffer com
 INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetTessellationDomainOriginEXT,
                                 VkCommandBuffer commandBuffer,
                                 VkTessellationDomainOrigin domainOrigin);
+INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdSetRayTracingPipelineStackSizeKHR,
+                                VkCommandBuffer commandBuffer, uint32_t pipelineStackSize)

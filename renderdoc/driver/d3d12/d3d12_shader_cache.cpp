@@ -569,9 +569,16 @@ rdcstr D3D12ShaderCache::GetShaderBlob(const char *source, const char *entry,
           {{"hlsl_texsample.h", texSampleBlob}, {"hlsl_cbuffers.h", cBufferBlob}});
 
       IDxcOperationResult *result = NULL;
+      uint32_t flags = DXBC::DecodeFlags(compileFlags) & ~D3DCOMPILE_NO_PRESHADER;
+      rdcarray<rdcwstr> argsData;
+      DXBC::EncodeDXCFlags(flags, argsData);
+      rdcarray<LPCWSTR> arguments;
+      for(const rdcwstr &arg : argsData)
+        arguments.push_back(arg.c_str());
+
       hr = compiler->Compile(sourceBlob, NULL, StringFormat::UTF82Wide(entry).c_str(),
-                             StringFormat::UTF82Wide(profile).c_str(), NULL, (UINT)0, NULL, 0,
-                             &includeHandler, &result);
+                             StringFormat::UTF82Wide(profile).c_str(), arguments.data(),
+                             arguments.count(), NULL, 0, &includeHandler, &result);
 
       SAFE_RELEASE(sourceBlob);
 
@@ -1057,6 +1064,39 @@ ID3DBlob *D3D12ShaderCache::MakeFixedColShader(FixedColVariant variant, bool dxi
 ID3DBlob *D3D12ShaderCache::GetQuadShaderDXILBlob()
 {
   rdcstr embedded = GetEmbeddedResource(quadwrite_dxbc);
+  if(embedded.empty() || !embedded.beginsWith("DXBC"))
+    return NULL;
+
+  ID3DBlob *ret = NULL;
+  D3D12ShaderCacheCallbacks.Create((uint32_t)embedded.size(), embedded.data(), &ret);
+  return ret;
+}
+
+ID3DBlob *D3D12ShaderCache::GetPrimitiveIDShaderDXILBlob()
+{
+  rdcstr embedded = GetEmbeddedResource(pixelhistory_primitiveid_dxbc);
+  if(embedded.empty() || !embedded.beginsWith("DXBC"))
+    return NULL;
+
+  ID3DBlob *ret = NULL;
+  D3D12ShaderCacheCallbacks.Create((uint32_t)embedded.size(), embedded.data(), &ret);
+  return ret;
+}
+
+ID3DBlob *D3D12ShaderCache::GetFixedColorShaderDXILBlob(uint32_t variant)
+{
+  const rdcstr variants[] = {
+      GetEmbeddedResource(pixelhistory_fixedcol_0_dxbc),
+      GetEmbeddedResource(pixelhistory_fixedcol_1_dxbc),
+      GetEmbeddedResource(pixelhistory_fixedcol_2_dxbc),
+      GetEmbeddedResource(pixelhistory_fixedcol_3_dxbc),
+      GetEmbeddedResource(pixelhistory_fixedcol_4_dxbc),
+      GetEmbeddedResource(pixelhistory_fixedcol_5_dxbc),
+      GetEmbeddedResource(pixelhistory_fixedcol_6_dxbc),
+      GetEmbeddedResource(pixelhistory_fixedcol_7_dxbc),
+  };
+
+  const rdcstr embedded = variants[variant];
   if(embedded.empty() || !embedded.beginsWith("DXBC"))
     return NULL;
 

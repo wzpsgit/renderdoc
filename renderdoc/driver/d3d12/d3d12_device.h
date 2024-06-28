@@ -54,7 +54,7 @@ struct D3D12InitParams
   UINT SDKVersion = 0;
 
   // check if a frame capture section version is supported
-  static const uint64_t CurrentVersion = 0x11;
+  static const uint64_t CurrentVersion = 0x12;
 
   static bool IsSupportedVersion(uint64_t ver);
 };
@@ -1280,14 +1280,15 @@ public:
                           ID3D12PipelineState **state);
 
   // Resource
+  IMPLEMENT_FUNCTION_THREAD_SERIALISED(void, SetPipelineStackSize, ID3D12StateObject *pStateObject,
+                                       UINT64 StackSize);
   IMPLEMENT_FUNCTION_THREAD_SERIALISED(void, SetName, ID3D12DeviceChild *pResource, const char *Name);
   IMPLEMENT_FUNCTION_THREAD_SERIALISED(HRESULT, SetShaderDebugPath, ID3D12DeviceChild *pResource,
                                        const char *Path);
 
-  IMPLEMENT_FUNCTION_THREAD_SERIALISED(
-      void, CreateAS, ID3D12Resource *pResource, UINT64 resourceOffset,
-      const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO &preBldInfo,
-      D3D12AccelerationStructure *as);
+  IMPLEMENT_FUNCTION_THREAD_SERIALISED(void, CreateAS, ID3D12Resource *pResource,
+                                       UINT64 resourceOffset, UINT64 byteSize,
+                                       D3D12AccelerationStructure *as);
 
   // IHV APIs
   IMPLEMENT_FUNCTION_SERIALISED(void, SetShaderExtUAV, GPUVendor vendor, uint32_t reg,

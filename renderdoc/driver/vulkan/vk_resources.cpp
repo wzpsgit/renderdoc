@@ -1752,7 +1752,7 @@ VkExtent2D GetPlaneShape(uint32_t Width, uint32_t Height, VkFormat Format, uint3
   }
 }
 
-uint32_t GetPlaneByteSize(uint32_t Width, uint32_t Height, uint32_t Depth, VkFormat Format,
+uint64_t GetPlaneByteSize(uint32_t Width, uint32_t Height, uint32_t Depth, VkFormat Format,
                           uint32_t mip, uint32_t plane)
 {
   uint32_t mipWidth = RDCMAX(Width >> mip, 1U);
@@ -1763,16 +1763,16 @@ uint32_t GetPlaneByteSize(uint32_t Width, uint32_t Height, uint32_t Depth, VkFor
 
   BlockShape blockShape = GetBlockShape(Format, plane);
 
-  uint32_t widthInBlocks = (planeShape.width + blockShape.width - 1) / blockShape.width;
-  uint32_t heightInBlocks = (planeShape.height + blockShape.height - 1) / blockShape.height;
+  uint64_t widthInBlocks = (planeShape.width + blockShape.width - 1) / blockShape.width;
+  uint64_t heightInBlocks = (planeShape.height + blockShape.height - 1) / blockShape.height;
 
-  return blockShape.bytes * widthInBlocks * heightInBlocks * mipDepth;
+  return uint64_t(blockShape.bytes) * widthInBlocks * heightInBlocks * uint64_t(mipDepth);
 }
 
-uint32_t GetByteSize(uint32_t Width, uint32_t Height, uint32_t Depth, VkFormat Format, uint32_t mip)
+uint64_t GetByteSize(uint32_t Width, uint32_t Height, uint32_t Depth, VkFormat Format, uint32_t mip)
 {
   uint32_t planeCount = GetYUVPlaneCount(Format);
-  uint32_t size = 0;
+  uint64_t size = 0;
   for(uint32_t p = 0; p < planeCount; p++)
     size += GetPlaneByteSize(Width, Height, Depth, Format, mip, p);
   return size;
@@ -2041,7 +2041,7 @@ ResourceFormat MakeResourceFormat(VkFormat fmt)
     case VK_FORMAT_EAC_R11G11_SNORM_BLOCK:
     case VK_FORMAT_R10X6G10X6_UNORM_2PACK16:
     case VK_FORMAT_R12X4G12X4_UNORM_2PACK16:
-    case VK_FORMAT_R16G16_S10_5_NV: ret.compCount = 2; break;
+    case VK_FORMAT_R16G16_SFIXED5_NV: ret.compCount = 2; break;
     case VK_FORMAT_R5G6B5_UNORM_PACK16:
     case VK_FORMAT_R8G8B8_UNORM:
     case VK_FORMAT_R8G8B8_SNORM:
@@ -2420,7 +2420,7 @@ ResourceFormat MakeResourceFormat(VkFormat fmt)
     case VK_FORMAT_R32G32B32A32_SFLOAT:
     case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
     case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
-    case VK_FORMAT_R16G16_S10_5_NV:
+    case VK_FORMAT_R16G16_SFIXED5_NV:
     case VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK:
     case VK_FORMAT_ASTC_5x4_SFLOAT_BLOCK:
     case VK_FORMAT_ASTC_5x5_SFLOAT_BLOCK:
@@ -2738,7 +2738,7 @@ ResourceFormat MakeResourceFormat(VkFormat fmt)
     case VK_FORMAT_G16_B16R16_2PLANE_422_UNORM:
     case VK_FORMAT_G16_B16_R16_3PLANE_444_UNORM:
     case VK_FORMAT_G16_B16R16_2PLANE_444_UNORM:
-    case VK_FORMAT_R16G16_S10_5_NV: ret.compByteWidth = 2; break;
+    case VK_FORMAT_R16G16_SFIXED5_NV: ret.compByteWidth = 2; break;
     case VK_FORMAT_UNDEFINED:
     case VK_FORMAT_MAX_ENUM: ret.compByteWidth = 1; break;
   }
@@ -4869,7 +4869,7 @@ TEST_CASE("Vulkan formats", "[format][vulkan]")
 
       uint32_t planeCount = GetYUVPlaneCount(f);
 
-      uint32_t planeSum = 0;
+      uint64_t planeSum = 0;
       for(uint32_t p = 0; p < planeCount; p++)
         planeSum += GetPlaneByteSize(width, height, 1, f, 0, p);
 

@@ -25,6 +25,7 @@
 #include "dxbc_reflect.h"
 #include "common/formatting.h"
 #include "core/core.h"
+#include "driver/shaders/dxil/dxil_bytecode.h"
 #include "dxbc_bytecode.h"
 #include "dxbc_container.h"
 
@@ -339,13 +340,7 @@ void MakeShaderReflection(DXBC::DXBCContainer *dxbc, const ShaderEntryPoint &ent
     refl->debugInfo.entrySourceName = refl->entryPoint = entryFunc;
 
     // demangle DXIL source names for display
-    if(refl->debugInfo.entrySourceName.size() > 2 && refl->debugInfo.entrySourceName[0] == '\x1' &&
-       refl->debugInfo.entrySourceName[1] == '?')
-    {
-      int idx = refl->debugInfo.entrySourceName.indexOf('@');
-      if(idx > 2)
-        refl->debugInfo.entrySourceName = refl->debugInfo.entrySourceName.substr(2, idx - 2);
-    }
+    refl->debugInfo.entrySourceName = DXBC::BasicDemangle(refl->entryPoint);
 
     // assume the debug info put the file with the entry point at the start. SDBG seems to do this
     // by default, and SPDB has an extra sorting step that probably maybe possibly does this.
@@ -373,18 +368,15 @@ void MakeShaderReflection(DXBC::DXBCContainer *dxbc, const ShaderEntryPoint &ent
   if(dxbc->GetDXBCByteCode())
   {
     refl->debugInfo.debugStatus = dxbc->GetDXBCByteCode()->GetDebugStatus();
-
-    refl->debugInfo.debuggable = refl->debugInfo.debugStatus.empty();
   }
   else
   {
-    refl->debugInfo.debuggable = false;
-
     if(dxbc->GetDXILByteCode())
-      refl->debugInfo.debugStatus = "Debugging DXIL is not supported";
+      refl->debugInfo.debugStatus = dxbc->GetDXILByteCode()->GetDebugStatus();
     else
       refl->debugInfo.debugStatus = "Shader contains no recognised bytecode";
   }
+  refl->debugInfo.debuggable = refl->debugInfo.debugStatus.empty();
 
   refl->encoding = ShaderEncoding::DXBC;
   refl->debugInfo.compiler = KnownShaderTool::fxc;

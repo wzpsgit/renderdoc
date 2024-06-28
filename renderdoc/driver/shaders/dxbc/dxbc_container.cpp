@@ -42,6 +42,19 @@ RDOC_EXTERN_CONFIG(rdcarray<rdcstr>, DXBC_Debug_SearchDirPaths);
 
 namespace DXBC
 {
+rdcstr BasicDemangle(const rdcstr &possiblyMangledName)
+{
+  if(possiblyMangledName.size() > 2 && possiblyMangledName[0] == '\x1' &&
+     possiblyMangledName[1] == '?')
+  {
+    int idx = possiblyMangledName.indexOf('@');
+    if(idx > 2)
+      return possiblyMangledName.substr(2, idx - 2);
+  }
+
+  return possiblyMangledName;
+}
+
 struct RDEFCBufferVariable
 {
   uint32_t nameOffset;
@@ -625,6 +638,19 @@ const rdcstr &DXBCContainer::GetDisassembly(bool dxcStyle)
 
 void DXBCContainer::FillTraceLineInfo(ShaderDebugTrace &trace) const
 {
+  // we add some number of lines for the header we added with shader hash, debug name, etc on
+  // top of what the bytecode disassembler did
+
+  // 2 minimum for the shader hash we always print
+  uint32_t extraLines = 2;
+  if(!m_DebugFileName.empty())
+    extraLines++;
+  if(m_ShaderExt.second != ~0U)
+    extraLines++;
+
+  if(m_GlobalFlags != GlobalShaderFlags::None)
+    extraLines += (uint32_t)Bits::CountOnes((uint32_t)m_GlobalFlags) + 2;
+
   if(m_DXBCByteCode)
   {
     trace.instInfo.resize(m_DXBCByteCode->GetNumInstructions());
@@ -637,24 +663,33 @@ void DXBCContainer::FillTraceLineInfo(ShaderDebugTrace &trace) const
       if(m_DebugInfo)
         m_DebugInfo->GetLineInfo(i, op.offset, trace.instInfo[i].lineInfo);
 
-      // we add some number of lines for the header we added with shader hash, debug name, etc on
-      // top of what the bytecode disassembler did
-
-      // 2 minimum for the shader hash we always print
-      uint32_t extraLines = 2;
-      if(!m_DebugFileName.empty())
-        extraLines++;
-      if(m_ShaderExt.second != ~0U)
-        extraLines++;
-
-      if(m_GlobalFlags != GlobalShaderFlags::None)
-        extraLines += (uint32_t)Bits::CountOnes((uint32_t)m_GlobalFlags) + 2;
-
       if(op.line > 0)
         trace.instInfo[i].lineInfo.disassemblyLine = extraLines + op.line;
 
       if(m_DebugInfo)
         m_DebugInfo->GetLocals(this, i, op.offset, trace.instInfo[i].sourceVars);
+    }
+  }
+  else if(m_DXILByteCode)
+  {
+#if ENABLED(DXC_COMPATIBLE_DISASM)
+    extraLines = 0;
+#endif
+    size_t instrCount = m_DXILByteCode->GetInstructionCount();
+    trace.instInfo.resize(instrCount);
+    for(size_t i = 0; i < instrCount; i++)
+    {
+      trace.instInfo[i].instruction = (uint32_t)i;
+
+      if(m_DebugInfo)
+        m_DebugInfo->GetLineInfo(i, 0, trace.instInfo[i].lineInfo);
+      else
+        m_DXILByteCode->GetLineInfo(i, 0, trace.instInfo[i].lineInfo);
+
+      trace.instInfo[i].lineInfo.disassemblyLine += extraLines;
+
+      if(m_DebugInfo)
+        m_DebugInfo->GetLocals(this, i, 0, trace.instInfo[i].sourceVars);
     }
   }
 }
@@ -1068,6 +1103,34 @@ bool DXBCContainer::CheckForDXIL(const void *ByteCode, size_t ByteCodeLength)
     uint32_t *fourcc = (uint32_t *)(data + chunkOffsets[chunkIdx]);
 
     if(*fourcc == FOURCC_ILDB || *fourcc == FOURCC_DXIL)
+      return true;
+  }
+
+  return false;
+}
+
+bool DXBCContainer::CheckForRootSig(const void *ByteCode, size_t ByteCodeLength)
+{
+  FileHeader *header = (FileHeader *)ByteCode;
+
+  char *data = (char *)ByteCode;    // just for convenience
+
+  if(ByteCode == NULL || ByteCodeLength == 0)
+    return false;
+
+  if(header->fourcc != FOURCC_DXBC)
+    return false;
+
+  if(header->fileLength != (uint32_t)ByteCodeLength)
+    return false;
+
+  uint32_t *chunkOffsets = (uint32_t *)(header + 1);    // right after the header
+
+  for(uint32_t chunkIdx = 0; chunkIdx < header->numChunks; chunkIdx++)
+  {
+    uint32_t *fourcc = (uint32_t *)(data + chunkOffsets[chunkIdx]);
+
+    if(*fourcc == FOURCC_RTS0)
       return true;
   }
 
@@ -2131,6 +2194,59 @@ DXBCContainer::~DXBCContainer()
   SAFE_DELETE(m_Reflection);
 }
 
+struct DxcArg
+{
+  uint32_t bit;
+  const wchar_t *arg;
+} dxc_flags[] = {
+    {D3DCOMPILE_DEBUG, L"-Zi"},
+    {D3DCOMPILE_SKIP_VALIDATION, L"-Vd"},
+    {D3DCOMPILE_SKIP_OPTIMIZATION, L"-Od"},
+    {D3DCOMPILE_PACK_MATRIX_ROW_MAJOR, L"-Zpr"},
+    {D3DCOMPILE_PACK_MATRIX_COLUMN_MAJOR, L"-Zpc "},
+    {D3DCOMPILE_PARTIAL_PRECISION, L"-Gpp"},
+    {D3DCOMPILE_NO_PRESHADER, L"-Op"},
+    {D3DCOMPILE_AVOID_FLOW_CONTROL, L"-Gfa"},
+    {D3DCOMPILE_PREFER_FLOW_CONTROL, L"-Gfp"},
+    {D3DCOMPILE_ENABLE_STRICTNESS, L"-Ges"},
+    {D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY, L"-Gec"},
+    {D3DCOMPILE_IEEE_STRICTNESS, L"-Gis"},
+    {D3DCOMPILE_WARNINGS_ARE_ERRORS, L"-WX"},
+    {D3DCOMPILE_RESOURCES_MAY_ALIAS, L"-res_may_alias"},
+    {D3DCOMPILE_ALL_RESOURCES_BOUND, L"-all_resources_bound"},
+    {D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES, L"-enable_unbounded_descriptor_tables"},
+    {D3DCOMPILE_DEBUG_NAME_FOR_SOURCE, L"-Zss"},
+    {D3DCOMPILE_DEBUG_NAME_FOR_BINARY, L"-Zsb"},
+};
+
+void EncodeDXCFlags(uint32_t flags, rdcarray<rdcwstr> &args)
+{
+  for(const DxcArg &arg : dxc_flags)
+  {
+    if(flags & arg.bit)
+      args.push_back(arg.arg);
+  }
+
+  // Can't make this match DXC defaults
+  // DXC by default uses /O3 and FXC uses /O1
+
+  // Optimization flags are a special case.
+  // D3DCOMPILE_OPTIMIZATION_LEVEL0 = (1 << 14)
+  // D3DCOMPILE_OPTIMIZATION_LEVEL1 = 0
+  // D3DCOMPILE_OPTIMIZATION_LEVEL2 = ((1 << 14) | (1 << 15))
+  // D3DCOMPILE_OPTIMIZATION_LEVEL3 = (1 << 15)
+
+  uint32_t opt = (flags & D3DCOMPILE_OPTIMIZATION_LEVEL2);
+  if(opt == D3DCOMPILE_OPTIMIZATION_LEVEL0)
+    args.push_back(L"-O0");
+  else if(opt == D3DCOMPILE_OPTIMIZATION_LEVEL1)
+    args.push_back(L"-O1");
+  else if(opt == D3DCOMPILE_OPTIMIZATION_LEVEL2)
+    args.push_back(L"-O2");
+  else if(opt == D3DCOMPILE_OPTIMIZATION_LEVEL3)
+    args.push_back(L"-O3");
+};
+
 struct FxcArg
 {
   uint32_t bit;
@@ -2294,7 +2410,7 @@ TEST_CASE("DO NOT COMMIT - convenience test", "[dxbc]")
 
   // the only thing fetched lazily is the disassembly, so grab that here
 
-  rdcstr disasm = container.GetDisassembly();
+  rdcstr disasm = container.GetDisassembly(false);
 
   RDCLOG("%s", disasm.c_str());
 }

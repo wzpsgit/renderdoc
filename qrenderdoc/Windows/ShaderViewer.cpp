@@ -356,6 +356,8 @@ void ShaderViewer::editShader(ResourceId id, ShaderStage stage, const QString &e
   if(files.count() > 2)
     addFileList();
 
+  ConfigureBookmarkMenu();
+
   m_Errors = MakeEditor(lit("errors"), QString(), SCLEX_NULL);
   m_Errors->setReadOnly(true);
   m_Errors->setWindowTitle(lit("Errors"));
@@ -556,6 +558,8 @@ void ShaderViewer::debugShader(const ShaderReflection *shader, ResourceId pipeli
   ui->editStatusLabel->hide();
   ui->snippets->hide();
   ui->editSep->hide();
+
+  ConfigureBookmarkMenu();
 
   if(m_Trace)
   {
@@ -840,8 +844,6 @@ void ShaderViewer::debugShader(const ShaderReflection *shader, ResourceId pipeli
 
     for(ScintillaEdit *edit : m_Scintillas)
     {
-      edit->setMarginWidthN(1, 20.0 * devicePixelRatioF());
-
       // display current line in margin 2, distinct from breakpoint in margin 1
       sptr_t markMask = (1 << CURRENT_MARKER) | (1 << FINISHED_MARKER);
 
@@ -864,6 +866,16 @@ void ShaderViewer::debugShader(const ShaderReflection *shader, ResourceId pipeli
     // toggle breakpoint - F9
     m_Ctx.GetMainWindow()->RegisterShortcut(QKeySequence(Qt::Key_F9).toString(), this,
                                             [this](QWidget *) { ToggleBreakpointOnInstruction(); });
+
+    // toggle bookmark - Ctrl-F2
+    m_Ctx.GetMainWindow()->RegisterShortcut(QKeySequence(Qt::Key_F2 | Qt::ControlModifier).toString(),
+                                            this, [this](QWidget *) { ToggleBookmark(); });
+    // next bookmark - F2
+    m_Ctx.GetMainWindow()->RegisterShortcut(QKeySequence(Qt::Key_F2).toString(), this,
+                                            [this](QWidget *) { NextBookmark(); });
+    // previous bookmark - Shift-F2
+    m_Ctx.GetMainWindow()->RegisterShortcut(QKeySequence(Qt::Key_F2 | Qt::ShiftModifier).toString(),
+                                            this, [this](QWidget *) { PreviousBookmark(); });
 
     // event filter to pick up tooltip events
     ui->constants->installEventFilter(this);
@@ -1176,6 +1188,98 @@ void ShaderViewer::debugShader(const ShaderReflection *shader, ResourceId pipeli
   }
 }
 
+void ShaderViewer::ConfigureBookmarkMenu()
+{
+  QMenu *bookmarkMenu = new QMenu(this);
+  bookmarkMenu->setToolTipsVisible(true);
+
+  QAction *toggleAction = MakeExecuteAction(tr("Toggle Bookmark"), Icons::bookmark_blue(),
+                                            tr("Toggle bookmark on current line"),
+                                            QKeySequence(Qt::Key_F2 | Qt::ControlModifier));
+  QObject::connect(toggleAction, &QAction::triggered, [this]() { ToggleBookmark(); });
+  bookmarkMenu->addAction(toggleAction);
+
+  QAction *nextAction =
+      MakeExecuteAction(tr("Next Bookmark"), Icons::arrow_right(),
+                        tr("Go to next bookmark in the current file"), QKeySequence(Qt::Key_F2));
+  QObject::connect(nextAction, &QAction::triggered, [this]() { NextBookmark(); });
+  bookmarkMenu->addAction(nextAction);
+
+  QAction *prevAction = MakeExecuteAction(tr("Previous Bookmark"), Icons::arrow_left(),
+                                          tr("Go to previous bookmark in the current file"),
+                                          QKeySequence(Qt::Key_F2 | Qt::ShiftModifier));
+  QObject::connect(prevAction, &QAction::triggered, [this]() { PreviousBookmark(); });
+  bookmarkMenu->addAction(prevAction);
+
+  QAction *clearAction =
+      MakeExecuteAction(tr("Clear All Bookmarks"), Icons::cross(),
+                        tr("Clear all bookmarks in the current file"), QKeySequence());
+  QObject::connect(clearAction, &QAction::triggered, [this]() { ClearAllBookmarks(); });
+  bookmarkMenu->addAction(clearAction);
+
+  QObject::connect(bookmarkMenu, &QMenu::aboutToShow,
+                   [this, bookmarkMenu, nextAction, prevAction, clearAction]() {
+                     UpdateBookmarkMenu(bookmarkMenu, nextAction, prevAction, clearAction);
+                   });
+
+  bookmarkMenu->addSeparator();
+  ui->bookmark->setMenu(bookmarkMenu);
+}
+
+void ShaderViewer::UpdateBookmarkMenu(QMenu *menu, QAction *nextAction, QAction *prevAction,
+                                      QAction *clearAction)
+{
+  // setup permanent actions
+  const bool hasBookmarks = HasBookmarks();
+  nextAction->setEnabled(hasBookmarks);
+  prevAction->setEnabled(hasBookmarks);
+  clearAction->setEnabled(hasBookmarks);
+
+  // remove current bookmark list
+  QList<QAction *> actions = menu->actions();
+  for(auto itAction = actions.rbegin(); itAction != actions.rend() && !(*itAction)->isSeparator();
+      ++itAction)
+    menu->removeAction(*itAction);
+
+  // populate bookmark list
+  ScintillaEdit *cur = currentScintilla();
+  if(!cur)
+    return;
+
+  auto itBookmarks = m_Bookmarks.find(cur);
+  if(itBookmarks == m_Bookmarks.end())
+    return;
+
+  QString filename;
+  if(cur == m_DisassemblyView)
+    filename = m_DisassemblyFrame->windowTitle();
+  else
+    filename = cur->windowTitle();
+
+  int numAddedBookmarks = 0;
+  for(sptr_t lineNumber : *itBookmarks)
+  {
+    QString textLine = QString::fromUtf8(cur->getLine(lineNumber)).simplified();
+    if(textLine.size() > BOOKMARK_MAX_MENU_ENTRY_LENGTH)
+    {
+      textLine.chop(textLine.size() - BOOKMARK_MAX_MENU_ENTRY_LENGTH);
+      textLine.append(lit("..."));
+    }
+    else if(textLine.isEmpty())
+    {
+      textLine = lit("(empty)");
+    }
+
+    QString name = QFormatStr("%1:%2 - %3").arg(filename).arg(lineNumber + 1).arg(textLine);
+    QAction *action = new QAction(name, menu);
+    QObject::connect(action, &QAction::triggered, [cur, lineNumber]() { cur->gotoLine(lineNumber); });
+    menu->addAction(action);
+
+    if(++numAddedBookmarks >= BOOKMARK_MAX_MENU_ENTRY_COUNT)
+      break;
+  }
+}
+
 QAction *ShaderViewer::MakeExecuteAction(QString name, const QIcon &icon, QString tooltip,
                                          QKeySequence shortcut)
 {
@@ -1426,9 +1530,9 @@ ScintillaEdit *ShaderViewer::MakeEditor(const QString &name, const QString &text
 {
   ScintillaEdit *ret = new ScintillaEdit(this);
 
-  ret->setMarginLeft(4.0 * devicePixelRatioF());
-  ret->setMarginWidthN(1, 0);
-  ret->setMarginWidthN(2, 16.0 * devicePixelRatioF());
+  ret->setMarginLeft(4.0);
+  ret->setMarginWidthN(1, 20.0);
+  ret->setMarginWidthN(2, 16.0);
   ret->setObjectName(name);
 
   ret->styleSetFont(STYLE_DEFAULT, Formatter::FixedFont().family().toUtf8().data());
@@ -1452,6 +1556,10 @@ ScintillaEdit *ShaderViewer::MakeEditor(const QString &name, const QString &text
   ret->indicSetStyle(INDICATOR_FINDALLHIGHLIGHT, INDIC_FULLBOX);
   ret->indicSetAlpha(INDICATOR_FINDALLHIGHLIGHT, 120);
   ret->indicSetOutlineAlpha(INDICATOR_FINDALLHIGHLIGHT, 180);
+
+  // C# Highlight for bookmarks
+  ret->markerSetBack(BOOKMARK_MARKER, SCINTILLA_COLOUR(51, 153, 255));
+  ret->markerDefine(BOOKMARK_MARKER, SC_MARK_BOOKMARK);
 
   ConfigureSyntax(ret, lang);
 
@@ -1481,7 +1589,7 @@ void ShaderViewer::SetTextAndUpdateMargin0(ScintillaEdit *sc, const QString &tex
 
   sptr_t width = sc->textWidth(SC_MARGIN_RTEXT, QString::number(numLines).toUtf8().data());
 
-  sc->setMarginWidthN(0, int(width * devicePixelRatioF()));
+  sc->setMarginWidthN(0, int(width));
 }
 
 void ShaderViewer::readonly_keyPressed(QKeyEvent *event)
@@ -1489,36 +1597,14 @@ void ShaderViewer::readonly_keyPressed(QKeyEvent *event)
   if(event->key() == Qt::Key_F && (event->modifiers() & Qt::ControlModifier))
   {
     m_FindReplace->setReplaceMode(false);
-
-    ScintillaEdit *edit = qobject_cast<ScintillaEdit *>(QObject::sender());
-
-    if(edit)
-    {
-      // if there's a selection, fill the find prompt with that
-      if(!edit->getSelText().isEmpty())
-      {
-        m_FindReplace->setFindText(QString::fromUtf8(edit->getSelText()));
-      }
-      else
-      {
-        // otherwise pick the word under the cursor, if there is one
-        sptr_t scintillaPos = edit->currentPos();
-
-        sptr_t start = edit->wordStartPosition(scintillaPos, true);
-        sptr_t end = edit->wordEndPosition(scintillaPos, true);
-
-        QByteArray text = edit->textRange(start, end);
-
-        if(!text.isEmpty())
-          m_FindReplace->setFindText(QString::fromUtf8(text));
-      }
-    }
-
+    SetFindTextFromCurrentWord();
     on_findReplace_clicked();
   }
 
   if(event->key() == Qt::Key_F3)
   {
+    if(event->modifiers() & Qt::ControlModifier)
+      SetFindTextFromCurrentWord();
     find((event->modifiers() & Qt::ShiftModifier) == 0);
   }
 }
@@ -1602,6 +1688,31 @@ void ShaderViewer::debug_contextMenu(const QPoint &pos)
   contextMenu.addAction(&addBreakpoint);
   contextMenu.addAction(&runBackwardCursor);
   contextMenu.addAction(&runForwardCursor);
+  contextMenu.addSeparator();
+
+  QAction toggleBookmark(tr("Toggle bookmark here"), this);
+  QAction nextBookmark(tr("Go to next Bookmark"), this);
+  QAction prevBookmark(tr("Go to previous Bookmark"), this);
+  QAction clearBookmarks(tr("Clear all Bookmarks"), this);
+
+  const bool hasBookmarks = HasBookmarks();
+  nextBookmark.setEnabled(hasBookmarks);
+  prevBookmark.setEnabled(hasBookmarks);
+  clearBookmarks.setEnabled(hasBookmarks);
+
+  toggleBookmark.setShortcut(QKeySequence(Qt::Key_F2 | Qt::ControlModifier));
+  nextBookmark.setShortcut(QKeySequence(Qt::Key_F2));
+  prevBookmark.setShortcut(QKeySequence(Qt::Key_F2 | Qt::ShiftModifier));
+
+  QObject::connect(&toggleBookmark, &QAction::triggered, [this] { ToggleBookmark(); });
+  QObject::connect(&nextBookmark, &QAction::triggered, [this] { NextBookmark(); });
+  QObject::connect(&prevBookmark, &QAction::triggered, [this] { PreviousBookmark(); });
+  QObject::connect(&clearBookmarks, &QAction::triggered, [this] { ClearAllBookmarks(); });
+
+  contextMenu.addAction(&toggleBookmark);
+  contextMenu.addAction(&nextBookmark);
+  contextMenu.addAction(&prevBookmark);
+  contextMenu.addAction(&clearBookmarks);
   contextMenu.addSeparator();
 
   QAction watchExpr(tr("Add Watch Expression"), this);
@@ -6527,4 +6638,109 @@ void ShaderViewer::performReplaceAll()
   RDDialog::information(
       this, tr("Replace all"),
       tr("%1 replacements made in %2 files").arg(numReplacements).arg(scintillas.count()));
+}
+
+void ShaderViewer::ToggleBookmark()
+{
+  ScintillaEdit *cur = currentScintilla();
+  if(!cur)
+    return;
+
+  sptr_t curLine = cur->lineFromPosition(cur->currentPos());
+
+  QList<sptr_t> &bookmarks = m_Bookmarks[cur];
+  if(bookmarks.contains(curLine))
+  {
+    bookmarks.removeOne(curLine);
+    cur->markerDelete(curLine, BOOKMARK_MARKER);
+  }
+  else
+  {
+    // Insert new bookmark in numerical order
+    bookmarks.insert(std::lower_bound(bookmarks.begin(), bookmarks.end(), curLine), curLine);
+    cur->markerAdd(curLine, BOOKMARK_MARKER);
+  }
+}
+
+void ShaderViewer::NextBookmark()
+{
+  ScintillaEdit *cur = currentScintilla();
+  if(!cur)
+    return;
+
+  auto itBookmarks = m_Bookmarks.find(cur);
+  if(itBookmarks == m_Bookmarks.end() || itBookmarks->empty())
+    return;
+
+  sptr_t curLine = cur->lineFromPosition(cur->currentPos());
+  auto itNextBookmark = std::upper_bound(itBookmarks->begin(), itBookmarks->end(), curLine);
+  if(itNextBookmark == itBookmarks->end())
+    itNextBookmark = itBookmarks->begin();
+
+  if(*itNextBookmark != curLine)
+    cur->gotoLine(*itNextBookmark);
+}
+
+void ShaderViewer::PreviousBookmark()
+{
+  ScintillaEdit *cur = currentScintilla();
+  if(!cur)
+    return;
+
+  auto itBookmarks = m_Bookmarks.find(cur);
+  if(itBookmarks == m_Bookmarks.end())
+    return;
+
+  sptr_t curLine = cur->lineFromPosition(cur->currentPos());
+  auto itPrevBookmark = std::lower_bound(itBookmarks->begin(), itBookmarks->end(), curLine);
+  if(itPrevBookmark == itBookmarks->begin())
+    itPrevBookmark = itBookmarks->end();
+  --itPrevBookmark;
+
+  if(*itPrevBookmark != curLine)
+    cur->gotoLine(*itPrevBookmark);
+}
+
+void ShaderViewer::ClearAllBookmarks()
+{
+  ScintillaEdit *cur = currentScintilla();
+  if(!cur)
+    return;
+
+  cur->markerDeleteAll(BOOKMARK_MARKER);
+  m_Bookmarks.remove(cur);
+}
+
+void ShaderViewer::SetFindTextFromCurrentWord()
+{
+  ScintillaEdit *edit = qobject_cast<ScintillaEdit *>(QObject::sender());
+
+  if(edit)
+  {
+    // if there's a selection, fill the find prompt with that
+    if(!edit->getSelText().isEmpty())
+    {
+      m_FindReplace->setFindText(QString::fromUtf8(edit->getSelText()));
+    }
+    else
+    {
+      // otherwise pick the word under the cursor, if there is one
+      sptr_t scintillaPos = edit->currentPos();
+
+      sptr_t start = edit->wordStartPosition(scintillaPos, true);
+      sptr_t end = edit->wordEndPosition(scintillaPos, true);
+
+      QByteArray text = edit->textRange(start, end);
+
+      if(!text.isEmpty())
+        m_FindReplace->setFindText(QString::fromUtf8(text));
+    }
+  }
+}
+
+bool ShaderViewer::HasBookmarks()
+{
+  ScintillaEdit *cur = currentScintilla();
+  auto itBookmarks = m_Bookmarks.find(cur);
+  return itBookmarks != m_Bookmarks.end() && !itBookmarks->empty();
 }

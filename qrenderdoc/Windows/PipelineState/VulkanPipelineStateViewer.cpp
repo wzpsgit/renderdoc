@@ -1685,8 +1685,11 @@ void VulkanPipelineStateViewer::setShaderState(const VKPipe::Pipeline &pipe,
 {
   ShaderReflection *shaderDetails = stage.reflection;
 
-  QString shText =
-      QFormatStr("%1: %2").arg(ToQStr(pipe.pipelineResourceId)).arg(ToQStr(stage.resourceId));
+  QString shText;
+  if(stage.shaderObject)
+    shText = QFormatStr("%1").arg(ToQStr(stage.resourceId));
+  else
+    shText = QFormatStr("%1: %2").arg(ToQStr(pipe.pipelineResourceId)).arg(ToQStr(stage.resourceId));
 
   if(shaderDetails != NULL)
   {
@@ -2172,6 +2175,9 @@ void VulkanPipelineStateViewer::setState()
 
     for(const UsedDescriptor &used : descriptors)
     {
+      if(used.access.type == DescriptorType::Unknown || used.access.stage == ShaderStage::Count)
+        continue;
+
       const ShaderReflection *refl = shaderRefls[(uint32_t)used.access.stage];
 
       uint32_t dynamicOffset = 0;
@@ -2258,7 +2264,7 @@ void VulkanPipelineStateViewer::setState()
     ResourceId pipe = stage->stage == ShaderStage::Compute ? state.compute.pipelineResourceId
                                                            : state.graphics.pipelineResourceId;
 
-    b->setEnabled(stage->reflection && pipe != ResourceId());
+    b->setEnabled(stage->reflection && (pipe != ResourceId() || stage->shaderObject));
 
     m_Common.SetupShaderEditButton(b, pipe, stage->resourceId, stage->reflection);
   }

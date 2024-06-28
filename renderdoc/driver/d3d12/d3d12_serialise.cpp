@@ -1920,7 +1920,9 @@ void DoSerialise(SerialiserType &ser, D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCT
         }
       }
 
-      SERIALISE_ELEMENT_ARRAY(tempDescs, el.NumDescs).Named("ppGeometryDescs");
+      // not using SERIALISE_ELEMENT_ARRAY so we can deliberately avoid allocation and so that the
+      // array isn't immediately freed
+      ser.Serialise("ppGeometryDescs"_lit, tempDescs, el.NumDescs, SerialiserFlags::NoFlags);
 
       if(ser.IsReading())
       {
@@ -1993,7 +1995,7 @@ template <class SerialiserType>
 void DoSerialise(SerialiserType &ser, D3D12_STATE_OBJECT_DESC &el)
 {
   SERIALISE_MEMBER(Type);
-  SERIALISE_MEMBER(NumSubobjects);
+  SERIALISE_MEMBER(NumSubobjects).Important();
 
   if(ser.IsReading())
   {

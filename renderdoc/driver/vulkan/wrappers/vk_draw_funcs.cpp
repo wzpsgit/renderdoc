@@ -5206,6 +5206,214 @@ void WrappedVulkan::vkCmdDrawMeshTasksIndirectCountEXT(VkCommandBuffer commandBu
   }
 }
 
+template <typename SerialiserType>
+bool WrappedVulkan::Serialise_vkCmdTraceRaysKHR(
+    SerialiserType &ser, VkCommandBuffer commandBuffer,
+    const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable, uint32_t width,
+    uint32_t height, uint32_t depth)
+{
+  SERIALISE_ELEMENT(commandBuffer);
+  SERIALISE_ELEMENT_LOCAL(RaygenShaderBindingTable, *pRaygenShaderBindingTable);
+  SERIALISE_ELEMENT_LOCAL(MissShaderBindingTable, *pMissShaderBindingTable);
+  SERIALISE_ELEMENT_LOCAL(HitShaderBindingTable, *pHitShaderBindingTable);
+  SERIALISE_ELEMENT_LOCAL(CallableShaderBindingTable, *pCallableShaderBindingTable);
+  SERIALISE_ELEMENT(width).Important();
+  SERIALISE_ELEMENT(height).Important();
+  SERIALISE_ELEMENT(depth).Important();
+
+  Serialise_DebugMessages(ser);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
+
+    if(IsActiveReplaying(m_State))
+    {
+      if(InRerecordRange(m_LastCmdBufferID))
+      {
+        commandBuffer = RerecordCmdBuf(m_LastCmdBufferID);
+
+        uint32_t eventId = HandlePreCallback(commandBuffer, ActionFlags::DispatchRay);
+
+        ObjDisp(commandBuffer)
+            ->CmdTraceRaysKHR(Unwrap(commandBuffer), &RaygenShaderBindingTable,
+                              &MissShaderBindingTable, &HitShaderBindingTable,
+                              &CallableShaderBindingTable, width, height, depth);
+
+        if(eventId && m_ActionCallback->PostDispatch(eventId, ActionFlags::DispatchRay, commandBuffer))
+        {
+          ObjDisp(commandBuffer)
+              ->CmdTraceRaysKHR(Unwrap(commandBuffer), &RaygenShaderBindingTable,
+                                &MissShaderBindingTable, &HitShaderBindingTable,
+                                &CallableShaderBindingTable, width, height, depth);
+
+          m_ActionCallback->PostRemisc(eventId, ActionFlags::Clear, commandBuffer);
+        }
+      }
+    }
+    else
+    {
+      ObjDisp(commandBuffer)
+          ->CmdTraceRaysKHR(Unwrap(commandBuffer), &RaygenShaderBindingTable,
+                            &MissShaderBindingTable, &HitShaderBindingTable,
+                            &CallableShaderBindingTable, width, height, depth);
+
+      {
+        AddEvent();
+
+        ActionDescription action;
+        action.flags = ActionFlags::DispatchRay;
+        action.dispatchDimension[0] = width;
+        action.dispatchDimension[1] = height;
+        action.dispatchDimension[2] = depth;
+
+        AddAction(action);
+      }
+    }
+  }
+
+  return true;
+}
+
+void WrappedVulkan::vkCmdTraceRaysKHR(
+    VkCommandBuffer commandBuffer, const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable, uint32_t width,
+    uint32_t height, uint32_t depth)
+{
+  SCOPED_DBG_SINK();
+
+  SERIALISE_TIME_CALL(ObjDisp(commandBuffer)
+                          ->CmdTraceRaysKHR(Unwrap(commandBuffer), pRaygenShaderBindingTable,
+                                            pMissShaderBindingTable, pHitShaderBindingTable,
+                                            pCallableShaderBindingTable, width, height, depth));
+
+  if(IsCaptureMode(m_State))
+  {
+    VkResourceRecord *record = GetRecord(commandBuffer);
+
+    CACHE_THREAD_SERIALISER();
+
+    ser.SetActionChunk();
+    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdTraceRaysKHR);
+    Serialise_vkCmdTraceRaysKHR(ser, commandBuffer, pRaygenShaderBindingTable,
+                                pMissShaderBindingTable, pHitShaderBindingTable,
+                                pCallableShaderBindingTable, width, height, depth);
+
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
+
+    // all buffers referenced are BDA so they are already forcibly and pessimistically referenced
+  }
+}
+
+template <typename SerialiserType>
+bool WrappedVulkan::Serialise_vkCmdTraceRaysIndirectKHR(
+    SerialiserType &ser, VkCommandBuffer commandBuffer,
+    const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable,
+    VkDeviceAddress indirectDeviceAddress)
+{
+  SERIALISE_ELEMENT(commandBuffer);
+  SERIALISE_ELEMENT_LOCAL(RaygenShaderBindingTable, *pRaygenShaderBindingTable);
+  SERIALISE_ELEMENT_LOCAL(MissShaderBindingTable, *pMissShaderBindingTable);
+  SERIALISE_ELEMENT_LOCAL(HitShaderBindingTable, *pHitShaderBindingTable);
+  SERIALISE_ELEMENT_LOCAL(CallableShaderBindingTable, *pCallableShaderBindingTable);
+  SERIALISE_ELEMENT(indirectDeviceAddress).Important();
+
+  Serialise_DebugMessages(ser);
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    m_LastCmdBufferID = GetResourceManager()->GetOriginalID(GetResID(commandBuffer));
+
+    if(IsActiveReplaying(m_State))
+    {
+      if(InRerecordRange(m_LastCmdBufferID))
+      {
+        commandBuffer = RerecordCmdBuf(m_LastCmdBufferID);
+
+        uint32_t eventId = HandlePreCallback(commandBuffer, ActionFlags::DispatchRay);
+
+        ObjDisp(commandBuffer)
+            ->CmdTraceRaysIndirectKHR(Unwrap(commandBuffer), &RaygenShaderBindingTable,
+                                      &MissShaderBindingTable, &HitShaderBindingTable,
+                                      &CallableShaderBindingTable, indirectDeviceAddress);
+
+        if(eventId && m_ActionCallback->PostDispatch(eventId, ActionFlags::DispatchRay, commandBuffer))
+        {
+          ObjDisp(commandBuffer)
+              ->CmdTraceRaysIndirectKHR(Unwrap(commandBuffer), &RaygenShaderBindingTable,
+                                        &MissShaderBindingTable, &HitShaderBindingTable,
+                                        &CallableShaderBindingTable, indirectDeviceAddress);
+
+          m_ActionCallback->PostRemisc(eventId, ActionFlags::Clear, commandBuffer);
+        }
+      }
+    }
+    else
+    {
+      ObjDisp(commandBuffer)
+          ->CmdTraceRaysIndirectKHR(Unwrap(commandBuffer), &RaygenShaderBindingTable,
+                                    &MissShaderBindingTable, &HitShaderBindingTable,
+                                    &CallableShaderBindingTable, indirectDeviceAddress);
+
+      {
+        AddEvent();
+
+        ActionDescription action;
+        action.flags = ActionFlags::DispatchRay | ActionFlags::Indirect;
+
+        AddAction(action);
+      }
+    }
+  }
+
+  return true;
+}
+
+void WrappedVulkan::vkCmdTraceRaysIndirectKHR(
+    VkCommandBuffer commandBuffer, const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+    const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable,
+    VkDeviceAddress indirectDeviceAddress)
+{
+  SCOPED_DBG_SINK();
+
+  SERIALISE_TIME_CALL(ObjDisp(commandBuffer)
+                          ->CmdTraceRaysIndirectKHR(Unwrap(commandBuffer), pRaygenShaderBindingTable,
+                                                    pMissShaderBindingTable, pHitShaderBindingTable,
+                                                    pCallableShaderBindingTable,
+                                                    indirectDeviceAddress));
+
+  if(IsCaptureMode(m_State))
+  {
+    VkResourceRecord *record = GetRecord(commandBuffer);
+
+    CACHE_THREAD_SERIALISER();
+
+    ser.SetActionChunk();
+    SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCmdTraceRaysIndirectKHR);
+    Serialise_vkCmdTraceRaysIndirectKHR(ser, commandBuffer, pRaygenShaderBindingTable,
+                                        pMissShaderBindingTable, pHitShaderBindingTable,
+                                        pCallableShaderBindingTable, indirectDeviceAddress);
+
+    record->AddChunk(scope.Get(&record->cmdInfo->alloc));
+
+    // all buffers referenced are BDA so they are already forcibly and pessimistically referenced
+  }
+}
+
 INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdDraw, VkCommandBuffer commandBuffer, uint32_t vertexCount,
                                 uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance);
 
@@ -5315,3 +5523,15 @@ INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdDrawMeshTasksIndirectCountEXT,
                                 VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
                                 VkBuffer countBuffer, VkDeviceSize countBufferOffset,
                                 uint32_t maxDrawCount, uint32_t stride);
+INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdTraceRaysKHR, VkCommandBuffer commandBuffer,
+                                const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+                                const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+                                const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+                                const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable,
+                                uint32_t width, uint32_t height, uint32_t depth);
+INSTANTIATE_FUNCTION_SERIALISED(void, vkCmdTraceRaysIndirectKHR, VkCommandBuffer commandBuffer,
+                                const VkStridedDeviceAddressRegionKHR *pRaygenShaderBindingTable,
+                                const VkStridedDeviceAddressRegionKHR *pMissShaderBindingTable,
+                                const VkStridedDeviceAddressRegionKHR *pHitShaderBindingTable,
+                                const VkStridedDeviceAddressRegionKHR *pCallableShaderBindingTable,
+                                VkDeviceAddress indirectDeviceAddress);

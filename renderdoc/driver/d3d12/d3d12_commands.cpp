@@ -643,6 +643,7 @@ void WrappedID3D12CommandQueue::CheckAndFreeRayDispatches()
     {
       SAFE_RELEASE(ray.patchScratchBuffer);
       SAFE_RELEASE(ray.lookupBuffer);
+      SAFE_RELEASE(ray.argumentBuffer);
     }
   }
 
@@ -1004,6 +1005,7 @@ bool WrappedID3D12CommandQueue::ProcessChunk(ReadSerialiser &ser, D3D12Chunk chu
     case D3D12Chunk::Device_CreateStateObject:
     case D3D12Chunk::Device_AddToStateObject:
     case D3D12Chunk::CreateAS:
+    case D3D12Chunk::StateObject_SetPipelineStackSize:
       RDCERR("Unexpected chunk while processing frame: %s", ToStr(chunk).c_str());
       return false;
 
@@ -1434,8 +1436,9 @@ void WrappedID3D12GraphicsCommandList::AddRayDispatches(rdcarray<PatchedRayDispa
   for(const PatchedRayDispatch::Resources &r : m_RayDispatches)
   {
     dispatches.push_back(r);
-    r.lookupBuffer->AddRef();
-    r.patchScratchBuffer->AddRef();
+    SAFE_ADDREF(r.lookupBuffer);
+    SAFE_ADDREF(r.patchScratchBuffer);
+    SAFE_ADDREF(r.argumentBuffer);
   }
 }
 
@@ -1825,6 +1828,7 @@ uint32_t D3D12CommandData::HandlePreCallback(ID3D12GraphicsCommandListX *list, A
       break;
     }
     case ActionFlags::Dispatch:
+    case ActionFlags::DispatchRay:
     {
       m_ActionCallback->PreDispatch(eventId, list);
       break;
@@ -2089,8 +2093,16 @@ void D3D12CommandData::AddUsageForBindInRootSig(const D3D12RenderState &state,
 
         bool allInRange = (bind >= range.BaseShaderRegister && rangeSize <= range.NumDescriptors);
 
-        // move to the first descriptor in the range which is in the binding we want
-        desc += (bind - range.BaseShaderRegister);
+        // move to the first descriptor in the range which is in the binding we want, if the binding
+        // is later on in the range.
+        //
+        // It's also possible that the range is later on in the binding (e.g. if the binding is at
+        // base register 5 and is 1000000 in length, the range could start at register 10. In that
+        // case we just consume as much of the range as still fits in the bind
+        if(bind > range.BaseShaderRegister)
+          desc += (bind - range.BaseShaderRegister);
+        if(range.BaseShaderRegister > bind)
+          rangeSize -= (range.BaseShaderRegister - bind);
 
         if(range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_CBV)
         {

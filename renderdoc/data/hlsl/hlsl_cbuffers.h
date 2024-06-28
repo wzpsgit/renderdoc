@@ -34,6 +34,7 @@
 #define float2 Vec2f
 #define float3 Vec3f
 #define uint4 Vec4u
+#define uint3 Vec3u
 #define uint2 Vec2u
 #define int4 Vec4i
 #define float4 Vec4f
@@ -288,18 +289,7 @@ struct InstanceDesc
 
 cbuffer RayDispatchPatchCB REG(b0)
 {
-  uint raydispatch_missoffs;
-  uint raydispatch_missstride;
-  uint raydispatch_misscount;
-
-  uint raydispatch_hitoffs;
-  uint raydispatch_hitstride;
-  uint raydispatch_hitcount;
-
-  uint raydispatch_calloffs;
-  uint raydispatch_callstride;
-  uint raydispatch_callcount;
-
+  // declare GPUAddresses first to avoid padding/alignment issues
   GPUAddress wrapped_sampHeapBase;
   GPUAddress wrapped_srvHeapBase;
 
@@ -309,10 +299,67 @@ cbuffer RayDispatchPatchCB REG(b0)
   uint wrapped_sampHeapSize;
   uint wrapped_srvHeapSize;
   uint unwrapped_heapStrides;    // LSB = sampler, MSB = srv
+
+  uint numPatchingAddrs;
 };
 
-#define MAX_LOCALSIG_HANDLES 31
+cbuffer RayDispatchShaderRecordCB REG(b1)
+{
+  uint shaderrecord_stride;
+  uint shaderrecord_count;
+};
+
+struct StateObjectLookup
+{
+  uint2 id;    // ResourceId
+  uint offset;
+
+  uint pad;
+};
+
+struct ShaderRecordData
+{
+  uint4 identifier[2];    // 32-byte real identifier
+  uint rootSigIndex;      // only lower 16-bits are valid
+};
+
+#define RECORD_PATCH_THREADS 32
+
+#define MAX_LOCALSIG_PARAMS 31
+
+struct LocalRootSigData
+{
+  uint numParams;
+  uint paramOffsets[MAX_LOCALSIG_PARAMS];
+};
+
 #define WRAPPED_DESCRIPTOR_STRIDE 64
+
+cbuffer RayIndirectDispatchCB REG(b0)
+{
+  GPUAddress scratchBuffer;
+
+  uint commandSigDispatchOffset;
+  uint commandSigStride;
+  uint commandSigSize;
+  uint maxCommandCount;    // MaxCommandCount to clamp to. We also set the top bit if there is no count buffer
+};
+
+struct PatchingExecute
+{
+  // D3D12PatchRayDispatchParam::RecordCB
+  uint shaderrecord_stride;
+  uint shaderrecord_count;
+  // D3D12PatchRayDispatchParam::SourceBuffer
+  GPUAddress sourceData;
+  // D3D12PatchRayDispatchParam::DestBuffer
+  GPUAddress destData;
+  // Dispatch itself
+  uint3 dispatchDim;
+  uint padding1;
+
+  uint2 padding2;
+};
 
 cbuffer DebugSampleOperation REG(b0)
 {
@@ -328,25 +375,25 @@ cbuffer DebugSampleOperation REG(b0)
   float debugSampleLodCompare;
 };
 
-#define DEBUG_SAMPLE_MATH_RCP 129
-#define DEBUG_SAMPLE_MATH_RSQ 68
-#define DEBUG_SAMPLE_MATH_EXP 25
-#define DEBUG_SAMPLE_MATH_LOG 47
-#define DEBUG_SAMPLE_MATH_SINCOS 77
+#define DEBUG_SAMPLE_MATH_DXBC_RCP 1000
+#define DEBUG_SAMPLE_MATH_DXBC_RSQ 1001
+#define DEBUG_SAMPLE_MATH_DXBC_EXP 1002
+#define DEBUG_SAMPLE_MATH_DXBC_LOG 1003
+#define DEBUG_SAMPLE_MATH_DXBC_SINCOS 1004
 
-#define DEBUG_SAMPLE_TEX_SAMPLE 69
-#define DEBUG_SAMPLE_TEX_SAMPLE_L 72
-#define DEBUG_SAMPLE_TEX_SAMPLE_B 74
-#define DEBUG_SAMPLE_TEX_SAMPLE_D 73
-#define DEBUG_SAMPLE_TEX_SAMPLE_C 70
-#define DEBUG_SAMPLE_TEX_SAMPLE_C_LZ 71
-#define DEBUG_SAMPLE_TEX_GATHER4 109
-#define DEBUG_SAMPLE_TEX_GATHER4_C 126
-#define DEBUG_SAMPLE_TEX_GATHER4_PO 127
-#define DEBUG_SAMPLE_TEX_GATHER4_PO_C 128
-#define DEBUG_SAMPLE_TEX_LOD 108
-#define DEBUG_SAMPLE_TEX_LD 45
-#define DEBUG_SAMPLE_TEX_LD_MS 46
+#define DEBUG_SAMPLE_TEX_SAMPLE 100
+#define DEBUG_SAMPLE_TEX_SAMPLE_LEVEL 101
+#define DEBUG_SAMPLE_TEX_SAMPLE_BIAS 102
+#define DEBUG_SAMPLE_TEX_SAMPLE_GRAD 103
+#define DEBUG_SAMPLE_TEX_SAMPLE_CMP 104
+#define DEBUG_SAMPLE_TEX_SAMPLE_CMP_LEVEL_ZERO 105
+#define DEBUG_SAMPLE_TEX_GATHER4 106
+#define DEBUG_SAMPLE_TEX_GATHER4_CMP 107
+#define DEBUG_SAMPLE_TEX_GATHER4_PO 108
+#define DEBUG_SAMPLE_TEX_GATHER4_PO_CMP 109
+#define DEBUG_SAMPLE_TEX_LOD 110
+#define DEBUG_SAMPLE_TEX_LOAD 111
+#define DEBUG_SAMPLE_TEX_LOAD_MS 112
 
 #define DEBUG_SAMPLE_TEX1D 1
 #define DEBUG_SAMPLE_TEX2D 2
@@ -359,6 +406,20 @@ cbuffer DebugSampleOperation REG(b0)
 #define DEBUG_SAMPLE_INT 3
 #define DEBUG_SAMPLE_UINT 4
 #define DEBUG_SAMPLE_FLOAT 5
+
+#define DEBUG_SAMPLE_MATH_DXIL_COS 10000
+#define DEBUG_SAMPLE_MATH_DXIL_SIN 10001
+#define DEBUG_SAMPLE_MATH_DXIL_TAN 10002
+#define DEBUG_SAMPLE_MATH_DXIL_ACOS 10003
+#define DEBUG_SAMPLE_MATH_DXIL_ASIN 10004
+#define DEBUG_SAMPLE_MATH_DXIL_ATAN 10005
+#define DEBUG_SAMPLE_MATH_DXIL_HCOS 10006
+#define DEBUG_SAMPLE_MATH_DXIL_HSIN 10007
+#define DEBUG_SAMPLE_MATH_DXIL_HTAN 10008
+#define DEBUG_SAMPLE_MATH_DXIL_EXP 10009
+#define DEBUG_SAMPLE_MATH_DXIL_LOG 10010
+#define DEBUG_SAMPLE_MATH_DXIL_SQRT 10011
+#define DEBUG_SAMPLE_MATH_DXIL_RSQRT 10012
 
 // some constants available to both C++ and HLSL for configuring display
 #define CUBEMAP_FACE_RIGHT 0

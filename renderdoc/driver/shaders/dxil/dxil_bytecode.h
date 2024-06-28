@@ -41,8 +41,17 @@ namespace LLVMBC
 struct BlockOrRecord;
 };
 
+namespace DXILDebug
+{
+class Debugger;
+struct ThreadState;
+};
+
 namespace DXIL
 {
+static const rdcstr DXIL_FAKE_OUTPUT_STRUCT_NAME("_OUT");
+static const rdcstr DXIL_FAKE_INPUT_STRUCT_NAME("_IN");
+
 struct BumpAllocator
 {
   BumpAllocator(size_t totalSize);
@@ -113,9 +122,9 @@ struct Type
   static void *operator new(size_t count, BumpAllocator &b) { return b.alloc(count); }
   static void operator delete(void *ptr, BumpAllocator &b) {}
   bool isVoid() const { return type == Scalar && scalarType == Void; }
-  rdcstr toString() const;
+  rdcstr toString(bool dxcStyleFormatting) const;
   rdcstr declFunction(rdcstr funcName, const rdcarray<Instruction *> &args,
-                      const AttributeSet *attrs) const;
+                      const AttributeSet *attrs, bool dxcStyleFormatting) const;
 
   // for scalars, arrays, vectors, pointers
   union
@@ -312,23 +321,279 @@ enum class Operation : uint8_t
 // added as needed, since names in docs/LLVM don't match neatly so there's no pre-made list
 enum class DXOp : uint32_t
 {
+  TempRegLoad = 0,
+  TempRegStore = 1,
+  MinPrecXRegLoad = 2,
+  MinPrecXRegStore = 3,
+  LoadInput = 4,
+  StoreOutput = 5,
+  FAbs = 6,
+  Saturate = 7,
+  IsNaN = 8,
+  IsInf = 9,
+  IsFinite = 10,
+  IsNormal = 11,
+  Cos = 12,
+  Sin = 13,
+  Tan = 14,
+  Acos = 15,
+  Asin = 16,
+  Atan = 17,
+  Hcos = 18,
+  Hsin = 19,
+  Htan = 20,
+  Exp = 21,
+  Frc = 22,
+  Log = 23,
+  Sqrt = 24,
+  Rsqrt = 25,
+  Round_ne = 26,
+  Round_ni = 27,
+  Round_pi = 28,
+  Round_z = 29,
+  Bfrev = 30,
+  Countbits = 31,
+  FirstbitLo = 32,
+  FirstbitHi = 33,
+  FirstbitSHi = 34,
+  FMax = 35,
+  FMin = 36,
+  IMax = 37,
+  IMin = 38,
+  UMax = 39,
   UMin = 40,
-  createHandle = 57,
-  atomicBinOp = 78,
-  barrier = 80,
-  groupId = 94,
-  threadIdInGroup = 95,
-  flattenedThreadIdInGroup = 96,
-  rawBufferLoad = 139,
-  rawBufferStore = 140,
-  setMeshOutputCounts = 168,
-  emitIndices = 169,
-  getMeshPayload = 170,
-  storeVertexOutput = 171,
-  storePrimitiveOutput = 172,
-  dispatchMesh = 173,
-  annotateHandle = 216,
-  createHandleFromBinding = 217,
+  IMul = 41,
+  UMul = 42,
+  UDiv = 43,
+  UAddc = 44,
+  USubb = 45,
+  FMad = 46,
+  Fma = 47,
+  IMad = 48,
+  UMad = 49,
+  Msad = 50,
+  Ibfe = 51,
+  Ubfe = 52,
+  Bfi = 53,
+  Dot2 = 54,
+  Dot3 = 55,
+  Dot4 = 56,
+  CreateHandle = 57,
+  CBufferLoad = 58,
+  CBufferLoadLegacy = 59,
+  Sample = 60,
+  SampleBias = 61,
+  SampleLevel = 62,
+  SampleGrad = 63,
+  SampleCmp = 64,
+  SampleCmpLevelZero = 65,
+  TextureLoad = 66,
+  TextureStore = 67,
+  BufferLoad = 68,
+  BufferStore = 69,
+  BufferUpdateCounter = 70,
+  CheckAccessFullyMapped = 71,
+  GetDimensions = 72,
+  TextureGather = 73,
+  TextureGatherCmp = 74,
+  Texture2DMSGetSamplePosition = 75,
+  RenderTargetGetSamplePosition = 76,
+  RenderTargetGetSampleCount = 77,
+  AtomicBinOp = 78,
+  AtomicCompareExchange = 79,
+  Barrier = 80,
+  CalculateLOD = 81,
+  Discard = 82,
+  DerivCoarseX = 83,
+  DerivCoarseY = 84,
+  DerivFineX = 85,
+  DerivFineY = 86,
+  EvalSnapped = 87,
+  EvalSampleIndex = 88,
+  EvalCentroid = 89,
+  SampleIndex = 90,
+  Coverage = 91,
+  InnerCoverage = 92,
+  ThreadId = 93,
+  GroupId = 94,
+  ThreadIdInGroup = 95,
+  FlattenedThreadIdInGroup = 96,
+  EmitStream = 97,
+  CutStream = 98,
+  EmitThenCutStream = 99,
+  GSInstanceID = 100,
+  MakeDouble = 101,
+  SplitDouble = 102,
+  LoadOutputControlPoint = 103,
+  LoadPatchConstant = 104,
+  DomainLocation = 105,
+  StorePatchConstant = 106,
+  OutputControlPointID = 107,
+  PrimitiveID = 108,
+  CycleCounterLegacy = 109,
+  WaveIsFirstLane = 110,
+  WaveGetLaneIndex = 111,
+  WaveGetLaneCount = 112,
+  WaveAnyTrue = 113,
+  WaveAllTrue = 114,
+  WaveActiveAllEqual = 115,
+  WaveActiveBallot = 116,
+  WaveReadLaneAt = 117,
+  WaveReadLaneFirst = 118,
+  WaveActiveOp = 119,
+  WaveActiveBit = 120,
+  WavePrefixOp = 121,
+  QuadReadLaneAt = 122,
+  QuadOp = 123,
+  BitcastI16toF16 = 124,
+  BitcastF16toI16 = 125,
+  BitcastI32toF32 = 126,
+  BitcastF32toI32 = 127,
+  BitcastI64toF64 = 128,
+  BitcastF64toI64 = 129,
+  LegacyF32ToF16 = 130,
+  LegacyF16ToF32 = 131,
+  LegacyDoubleToFloat = 132,
+  LegacyDoubleToSInt32 = 133,
+  LegacyDoubleToUInt32 = 134,
+  WaveAllBitCount = 135,
+  WavePrefixBitCount = 136,
+  AttributeAtVertex = 137,
+  ViewID = 138,
+  RawBufferLoad = 139,
+  RawBufferStore = 140,
+  InstanceID = 141,
+  InstanceIndex = 142,
+  HitKind = 143,
+  RayFlags = 144,
+  DispatchRaysIndex = 145,
+  DispatchRaysDimensions = 146,
+  WorldRayOrigin = 147,
+  WorldRayDirection = 148,
+  ObjectRayOrigin = 149,
+  ObjectRayDirection = 150,
+  ObjectToWorld = 151,
+  WorldToObject = 152,
+  RayTMin = 153,
+  RayTCurrent = 154,
+  IgnoreHit = 155,
+  AcceptHitAndEndSearch = 156,
+  TraceRay = 157,
+  ReportHit = 158,
+  CallShader = 159,
+  CreateHandleForLib = 160,
+  PrimitiveIndex = 161,
+  Dot2AddHalf = 162,
+  Dot4AddI8Packed = 163,
+  Dot4AddU8Packed = 164,
+  WaveMatch = 165,
+  WaveMultiPrefixOp = 166,
+  WaveMultiPrefixBitCount = 167,
+  SetMeshOutputCounts = 168,
+  EmitIndices = 169,
+  GetMeshPayload = 170,
+  StoreVertexOutput = 171,
+  StorePrimitiveOutput = 172,
+  DispatchMesh = 173,
+  WriteSamplerFeedback = 174,
+  WriteSamplerFeedbackBias = 175,
+  WriteSamplerFeedbackLevel = 176,
+  WriteSamplerFeedbackGrad = 177,
+  AllocateRayQuery = 178,
+  RayQuery_TraceRayInline = 179,
+  RayQuery_Proceed = 180,
+  RayQuery_Abort = 181,
+  RayQuery_CommitNonOpaqueTriangleHit = 182,
+  RayQuery_CommitProceduralPrimitiveHit = 183,
+  RayQuery_CommittedStatus = 184,
+  RayQuery_CandidateType = 185,
+  RayQuery_CandidateObjectToWorld3x4 = 186,
+  RayQuery_CandidateWorldToObject3x4 = 187,
+  RayQuery_CommittedObjectToWorld3x4 = 188,
+  RayQuery_CommittedWorldToObject3x4 = 189,
+  RayQuery_CandidateProceduralPrimitiveNonOpaque = 190,
+  RayQuery_CandidateTriangleFrontFace = 191,
+  RayQuery_CommittedTriangleFrontFace = 192,
+  RayQuery_CandidateTriangleBarycentrics = 193,
+  RayQuery_CommittedTriangleBarycentrics = 194,
+  RayQuery_RayFlags = 195,
+  RayQuery_WorldRayOrigin = 196,
+  RayQuery_WorldRayDirection = 197,
+  RayQuery_RayTMin = 198,
+  RayQuery_CandidateTriangleRayT = 199,
+  RayQuery_CommittedRayT = 200,
+  RayQuery_CandidateInstanceIndex = 201,
+  RayQuery_CandidateInstanceID = 202,
+  RayQuery_CandidateGeometryIndex = 203,
+  RayQuery_CandidatePrimitiveIndex = 204,
+  RayQuery_CandidateObjectRayOrigin = 205,
+  RayQuery_CandidateObjectRayDirection = 206,
+  RayQuery_CommittedInstanceIndex = 207,
+  RayQuery_CommittedInstanceID = 208,
+  RayQuery_CommittedGeometryIndex = 209,
+  RayQuery_CommittedPrimitiveIndex = 210,
+  RayQuery_CommittedObjectRayOrigin = 211,
+  RayQuery_CommittedObjectRayDirection = 212,
+  GeometryIndex = 213,
+  RayQuery_CandidateInstanceContributionToHitGroupIndex = 214,
+  RayQuery_CommittedInstanceContributionToHitGroupIndex = 215,
+  AnnotateHandle = 216,
+  CreateHandleFromBinding = 217,
+  CreateHandleFromHeap = 218,
+  Unpack4x8 = 219,
+  Pack4x8 = 220,
+  IsHelperLane = 221,
+  QuadVote = 222,
+  TextureGatherRaw = 223,
+  SampleCmpLevel = 224,
+  TextureStoreSample = 225,
+  WaveMatrix_Annotate = 226,
+  WaveMatrix_Depth = 227,
+  WaveMatrix_Fill = 228,
+  WaveMatrix_LoadRawBuf = 229,
+  WaveMatrix_LoadGroupShared = 230,
+  WaveMatrix_StoreRawBuf = 231,
+  WaveMatrix_StoreGroupShared = 232,
+  WaveMatrix_Multiply = 233,
+  WaveMatrix_MultiplyAccumulate = 234,
+  WaveMatrix_ScalarOp = 235,
+  WaveMatrix_SumAccumulate = 236,
+  WaveMatrix_Add = 237,
+  AllocateNodeOutputRecords = 238,
+  GetNodeRecordPtr = 239,
+  IncrementOutputCount = 240,
+  OutputComplete = 241,
+  GetInputRecordCount = 242,
+  FinishedCrossGroupSharing = 243,
+  BarrierByMemoryType = 244,
+  BarrierByMemoryHandle = 245,
+  BarrierByNodeRecordHandle = 246,
+  CreateNodeOutputHandle = 247,
+  IndexNodeHandle = 248,
+  AnnotateNodeHandle = 249,
+  CreateNodeInputRecordHandle = 250,
+  AnnotateNodeRecordHandle = 251,
+  NodeOutputIsValid = 252,
+  GetRemainingRecursionLevels = 253,
+  SampleCmpGrad = 254,
+  SampleCmpBias = 255,
+  StartVertexLocation = 256,
+  StartInstanceLocation = 257,
+  NumOpCodes = 258,
+};
+
+enum class AtomicBinOpCode : uint32_t
+{
+  Add,
+  And,
+  Or,
+  Xor,
+  IMin,
+  IMax,
+  UMin,
+  UMax,
+  Exchange,
+  Invalid    // Must be last.
 };
 
 inline Operation DecodeBinOp(const Type *type, uint64_t opcode)
@@ -460,7 +725,7 @@ struct Value
   static constexpr uint32_t VisitedID = 0x00fffffd;
   uint32_t id : 24;
 
-  rdcstr toString(bool withType = false) const;
+  rdcstr toString(bool dxcStyleFormatting, bool withType = false) const;
 
   static void *operator new(size_t count, BumpAllocator &b) { return b.alloc(count); }
   static void operator delete(void *ptr, BumpAllocator &b) {}
@@ -793,7 +1058,7 @@ struct Constant : public ForwardReferencableValue<Constant>
     return empty;
   }
 
-  rdcstr toString(bool withType = false) const;
+  rdcstr toString(bool dxcStyleFormatting, bool withType = false) const;
 
 private:
   union
@@ -843,7 +1108,7 @@ struct DIBase
 
   DIBase(Type t) : type(t) {}
   virtual ~DIBase() = default;
-  virtual rdcstr toString() const = 0;
+  virtual rdcstr toString(bool dxcStyleFormatting) const = 0;
   virtual void setID(uint32_t ID) {}
   template <typename Derived>
   const Derived *As() const
@@ -869,7 +1134,7 @@ struct DebugLocation
     return line == o.line && col == o.col && scope == o.scope && inlinedAt == o.inlinedAt;
   }
 
-  rdcstr toString() const;
+  rdcstr toString(bool dxcStyleFormatting) const;
 };
 
 struct Metadata : public Value
@@ -891,8 +1156,8 @@ struct Metadata : public Value
   DIBase *dwarf = NULL;
   DebugLocation *debugLoc = NULL;
 
-  rdcstr refString() const;
-  rdcstr valString() const;
+  rdcstr refString(bool dxcStyleFormatting) const;
+  rdcstr valString(bool dxcStyleFormatting) const;
 };
 
 // loose wrapper around an array for metadata pointer. This creates metadata nodes on demand because
@@ -1162,13 +1427,24 @@ struct EntryPointInterface
 
   struct ResourceBase
   {
-    ResourceBase(const Metadata *resourceBase);
+    ResourceBase(ResourceClass resourceClass, const Metadata *resourceBase);
+    bool MatchesBinding(uint32_t lowerBound, uint32_t upperBound, uint32_t spaceID) const
+    {
+      if(space != spaceID)
+        return false;
+      if(regBase > lowerBound)
+        return false;
+      if(regBase + regCount <= upperBound)
+        return false;
+      return true;
+    }
     uint32_t id;
     const Type *type;
     rdcstr name;
     uint32_t space;
     uint32_t regBase;
     uint32_t regCount;
+    const ResourceClass resClass;
   };
 
   struct SRV : ResourceBase
@@ -1218,8 +1494,21 @@ struct EntryPointInterface
   rdcarray<Sampler> samplers;
 };
 
+struct ResourceReference
+{
+  ResourceReference(const rdcstr &handleStr, const EntryPointInterface::ResourceBase &resBase,
+                    uint32_t idx)
+      : handleID(handleStr), resourceBase(resBase), resourceIndex(idx){};
+
+  rdcstr handleID;
+  EntryPointInterface::ResourceBase resourceBase;
+  uint32_t resourceIndex;
+};
+
 class Program : public DXBC::IDebugInfo
 {
+  friend DXILDebug::Debugger;
+  friend DXILDebug::ThreadState;
 public:
   Program(const byte *bytes, size_t length);
   Program(const Program &o) = delete;
@@ -1231,7 +1520,10 @@ public:
   const bytebuf &GetBytes() const { return m_Bytes; }
   void FetchComputeProperties(DXBC::Reflection *reflection);
   DXBC::Reflection *GetReflection();
+  rdcstr GetDebugStatus();
   rdcarray<ShaderEntryPoint> GetEntryPoints();
+  void FillEntryPointInterfaces();
+  size_t GetInstructionCount() const;
   void FillRayPayloads(
       Program *executable,
       rdcflatmap<ShaderEntryPoint, rdcpair<DXBC::CBufferVariableType, DXBC::CBufferVariableType>>
@@ -1244,7 +1536,6 @@ public:
   const rdcstr &GetDisassembly(bool dxcStyle, const DXBC::Reflection *reflection);
 
   // IDebugInfo interface
-
   rdcstr GetCompilerSig() const override { return m_CompilerSig; }
   rdcstr GetEntryFunction() const override { return m_EntryPoint; }
   rdcstr GetShaderProfile() const override { return m_Profile; }
@@ -1255,11 +1546,16 @@ public:
   bool HasSourceMapping() const override;
   void GetLocals(const DXBC::DXBCContainer *dxbc, size_t instruction, uintptr_t offset,
                  rdcarray<SourceVariableMapping> &locals) const override;
+  // IDebugInfo interface
 
   const Metadata *GetMetadataByName(const rdcstr &name) const;
   uint32_t GetDirectHeapAcessCount() const { return m_directHeapAccessCount; }
+
+  static char GetDXILIdentifier(const bool dxcStyle) { return dxcStyle ? '%' : '_'; }
 protected:
+  void Parse(const DXBC::Reflection *reflection);
   void SettleIDs();
+  void ParseReferences(const DXBC::Reflection *reflection);
   void MakeDXCDisassemblyString();
   void MakeRDDisassemblyString(const DXBC::Reflection *reflection);
 
@@ -1277,7 +1573,11 @@ protected:
   uint32_t GetMetaSlot(const DebugLocation *l) const;
   void AssignMetaSlot(rdcarray<Metadata *> &metaSlots, uint32_t &nextMetaSlot, DebugLocation &l);
 
-  void FetchEntryPointInterfaces(rdcarray<EntryPointInterface> &entryPointInterfaces);
+  const ResourceReference *GetResourceReference(const rdcstr &handleStr) const;
+  rdcstr GetHandleAlias(const rdcstr &handleStr) const;
+  static void MakeResultId(const Instruction &inst, rdcstr &resultId);
+  rdcstr GetArgId(const Instruction &inst, uint32_t arg) const;
+
   const Metadata *FindMetadata(uint32_t slot) const;
   rdcstr ArgToString(const Value *v, bool withTypes, const rdcstr &attrString = "") const;
   rdcstr DisassembleComDats(int &instructionLine) const;
@@ -1341,10 +1641,16 @@ protected:
 
   bool m_Uselists = false;
   bool m_DXCStyle = false;
-  bool m_SettledIDs = false;
+  bool m_Parsed = false;
 
   rdcstr m_Triple, m_Datalayout;
 
+  rdcarray<EntryPointInterface> m_EntryPointInterfaces;
+  std::map<rdcstr, size_t> m_ResourceHandles;
+  std::map<rdcstr, rdcstr> m_SsaAliases;
+  std::map<rdcstr, uint32_t> m_ResourceAnnotateCounts;
+
+  rdcarray<ResourceReference> m_ResourceReferences;
   rdcstr m_Disassembly;
   int m_DisassemblyInstructionLine;
 
@@ -1356,7 +1662,34 @@ bool needsEscaping(const rdcstr &name);
 rdcstr escapeString(const rdcstr &str);
 rdcstr escapeStringIfNeeded(const rdcstr &name);
 
+template <typename T>
+bool getival(const Value *v, T &out)
+{
+  if(const Constant *c = cast<Constant>(v))
+  {
+    out = T(c->getU64());
+    return true;
+  }
+  else if(const Literal *lit = cast<Literal>(v))
+  {
+    out = T(lit->literal);
+    return true;
+  }
+  out = T();
+  return false;
+}
+
+bool IsSSA(const Value *dxilValue);
+bool IsDXCNop(const Instruction &inst);
+bool IsLLVMDebugCall(const Instruction &inst);
+
+bool isUndef(const Value *v);
+
 };    // namespace DXIL
 
 DECLARE_REFLECTION_ENUM(DXIL::Attribute);
 DECLARE_STRINGISE_TYPE(DXIL::InstructionFlags);
+DECLARE_STRINGISE_TYPE(DXIL::AtomicBinOpCode);
+DECLARE_STRINGISE_TYPE(DXIL::Operation);
+DECLARE_STRINGISE_TYPE(DXIL::DXOp);
+DECLARE_STRINGISE_TYPE(DXIL::Type::TypeKind);

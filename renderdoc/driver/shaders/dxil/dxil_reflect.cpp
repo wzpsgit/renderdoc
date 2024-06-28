@@ -287,7 +287,9 @@ EntryPointInterface::Signature::Signature(const Metadata *signature)
   startCol = getival<int8_t>(signature->children[SignatureElement::StartCol]);
 }
 
-EntryPointInterface::ResourceBase::ResourceBase(const Metadata *resourceBase)
+EntryPointInterface::ResourceBase::ResourceBase(ResourceClass resourceClass,
+                                                const Metadata *resourceBase)
+    : resClass(resourceClass)
 {
   id = getival<uint32_t>(resourceBase->children[(size_t)ResField::ID]);
   type = resourceBase->children[(size_t)ResField::VarDecl]->type;
@@ -297,7 +299,7 @@ EntryPointInterface::ResourceBase::ResourceBase(const Metadata *resourceBase)
   regCount = getival<uint32_t>(resourceBase->children[(size_t)ResField::RegCount]);
 }
 
-EntryPointInterface::SRV::SRV(const Metadata *srv) : ResourceBase(srv)
+EntryPointInterface::SRV::SRV(const Metadata *srv) : ResourceBase(ResourceClass::SRV, srv)
 {
   shape = getival<ResourceKind>(srv->children[(size_t)ResField::SRVShape]);
   sampleCount = getival<uint32_t>(srv->children[(size_t)ResField::SRVSampleCount]);
@@ -319,7 +321,7 @@ EntryPointInterface::SRV::SRV(const Metadata *srv) : ResourceBase(srv)
   }
 }
 
-EntryPointInterface::UAV::UAV(const Metadata *uav) : ResourceBase(uav)
+EntryPointInterface::UAV::UAV(const Metadata *uav) : ResourceBase(ResourceClass::UAV, uav)
 {
   shape = getival<ResourceKind>(uav->children[(size_t)ResField::UAVShape]);
   globallCoherent = (getival<uint32_t>(uav->children[(size_t)ResField::UAVGloballyCoherent]) == 1);
@@ -349,7 +351,8 @@ EntryPointInterface::UAV::UAV(const Metadata *uav) : ResourceBase(uav)
   }
 }
 
-EntryPointInterface::CBuffer::CBuffer(const Metadata *cbuffer) : ResourceBase(cbuffer)
+EntryPointInterface::CBuffer::CBuffer(const Metadata *cbuffer)
+    : ResourceBase(ResourceClass::CBuffer, cbuffer)
 {
   sizeInBytes = getival<uint32_t>(cbuffer->children[(size_t)ResField::CBufferByteSize]);
   const Metadata *tags = cbuffer->children[(size_t)ResField::CBufferTags];
@@ -363,13 +366,17 @@ EntryPointInterface::CBuffer::CBuffer(const Metadata *cbuffer) : ResourceBase(cb
   cbufferRefl = NULL;
 }
 
-EntryPointInterface::Sampler::Sampler(const Metadata *sampler) : ResourceBase(sampler)
+EntryPointInterface::Sampler::Sampler(const Metadata *sampler)
+    : ResourceBase(ResourceClass::Sampler, sampler)
 {
   samplerType = getival<SamplerKind>(sampler->children[(size_t)ResField::SamplerType]);
 }
 
 EntryPointInterface::EntryPointInterface(const Metadata *entryPoint)
 {
+  if(entryPoint->children[0] == NULL)
+    return;
+
   function = entryPoint->children[0]->type;
   name = entryPoint->children[1]->str;
 
@@ -544,16 +551,19 @@ static DXBC::CBufferVariableType MakePayloadType(const TypeInfo &typeInfo, const
   return ret;
 }
 
-void Program::FetchEntryPointInterfaces(rdcarray<EntryPointInterface> &entryPointInterfaces)
+void Program::FillEntryPointInterfaces()
 {
+  if(!m_EntryPointInterfaces.isEmpty())
+    return;
+
   DXMeta dx(m_NamedMeta);
 
-  entryPointInterfaces.clear();
+  m_EntryPointInterfaces.clear();
   if(!dx.entryPoints)
     return;
 
   for(size_t c = 0; c < dx.entryPoints->children.size(); ++c)
-    entryPointInterfaces.emplace_back(dx.entryPoints->children[c]);
+    m_EntryPointInterfaces.emplace_back(dx.entryPoints->children[c]);
 }
 
 void Program::FetchComputeProperties(DXBC::Reflection *reflection)
@@ -566,7 +576,17 @@ void Program::FetchComputeProperties(DXBC::Reflection *reflection)
   {
     const Function &f = *m_Functions[i];
 
-    if(f.name.beginsWith("dx.op.threadId"))
+    // Match "dx.op.threadIdGroup" before "dx.op.threadId"
+    if(f.name.beginsWith("dx.op.threadIdInGroup"))
+    {
+      SigParameter param;
+      param.systemValue = ShaderBuiltin::GroupThreadIndex;
+      param.compCount = 3;
+      param.regChannelMask = param.channelUsedMask = 0x7;
+      param.semanticIdxName = param.semanticName = "threadIdInGroup";
+      reflection->InputSig.push_back(param);
+    }
+    else if(f.name.beginsWith("dx.op.threadId"))
     {
       SigParameter param;
       param.systemValue = ShaderBuiltin::DispatchThreadIndex;
@@ -582,15 +602,6 @@ void Program::FetchComputeProperties(DXBC::Reflection *reflection)
       param.compCount = 3;
       param.regChannelMask = param.channelUsedMask = 0x7;
       param.semanticIdxName = param.semanticName = "groupID";
-      reflection->InputSig.push_back(param);
-    }
-    else if(f.name.beginsWith("dx.op.threadIdInGroup"))
-    {
-      SigParameter param;
-      param.systemValue = ShaderBuiltin::GroupThreadIndex;
-      param.compCount = 3;
-      param.regChannelMask = param.channelUsedMask = 0x7;
-      param.semanticIdxName = param.semanticName = "threadIdInGroup";
       reflection->InputSig.push_back(param);
     }
     else if(f.name.beginsWith("dx.op.flattenedThreadIdInGroup"))
@@ -616,14 +627,28 @@ void Program::FetchComputeProperties(DXBC::Reflection *reflection)
             RDCERR("Unexpected number of arguments to dispatchMesh");
             continue;
           }
-          GlobalVar *payloadVariable = cast<GlobalVar>(inst.args[4]);
-          if(!payloadVariable)
-          {
-            RDCERR("Unexpected non-variable payload argument to dispatchMesh");
-            continue;
-          }
 
-          Type *payloadType = (Type *)payloadVariable->type;
+          Type *payloadType = NULL;
+
+          GlobalVar *payloadVariable = cast<GlobalVar>(inst.args[4]);
+          if(payloadVariable)
+          {
+            payloadType = (Type *)payloadVariable->type;
+          }
+          else
+          {
+            Instruction *payloadAlloc = cast<Instruction>(inst.args[4]);
+
+            if(payloadAlloc->op == Operation::Alloca || payloadAlloc->op == Operation::GetElementPtr)
+            {
+              payloadType = (Type *)payloadAlloc->type;
+            }
+            else
+            {
+              RDCERR("Unexpected non-variable payload argument to dispatchMesh");
+              continue;
+            }
+          }
 
           RDCASSERT(payloadType->type == Type::Pointer);
           payloadType = (Type *)payloadType->inner;
@@ -1075,6 +1100,10 @@ static DXBC::CBufferVariableType MakeCBufferVariableType(const TypeInfo &typeInf
   if(IsEmptyStruct(t))
     return ret;
 
+  // textures declared in a struct that becomes a global uniform could end up here, treat it as an empty struct.
+  if(ret.name.beginsWith("Texture2D<"))
+    return ret;
+
   auto it = typeInfo.structData.find(t);
 
   if(it == typeInfo.structData.end())
@@ -1162,8 +1191,14 @@ static DXBC::CBufferVariableType MakeCBufferVariableType(const TypeInfo &typeInf
       var.type.name += "x";
       var.type.name += ToStr(var.type.cols);
 
-      var.type.bytesize =
-          VarTypeByteSize(var.type.varType) * var.type.rows * var.type.cols * var.type.elements;
+      // D3D matrices in cbuffers always take up a float4 per row/column.
+      uint32_t matrixByteStride = AlignUp16(VarTypeByteSize(var.type.varType));
+      if(var.type.varClass == CLASS_MATRIX_ROWS)
+        matrixByteStride *= var.type.rows;
+      else
+        matrixByteStride *= var.type.cols;
+
+      var.type.bytesize = matrixByteStride * var.type.elements;
     }
     else
     {
@@ -1418,15 +1453,17 @@ rdcarray<ShaderEntryPoint> Program::GetEntryPoints()
         entryPoint.name = entry->children[1]->str;
 
         Metadata *tags = entry->children[4];
-
-        for(size_t i = 0; i < tags->children.size(); i += 2)
+        if(tags)
         {
-          // 8 is the type tag
-          if(getival<uint32_t>(tags->children[i]) == 8U)
+          for(size_t i = 0; i < tags->children.size(); i += 2)
           {
-            entryPoint.stage =
-                GetShaderStage((DXBC::ShaderType)getival<uint32_t>(tags->children[i + 1]));
-            break;
+            // 8 is the type tag
+            if(getival<uint32_t>(tags->children[i]) == 8U)
+            {
+              entryPoint.stage =
+                  GetShaderStage((DXBC::ShaderType)getival<uint32_t>(tags->children[i + 1]));
+              break;
+            }
           }
         }
 
@@ -1440,6 +1477,7 @@ rdcarray<ShaderEntryPoint> Program::GetEntryPoints()
 
 DXBC::Reflection *Program::GetReflection()
 {
+  const bool dxcStyleFormatting = m_DXCStyle;
   using namespace DXBC;
 
   Reflection *refl = new Reflection;
@@ -1459,10 +1497,10 @@ DXBC::Reflection *Program::GetReflection()
 
   if(dx.valver && dx.valver->children.size() == 1 && dx.valver->children[0]->children.size() == 2)
   {
-    m_CompilerSig +=
-        StringFormat::Fmt(" (Validation version %s.%s)",
-                          dx.valver->children[0]->children[0]->value->toString().c_str(),
-                          dx.valver->children[0]->children[1]->value->toString().c_str());
+    m_CompilerSig += StringFormat::Fmt(
+        " (Validation version %s.%s)",
+        dx.valver->children[0]->children[0]->value->toString(dxcStyleFormatting).c_str(),
+        dx.valver->children[0]->children[1]->value->toString(dxcStyleFormatting).c_str());
   }
 
   if(dx.entryPoints && dx.entryPoints->children.size() > 0 &&
@@ -1479,10 +1517,10 @@ DXBC::Reflection *Program::GetReflection()
   if(dx.shaderModel && dx.shaderModel->children.size() == 1 &&
      dx.shaderModel->children[0]->children.size() == 3)
   {
-    m_Profile =
-        StringFormat::Fmt("%s_%s_%s", dx.shaderModel->children[0]->children[0]->str.c_str(),
-                          dx.shaderModel->children[0]->children[1]->value->toString().c_str(),
-                          dx.shaderModel->children[0]->children[2]->value->toString().c_str());
+    m_Profile = StringFormat::Fmt(
+        "%s_%s_%s", dx.shaderModel->children[0]->children[0]->str.c_str(),
+        dx.shaderModel->children[0]->children[1]->value->toString(dxcStyleFormatting).c_str(),
+        dx.shaderModel->children[0]->children[2]->value->toString(dxcStyleFormatting).c_str());
   }
   else
   {
@@ -1597,9 +1635,13 @@ DXBC::Reflection *Program::GetReflection()
 
         bind.descriptor.type = CBuffer::Descriptor::TYPE_CBUFFER;
         bind.descriptor.byteSize = getival<uint32_t>(r->children[(size_t)ResField::CBufferByteSize]);
+        bind.hasReflectionData = true;
 
         if(bind.name.empty())
+        {
+          bind.hasReflectionData = false;
           bind.name = StringFormat::Fmt("cbuffer%u", bind.identifier);
+        }
 
         const Type *cbufType = r->children[(size_t)ResField::VarDecl]->type;
 
@@ -1615,6 +1657,8 @@ DXBC::Reflection *Program::GetReflection()
         }
         else
         {
+          bind.hasReflectionData = false;
+
           CBufferVariable var;
 
           var.name = "unknown";
@@ -1677,6 +1721,11 @@ DXBC::Reflection *Program::GetReflection()
   return refl;
 }
 
+rdcstr Program::GetDebugStatus()
+{
+  return "Debugging DXIL is not supported";
+}
+
 void Program::GetLineInfo(size_t instruction, uintptr_t offset, LineColumnInfo &lineInfo) const
 {
   lineInfo = LineColumnInfo();
@@ -1711,4 +1760,26 @@ void Program::GetLocals(const DXBC::DXBCContainer *dxbc, size_t instruction, uin
   locals.clear();
 }
 
+const ResourceReference *Program::GetResourceReference(const rdcstr &handleStr) const
+{
+  if(m_ResourceHandles.count(handleStr) > 0)
+  {
+    size_t resRefIndex = m_ResourceHandles.find(handleStr)->second;
+    if(resRefIndex < m_ResourceHandles.size())
+    {
+      return &m_ResourceReferences[resRefIndex];
+    }
+  }
+  return NULL;
+}
+
+size_t Program::GetInstructionCount() const
+{
+  size_t ret = 0;
+
+  for(size_t i = 0; i < m_Functions.size(); i++)
+    ret += m_Functions[i]->instructions.size();
+
+  return ret;
+}
 };    // namespace DXIL

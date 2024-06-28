@@ -1508,7 +1508,8 @@ private:
   struct ImageData
   {
     uint32_t width = 0, height = 0, depth = 0;
-    uint32_t texelSize = 0, rowPitch = 0, slicePitch = 0, samplePitch = 0;
+    uint32_t texelSize = 0;
+    uint64_t rowPitch = 0, slicePitch = 0, samplePitch = 0;
     ResourceFormat fmt;
     bytebuf bytes;
 
@@ -1725,15 +1726,15 @@ private:
           ResourceFormat fmt = MakeResourceFormat(imageProps.format);
 
           data.fmt = MakeResourceFormat(imageProps.format);
-          data.texelSize = GetByteSize(1, 1, 1, imageProps.format, 0);
-          data.rowPitch = GetByteSize(data.width, 1, 1, imageProps.format, 0);
+          data.texelSize = (uint32_t)GetByteSize(1, 1, 1, imageProps.format, 0);
+          data.rowPitch = (uint32_t)GetByteSize(data.width, 1, 1, imageProps.format, 0);
           data.slicePitch = GetByteSize(data.width, data.height, 1, imageProps.format, 0);
           data.samplePitch = GetByteSize(data.width, data.height, data.depth, imageProps.format, 0);
 
           const uint32_t numSlices = imageProps.type == VK_IMAGE_TYPE_3D ? 1 : data.depth;
           const uint32_t numSamples = (uint32_t)imageProps.samples;
 
-          data.bytes.reserve(data.samplePitch * numSamples);
+          data.bytes.reserve(size_t(data.samplePitch * numSamples));
 
           // defaults are fine - no interpretation. Maybe we could use the view's typecast?
           const GetTextureDataParams params = GetTextureDataParams();
@@ -4005,7 +4006,7 @@ ShaderDebugTrace *VulkanReplay::DebugVertex(uint32_t eventId, uint32_t vertid, u
 
     bytebuf data;
 
-    size_t size = GetByteSize(1, 1, 1, attr.format, 0);
+    size_t size = (size_t)GetByteSize(1, 1, 1, attr.format, 0);
 
     bool found = false;
 

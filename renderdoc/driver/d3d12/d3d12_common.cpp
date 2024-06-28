@@ -419,6 +419,10 @@ bool D3D12InitParams::IsSupportedVersion(uint64_t ver)
   if(ver == 0x10)
     return true;
 
+  // 0x11 -> 0x12 - Descriptor heaps serialise the original pointer to their descriptor array for GPU unwrapping
+  if(ver == 0x11)
+    return true;
+
   return false;
 }
 
@@ -795,6 +799,7 @@ uint32_t ArgumentTypeByteSize(const D3D12_INDIRECT_ARGUMENT_DESC &arg)
     case D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED: return sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
     case D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH: return sizeof(D3D12_DISPATCH_ARGUMENTS);
     case D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH: return sizeof(D3D12_DISPATCH_MESH_ARGUMENTS);
+    case D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_RAYS: return sizeof(D3D12_DISPATCH_RAYS_DESC);
     case D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT:
       return sizeof(uint32_t) * arg.Constant.Num32BitValuesToSet;
     case D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW: return sizeof(D3D12_VERTEX_BUFFER_VIEW);
@@ -1198,6 +1203,68 @@ D3D12_RASTERIZER_DESC2 Upconvert(const D3D12_RASTERIZER_DESC &desc)
     RasterizerState.LineRasterizationMode = D3D12_LINE_RASTERIZATION_MODE_ALIASED;
 
   return RasterizerState;
+}
+
+D3D12_UNWRAPPED_STATE_OBJECT_DESC::D3D12_UNWRAPPED_STATE_OBJECT_DESC(
+    const D3D12_STATE_OBJECT_DESC &wrappedDesc)
+{
+  Type = wrappedDesc.Type;
+  NumSubobjects = wrappedDesc.NumSubobjects;
+
+  size_t numRoots = 0, numColls = 0, numAssocs = 0;
+
+  subobjects.resize(NumSubobjects);
+  for(size_t i = 0; i < subobjects.size(); i++)
+  {
+    subobjects[i] = wrappedDesc.pSubobjects[i];
+    if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE ||
+       subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE)
+    {
+      numRoots++;
+    }
+    else if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_EXISTING_COLLECTION)
+    {
+      numColls++;
+    }
+    else if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION)
+    {
+      numAssocs++;
+    }
+  }
+
+  unwrappedRootsigObjs.resize(numRoots);
+  unwrappedCollObjs.resize(numColls);
+  rebasedAssocs.reserve(numAssocs);
+
+  for(size_t i = 0, r = 0, c = 0; i < subobjects.size(); i++)
+  {
+    if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE ||
+       subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE)
+    {
+      D3D12_GLOBAL_ROOT_SIGNATURE *rootsig = (D3D12_GLOBAL_ROOT_SIGNATURE *)subobjects[i].pDesc;
+      unwrappedRootsigObjs[r].pGlobalRootSignature = Unwrap(rootsig->pGlobalRootSignature);
+      subobjects[i].pDesc = &unwrappedRootsigObjs[r++];
+    }
+    else if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_EXISTING_COLLECTION)
+    {
+      D3D12_EXISTING_COLLECTION_DESC *coll = (D3D12_EXISTING_COLLECTION_DESC *)subobjects[i].pDesc;
+      unwrappedCollObjs[c] = *coll;
+      unwrappedCollObjs[c].pExistingCollection = Unwrap(unwrappedCollObjs[c].pExistingCollection);
+      subobjects[i].pDesc = &unwrappedCollObjs[c++];
+    }
+    else if(subobjects[i].Type == D3D12_STATE_SUBOBJECT_TYPE_SUBOBJECT_TO_EXPORTS_ASSOCIATION)
+    {
+      D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION assoc =
+          *(D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION *)subobjects[i].pDesc;
+
+      size_t idx = assoc.pSubobjectToAssociate - wrappedDesc.pSubobjects;
+      assoc.pSubobjectToAssociate = subobjects.data() + idx;
+      rebasedAssocs.push_back(assoc);
+      subobjects[i].pDesc = &rebasedAssocs.back();
+    }
+  }
+
+  pSubobjects = subobjects.data();
 }
 
 D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC::D3D12_EXPANDED_PIPELINE_STATE_STREAM_DESC(

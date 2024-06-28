@@ -885,6 +885,7 @@ struct ImageInfo
   uint16_t levelCount = 0;
   uint16_t sampleCount = 0;
   bool storage = false;
+  bool isAHB = false;
   VkExtent3D extent = {0, 0, 0};
   VkImageType imageType = VK_IMAGE_TYPE_2D;
   VkFormat format = VK_FORMAT_UNDEFINED;
@@ -2470,8 +2471,8 @@ struct BlockShape
 BlockShape GetBlockShape(VkFormat Format, uint32_t plane);
 VkExtent2D GetPlaneShape(uint32_t Width, uint32_t Height, VkFormat Format, uint32_t plane);
 
-uint32_t GetByteSize(uint32_t Width, uint32_t Height, uint32_t Depth, VkFormat Format, uint32_t mip);
-uint32_t GetPlaneByteSize(uint32_t Width, uint32_t Height, uint32_t Depth, VkFormat Format,
+uint64_t GetByteSize(uint32_t Width, uint32_t Height, uint32_t Depth, VkFormat Format, uint32_t mip);
+uint64_t GetPlaneByteSize(uint32_t Width, uint32_t Height, uint32_t Depth, VkFormat Format,
                           uint32_t mip, uint32_t plane);
 
 template <typename T>

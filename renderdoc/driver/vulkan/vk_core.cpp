@@ -43,6 +43,9 @@ RDOC_DEBUG_CONFIG(bool, Vulkan_Debug_SingleSubmitFlushing, false,
                   "Every command buffer is submitted and fully flushed to the GPU, to narrow down "
                   "the source of problems.");
 
+RDOC_DEBUG_CONFIG(bool, Vulkan_Experimental_EnableRTSupport, false,
+                  "Enable experimental Vulkan RT support");
+
 uint64_t VkInitParams::GetSerialiseSize()
 {
   // misc bytes and fixed integer members
@@ -660,7 +663,7 @@ uint32_t WrappedVulkan::HandlePreCallback(VkCommandBuffer commandBuffer, ActionF
 
   if(type == ActionFlags::MeshDispatch || type == ActionFlags::Drawcall)
     m_ActionCallback->PreDraw(eventId, type, commandBuffer);
-  else if(type == ActionFlags::Dispatch)
+  else if(type == ActionFlags::Dispatch || type == ActionFlags::DispatchRay)
     m_ActionCallback->PreDispatch(eventId, type, commandBuffer);
   else
     m_ActionCallback->PreMisc(eventId, type, commandBuffer);
@@ -1214,6 +1217,10 @@ static const VkExtensionProperties supportedExtensions[] = {
         VK_EXT_SHADER_IMAGE_ATOMIC_INT64_SPEC_VERSION,
     },
     {
+        VK_EXT_SHADER_OBJECT_EXTENSION_NAME,
+        VK_EXT_SHADER_OBJECT_SPEC_VERSION,
+    },
+    {
         VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME,
         VK_EXT_SHADER_STENCIL_EXPORT_SPEC_VERSION,
     },
@@ -1344,6 +1351,10 @@ static const VkExtensionProperties supportedExtensions[] = {
     },
 #endif
     {
+        VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+        VK_KHR_ACCELERATION_STRUCTURE_SPEC_VERSION,
+    },
+    {
         VK_KHR_BIND_MEMORY_2_EXTENSION_NAME,
         VK_KHR_BIND_MEMORY_2_SPEC_VERSION,
     },
@@ -1366,6 +1377,10 @@ static const VkExtensionProperties supportedExtensions[] = {
     {
         VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
         VK_KHR_DEDICATED_ALLOCATION_SPEC_VERSION,
+    },
+    {
+        VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+        VK_KHR_DEFERRED_HOST_OPERATIONS_SPEC_VERSION,
     },
     {
         VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME,
@@ -1562,6 +1577,14 @@ static const VkExtensionProperties supportedExtensions[] = {
         VK_KHR_PUSH_DESCRIPTOR_SPEC_VERSION,
     },
     {
+        VK_KHR_RAY_QUERY_EXTENSION_NAME,
+        VK_KHR_RAY_QUERY_SPEC_VERSION,
+    },
+    {
+        VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+        VK_KHR_RAY_TRACING_PIPELINE_SPEC_VERSION,
+    },
+    {
         VK_KHR_RELAXED_BLOCK_LAYOUT_EXTENSION_NAME,
         VK_KHR_RELAXED_BLOCK_LAYOUT_SPEC_VERSION,
     },
@@ -1604,6 +1627,10 @@ static const VkExtensionProperties supportedExtensions[] = {
     {
         VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME,
         VK_KHR_SHADER_NON_SEMANTIC_INFO_SPEC_VERSION,
+    },
+    {
+        VK_KHR_SHADER_RELAXED_EXTENDED_INSTRUCTION_EXTENSION_NAME,
+        VK_KHR_SHADER_RELAXED_EXTENDED_INSTRUCTION_SPEC_VERSION,
     },
     {
         VK_KHR_SHADER_SUBGROUP_EXTENDED_TYPES_EXTENSION_NAME,
@@ -1965,6 +1992,10 @@ VkResult WrappedVulkan::FilterDeviceExtensionProperties(VkPhysicalDevice physDev
 
       if(!strcmp(ext.extensionName, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME))
       {
+        // remove unconditionally if the option isn't on
+        if(!Vulkan_Experimental_EnableRTSupport())
+          return true;
+
         // require GPDP2
         if(instDevInfo->ext_KHR_get_physical_device_properties2)
         {
@@ -1985,6 +2016,53 @@ VkResult WrappedVulkan::FilterDeviceExtensionProperties(VkPhysicalDevice physDev
                 "VkPhysicalDeviceAccelerationStructureFeaturesKHR."
                 "accelerationStructureCaptureReplay "
                 "is false, can't support capture of VK_KHR_acceleration_structure");
+          }
+        }
+
+        // if it wasn't supported, remove the extension
+        return true;
+      }
+
+      // remove unconditionally if the option isn't on
+      if(!strcmp(ext.extensionName, VK_KHR_RAY_QUERY_EXTENSION_NAME))
+      {
+        if(!Vulkan_Experimental_EnableRTSupport())
+          return true;
+      }
+
+      if(!strcmp(ext.extensionName, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME))
+      {
+        if(!Vulkan_Experimental_EnableRTSupport())
+          return true;
+      }
+
+      if(!strcmp(ext.extensionName, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME))
+      {
+        // remove unconditionally if the option isn't on
+        if(!Vulkan_Experimental_EnableRTSupport())
+          return true;
+
+        // require GPDP2
+        if(instDevInfo->ext_KHR_get_physical_device_properties2)
+        {
+          VkPhysicalDeviceRayTracingPipelineFeaturesKHR rt = {
+              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR};
+          VkPhysicalDeviceFeatures2 base = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+          base.pNext = &rt;
+          ObjDisp(physDev)->GetPhysicalDeviceFeatures2(Unwrap(physDev), &base);
+
+          if(!rt.rayTracingPipelineShaderGroupHandleCaptureReplay)
+          {
+            if(!filterWarned)
+              RDCWARN(
+                  "VkPhysicalDeviceRayTracingPipelineFeaturesKHR."
+                  "rayTracingPipelineShaderGroupHandleCaptureReplay "
+                  "is false, can't support capture of VK_KHR_ray_tracing_pipeline");
+          }
+          else
+          {
+            // supported, don't remove
+            return false;
           }
         }
 
@@ -2421,7 +2499,7 @@ bool WrappedVulkan::EndFrameCapture(DeviceOwnedWindow devWnd)
     vkr = vt->BeginCommandBuffer(Unwrap(cmd), &beginInfo);
     CheckVkResult(vkr);
 
-    uint32_t rowPitch = GetByteSize(imageInfo.extent.width, 1, 1, imageInfo.format, 0);
+    uint32_t rowPitch = (uint32_t)GetByteSize(imageInfo.extent.width, 1, 1, imageInfo.format, 0);
 
     VkBufferImageCopy cpy = {
         0,
@@ -2686,8 +2764,18 @@ bool WrappedVulkan::EndFrameCapture(DeviceOwnedWindow devWnd)
     captureSectionSize = captureWriter->GetOffset();
   }
 
-  RDCLOG("Captured Vulkan frame with %f MB capture section in %f seconds",
-         double(captureSectionSize) / (1024.0 * 1024.0), m_CaptureTimer.GetMilliseconds() / 1000.0);
+  if(m_CaptureFailure)
+  {
+    m_LastCaptureFailed = Timing::GetUnixTimestamp();
+    SAFE_DELETE(rdc);
+  }
+  else
+  {
+    RDCLOG("Captured Vulkan frame with %f MB capture section in %f seconds",
+           double(captureSectionSize) / (1024.0 * 1024.0), m_CaptureTimer.GetMilliseconds() / 1000.0);
+  }
+
+  m_CaptureFailure = false;
 
   RenderDoc::Inst().FinishCaptureWriting(rdc, m_CapturedFrames.back().frameNumber);
 
@@ -4062,6 +4150,16 @@ bool WrappedVulkan::ProcessChunk(ReadSerialiser &ser, VulkanChunk chunk)
     case VulkanChunk::vkCreateShadersEXT:
       return Serialise_vkCreateShadersEXT(ser, VK_NULL_HANDLE, 0, NULL, NULL, NULL);
 
+    case VulkanChunk::vkCmdSetRayTracingPipelineStackSizeKHR:
+      return Serialise_vkCmdSetRayTracingPipelineStackSizeKHR(ser, VK_NULL_HANDLE, 0);
+    case VulkanChunk::vkCmdTraceRaysIndirectKHR:
+      return Serialise_vkCmdTraceRaysIndirectKHR(ser, VK_NULL_HANDLE, NULL, NULL, NULL, NULL, 0);
+    case VulkanChunk::vkCmdTraceRaysKHR:
+      return Serialise_vkCmdTraceRaysKHR(ser, VK_NULL_HANDLE, NULL, NULL, NULL, NULL, 0, 0, 0);
+    case VulkanChunk::vkCreateRayTracingPipelinesKHR:
+      return Serialise_vkCreateRayTracingPipelinesKHR(ser, VK_NULL_HANDLE, VK_NULL_HANDLE,
+                                                      VK_NULL_HANDLE, 0, NULL, NULL, NULL);
+
     // chunks that are reserved but not yet serialised
     case VulkanChunk::vkResetCommandPool:
     case VulkanChunk::vkCreateDepthTargetView:
@@ -4303,7 +4401,21 @@ void WrappedVulkan::ReplayLog(uint32_t startEventID, uint32_t endEventID, Replay
       else
       {
         // even outside of render passes, we need to restore the state
-        m_RenderState.BindPipeline(this, cmd, VulkanRenderState::BindInitial, false);
+        if(m_RenderState.compute.shaderObject || m_RenderState.graphics.shaderObject)
+        {
+          m_RenderState.BindShaderObjects(this, cmd, VulkanRenderState::BindInitial);
+
+          if(m_RenderState.compute.pipeline != ResourceId())
+            m_RenderState.BindPipeline(this, cmd, VulkanRenderState::BindCompute, false);
+          if(m_RenderState.rt.pipeline != ResourceId())
+            m_RenderState.BindPipeline(this, cmd, VulkanRenderState::BindRT, false);
+          if(m_RenderState.graphics.pipeline != ResourceId())
+            m_RenderState.BindPipeline(this, cmd, VulkanRenderState::BindGraphics, false);
+        }
+        else
+        {
+          m_RenderState.BindPipeline(this, cmd, VulkanRenderState::BindInitial, false);
+        }
       }
 
       m_RenderState.subpassContents = subpassContents;
@@ -4586,7 +4698,8 @@ rdcstr WrappedVulkan::GetPhysDeviceCompatString(bool externalResource, bool orig
         "memory, meaning that captures using resources like this can't be replayed.\n\n";
   }
 
-  if(capture == replay)
+  if(capture == replay && rdcstr(m_OrigPhysicalDeviceData.props.deviceName) ==
+                              rdcstr(m_PhysicalDeviceData.props.deviceName))
   {
     ret += StringFormat::Fmt("Captured and replayed on the same device: %s %s, %u.%u.%u",
                              ToStr(capture.Vendor()).c_str(),
@@ -5169,7 +5282,12 @@ void WrappedVulkan::AddUsage(VulkanActionTreeNode &actionNode, rdcarray<DebugMes
   {
     bool compute = (shad == 5);
     ResourceId pipe = (compute ? state.compute.pipeline : state.graphics.pipeline);
-    VulkanCreationInfo::Pipeline::Shader &sh = c.m_Pipeline[pipe].shaders[shad];
+
+    bool shaderObject = (compute ? state.compute.shaderObject : state.graphics.shaderObject);
+
+    VulkanCreationInfo::ShaderEntry &sh = shaderObject
+                                              ? c.m_ShaderObject[state.shaderObjects[shad]].shad
+                                              : c.m_Pipeline[pipe].shaders[shad];
     if(sh.module == ResourceId())
       continue;
 

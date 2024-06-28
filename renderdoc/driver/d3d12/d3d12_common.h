@@ -554,6 +554,7 @@ DECLARE_REFLECTION_STRUCT(D3D12RootSignature);
 struct D3D12CommandSignature
 {
   bool graphics = true;
+  bool raytraced = false;
   UINT ByteStride = 0;
   UINT PackedByteSize = 0;
   rdcarray<D3D12_INDIRECT_ARGUMENT_DESC> arguments;
@@ -638,6 +639,17 @@ inline bool operator==(const D3D12_CPU_DESCRIPTOR_HANDLE &l, const D3D12_CPU_DES
 {
   return l.ptr == r.ptr;
 }
+
+struct D3D12_UNWRAPPED_STATE_OBJECT_DESC : public D3D12_STATE_OBJECT_DESC
+{
+  D3D12_UNWRAPPED_STATE_OBJECT_DESC(const D3D12_STATE_OBJECT_DESC &wrappedDesc);
+
+private:
+  rdcarray<D3D12_STATE_SUBOBJECT> subobjects;
+  rdcarray<D3D12_GLOBAL_ROOT_SIGNATURE> unwrappedRootsigObjs;
+  rdcarray<D3D12_SUBOBJECT_TO_EXPORTS_ASSOCIATION> rebasedAssocs;
+  rdcarray<D3D12_EXISTING_COLLECTION_DESC> unwrappedCollObjs;
+};
 
 // expanded version of D3D12_GRAPHICS_PIPELINE_STATE_DESC / D3D12_COMPUTE_PIPELINE_STATE_DESC with
 // all subobjects. No enums suitable to make this a stream though.
@@ -1211,5 +1223,6 @@ enum class D3D12Chunk : uint32_t
   List_DispatchRays,
   List_SetPipelineState1,
   CreateAS,
+  StateObject_SetPipelineStackSize,
   Max,
 };

@@ -56,6 +56,7 @@ static const char *LiveDriverDisassemblyTarget = "Live driver disassembly";
 ID3DDevice *GetD3D12DeviceIfAlloc(IUnknown *dev);
 
 static const char *DXBCDXILDisassemblyTarget = "DXBC/DXIL";
+static const char *DXCDXILDisassemblyTarget = "DXC DXIL";
 
 D3D12Replay::D3D12Replay(WrappedID3D12Device *d)
 {
@@ -413,6 +414,7 @@ BufferDescription D3D12Replay::GetBuffer(ResourceId id)
   ret.length = desc.Width;
 
   ret.creationFlags = BufferCategory::NoFlags;
+  ret.gpuAddress = it->second->GetOriginalVA();
 
   const rdcarray<EventUsage> &usage = m_pDevice->GetQueue()->GetUsage(id);
 
@@ -539,6 +541,8 @@ rdcarray<rdcstr> D3D12Replay::GetDisassemblyTargets(bool withPipeline)
 
   // DXBC/DXIL is always first
   ret.push_back(DXBCDXILDisassemblyTarget);
+  // DXC DXIL
+  ret.push_back(DXCDXILDisassemblyTarget);
 
   if(!m_ISAChecked && m_TexRender.BlendPipe)
   {
@@ -581,6 +585,9 @@ rdcstr D3D12Replay::DisassembleShader(ResourceId pipeline, const ShaderReflectio
   DXBC::DXBCContainer *dxbc = sh->GetDXBC();
 
   if(target == DXBCDXILDisassemblyTarget || target.empty())
+    return dxbc->GetDisassembly(false);
+
+  if(target == DXCDXILDisassemblyTarget)
     return dxbc->GetDisassembly(true);
 
   if(target == LiveDriverDisassemblyTarget)
@@ -1957,6 +1964,14 @@ rdcarray<DescriptorAccess> D3D12Replay::GetDescriptorAccess(uint32_t eventId)
         continue;
       }
 
+      // otherwise the access may be to a rootsig element that's not bound if the current event is
+      // not a valid draw or dispatch
+      if(rootIndex >= rootSig.sigelems.size())
+      {
+        access.descriptorStore = ResourceId();
+        continue;
+      }
+
       const D3D12RenderState::SignatureElement &rootEl = rootSig.sigelems[rootIndex];
 
       // this indicates a root parameter
@@ -1975,6 +1990,10 @@ rdcarray<DescriptorAccess> D3D12Replay::GetDescriptorAccess(uint32_t eventId)
         access.byteOffset += (uint32_t)rootEl.offset;
       }
     }
+
+    // remove any invalid / unbound root element accesses
+    ret.removeIf(
+        [](const DescriptorAccess &access) { return access.descriptorStore == ResourceId(); });
   }
 
   return ret;
@@ -2030,10 +2049,6 @@ rdcarray<DescriptorLogicalLocation> D3D12Replay::GetDescriptorLocations(
   {
     WrappedID3D12PipelineState *pipe = (WrappedID3D12PipelineState *)res;
 
-    WrappedID3D12RootSignature *sig =
-        (WrappedID3D12RootSignature *)(pipe->IsGraphics() ? pipe->graphics->pRootSignature
-                                                          : pipe->compute->pRootSignature);
-
     // root constants
     size_t dst = 0;
     for(const DescriptorRange &r : ranges)
@@ -2042,7 +2057,7 @@ rdcarray<DescriptorLogicalLocation> D3D12Replay::GetDescriptorLocations(
 
       for(uint32_t i = 0; i < r.count; i++, rootIndex++, dst++)
       {
-        const D3D12RootSignatureParameter &param = sig->sig.Parameters[rootIndex];
+        const D3D12RootSignatureParameter &param = pipe->usedSig.Parameters[rootIndex];
 
         DescriptorLogicalLocation &l = ret[dst];
 

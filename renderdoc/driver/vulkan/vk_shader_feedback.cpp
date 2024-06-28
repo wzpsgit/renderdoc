@@ -1159,7 +1159,8 @@ void AnnotateShader(const ShaderReflection &refl, const SPIRVPatchData &patchDat
           functionPatchQueue[call.function] = patchArgs;
       }
 
-      if(it.opcode() == rdcspv::Op::ExtInst && Vulkan_PrintfFetch())
+      if((it.opcode() == rdcspv::Op::ExtInst || it.opcode() == rdcspv::Op::ExtInstWithForwardRefsKHR) &&
+         Vulkan_PrintfFetch())
       {
         rdcspv::OpExtInst extinst(it);
         // is this a printf extinst?
@@ -1752,7 +1753,7 @@ bool VulkanReplay::FetchShaderFeedback(uint32_t eventId)
       feedbackData.feedbackStorageSize += arraySize * sizeof(uint32_t);
     };
 
-    for(const VulkanCreationInfo::Pipeline::Shader &sh : pipeInfo.shaders)
+    for(const VulkanCreationInfo::ShaderEntry &sh : pipeInfo.shaders)
     {
       if(!sh.refl)
         continue;
@@ -2236,7 +2237,7 @@ bool VulkanReplay::FetchShaderFeedback(uint32_t eventId)
 
         msg.stage = stage;
 
-        const VulkanCreationInfo::Pipeline::Shader &sh = pipeInfo.shaders[(uint32_t)stage];
+        const VulkanCreationInfo::ShaderEntry &sh = pipeInfo.shaders[(uint32_t)stage];
 
         {
           VulkanCreationInfo::ShaderModule &mod = creationInfo.m_ShaderModule[sh.module];
@@ -2302,7 +2303,7 @@ bool VulkanReplay::FetchShaderFeedback(uint32_t eventId)
           msg.location.mesh.thread[2] = meshThread / (sh.refl->dispatchThreadsDimension[0] *
                                                       sh.refl->dispatchThreadsDimension[1]);
 
-          const VulkanCreationInfo::Pipeline::Shader &tasksh =
+          const VulkanCreationInfo::ShaderEntry &tasksh =
               pipeInfo.shaders[(uint32_t)ShaderStage::Task];
 
           if(tasksh.module == ResourceId())

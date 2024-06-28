@@ -29,6 +29,13 @@
 #include "api/replay/rdcpair.h"
 #include "api/replay/rdcstr.h"
 #include "api/replay/shader_types.h"
+#include "dxbcdxil_debug.h"
+
+struct DXBCContainerDebugger : public ShaderDebugger
+{
+  DXBCContainerDebugger(bool dxil) : isDXIL(dxil){};
+  const bool isDXIL;
+};
 
 namespace DXBCBytecode
 {
@@ -360,6 +367,7 @@ struct CBuffer
   } descriptor;
 
   rdcarray<CBufferVariable> variables;
+  bool hasReflectionData;
 };
 
 struct Reflection
@@ -406,4 +414,7 @@ public:
   virtual void GetLocals(const DXBC::DXBCContainer *dxbc, size_t instruction, uintptr_t offset,
                          rdcarray<SourceVariableMapping> &locals) const = 0;
 };
+
+rdcstr BasicDemangle(const rdcstr &possiblyMangledName);
+
 };

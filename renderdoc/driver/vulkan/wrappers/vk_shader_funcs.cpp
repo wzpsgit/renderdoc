@@ -138,6 +138,25 @@ VkPipelineLayoutCreateInfo WrappedVulkan::UnwrapInfo(const VkPipelineLayoutCreat
   return ret;
 }
 
+template <>
+VkRayTracingPipelineCreateInfoKHR *WrappedVulkan::UnwrapInfos(
+    CaptureState state, const VkRayTracingPipelineCreateInfoKHR *info, uint32_t count)
+{
+  size_t memSize = sizeof(VkRayTracingPipelineCreateInfoKHR) * count;
+  for(uint32_t i = 0; i < count; i++)
+    memSize += GetNextPatchSize(&info[i]);
+
+  byte *tempMem = GetTempMemory(memSize);
+
+  VkRayTracingPipelineCreateInfoKHR *unwrappedInfos = (VkRayTracingPipelineCreateInfoKHR *)tempMem;
+  tempMem = (byte *)(unwrappedInfos + count);
+
+  for(uint32_t i = 0; i < count; i++)
+    unwrappedInfos[i] = *UnwrapStructAndChain(state, tempMem, &info[i]);
+
+  return unwrappedInfos;
+}
+
 // Shader functions
 template <typename SerialiserType>
 bool WrappedVulkan::Serialise_vkCreatePipelineLayout(SerialiserType &ser, VkDevice device,
@@ -415,6 +434,9 @@ bool WrappedVulkan::Serialise_vkCreateShadersEXT(SerialiserType &ser, VkDevice d
       {
         live = GetResourceManager()->WrapResource(Unwrap(device), sh);
         GetResourceManager()->AddLiveResource(Shader, sh);
+
+        m_CreationInfo.m_ShaderObject[live].Init(GetResourceManager(), m_CreationInfo, live,
+                                                 &CreateInfo);
       }
     }
 
@@ -438,7 +460,14 @@ VkResult WrappedVulkan::vkCreateShadersEXT(VkDevice device, uint32_t createInfoC
 
   // to be extra sure just in case the driver doesn't, set shader objects to VK_NULL_HANDLE first.
   for(uint32_t i = 0; i < createInfoCount; i++)
-    pShaders[i] = VK_NULL_HANDLE;
+  {
+    // shader binaries aren't supported, and any calls to vkGetShaderBinaryData should return a
+    // valid but incompatible UUID
+    if(pCreateInfos[i].codeType == VK_SHADER_CODE_TYPE_BINARY_EXT)
+      return VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
+    else
+      pShaders[i] = VK_NULL_HANDLE;
+  }
 
   VkResult ret;
   SERIALISE_TIME_CALL(ret = ObjDisp(device)->CreateShadersEXT(Unwrap(device), createInfoCount,
@@ -484,6 +513,8 @@ VkResult WrappedVulkan::vkCreateShadersEXT(VkDevice device, uint32_t createInfoC
       else
       {
         GetResourceManager()->AddLiveResource(id, pShaders[i]);
+        m_CreationInfo.m_ShaderObject[id].Init(GetResourceManager(), m_CreationInfo, id,
+                                               &pCreateInfos[i]);
       }
     }
   }
@@ -933,6 +964,11 @@ bool WrappedVulkan::Serialise_vkCreateComputePipelines(SerialiserType &ser, VkDe
                            VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR);
     }
 
+    // don't fail when a compile is required because we don't currently replay caches so this will
+    // always happen. This still allows application to use this flag at runtime where it will be
+    // valid
+    CreateInfo.flags &= ~VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+
     VkComputePipelineCreateInfo *unwrapped = UnwrapInfos(m_State, &CreateInfo, 1);
     VkResult ret = ObjDisp(device)->CreateComputePipelines(Unwrap(device), Unwrap(pipelineCache), 1,
                                                            unwrapped, NULL, &pipe);
@@ -1116,6 +1152,296 @@ VkResult WrappedVulkan::vkCreateComputePipelines(VkDevice device, VkPipelineCach
   return ret;
 }
 
+template <typename SerialiserType>
+bool WrappedVulkan::Serialise_vkCreateRayTracingPipelinesKHR(
+    SerialiserType &ser, VkDevice device, VkDeferredOperationKHR deferredOperation,
+    VkPipelineCache pipelineCache, uint32_t createInfoCount,
+    const VkRayTracingPipelineCreateInfoKHR *pCreateInfos, const VkAllocationCallbacks *pAllocator,
+    VkPipeline *pPipelines)
+{
+  SERIALISE_ELEMENT(device);
+  SERIALISE_ELEMENT(pipelineCache);
+  SERIALISE_ELEMENT(createInfoCount);
+  SERIALISE_ELEMENT_LOCAL(CreateInfo, *pCreateInfos).Important();
+  SERIALISE_ELEMENT_OPT(pAllocator);
+  SERIALISE_ELEMENT_LOCAL(Pipeline, GetResID(*pPipelines)).TypedAs("VkPipeline"_lit);
+
+  uint32_t captureReplayHandleSize = 0;
+  bytebuf captureReplayHandles;
+
+  if(ser.IsWriting())
+  {
+    if(m_RTCaptureReplayHandleSize == 0)
+    {
+      VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayProps = {
+          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR,
+      };
+
+      VkPhysicalDeviceProperties2 propBase = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+      propBase.pNext = &rayProps;
+      ObjDisp(m_PhysicalDevice)->GetPhysicalDeviceProperties2(Unwrap(m_PhysicalDevice), &propBase);
+
+      m_RTCaptureReplayHandleSize = rayProps.shaderGroupHandleCaptureReplaySize;
+    }
+
+    RDCASSERTNOTEQUAL(m_RTCaptureReplayHandleSize, 0);
+
+    captureReplayHandleSize = m_RTCaptureReplayHandleSize;
+
+    captureReplayHandles.resize(captureReplayHandleSize * pCreateInfos->groupCount);
+
+    ObjDisp(device)->GetRayTracingCaptureReplayShaderGroupHandlesKHR(
+        Unwrap(device), Unwrap(*pPipelines), 0, pCreateInfos->groupCount,
+        captureReplayHandles.size(), captureReplayHandles.data());
+  }
+
+  SERIALISE_ELEMENT(captureReplayHandleSize).Hidden();
+  SERIALISE_ELEMENT(captureReplayHandles).Hidden();
+
+  SERIALISE_CHECK_READ_ERRORS();
+
+  if(IsReplayingAndReading())
+  {
+    if(m_RTCaptureReplayHandleSize == 0)
+    {
+      VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayProps = {
+          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR,
+      };
+
+      VkPhysicalDeviceProperties2 propBase = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+      propBase.pNext = &rayProps;
+      ObjDisp(m_PhysicalDevice)->GetPhysicalDeviceProperties2(Unwrap(m_PhysicalDevice), &propBase);
+
+      m_RTCaptureReplayHandleSize = rayProps.shaderGroupHandleCaptureReplaySize;
+    }
+
+    RDCASSERTNOTEQUAL(m_RTCaptureReplayHandleSize, 0);
+
+    if(m_RTCaptureReplayHandleSize != captureReplayHandleSize)
+    {
+      SET_ERROR_RESULT(
+          m_FailedReplayResult, ResultCode::APIHardwareUnsupported,
+          "Failed to re-create RT PSO as capture/replay handle size changed from %u to %u.\n"
+          "\n%s",
+          captureReplayHandleSize, m_RTCaptureReplayHandleSize,
+          GetPhysDeviceCompatString(false, false).c_str());
+      return false;
+    }
+
+    VkPipeline pipe = VK_NULL_HANDLE;
+
+    VkPipelineCache origCache = pipelineCache;
+
+    // don't use pipeline caches on replay
+    pipelineCache = VK_NULL_HANDLE;
+
+    // don't fail when a compile is required because we don't currently replay caches so this will
+    // always happen. This still allows application to use this flag at runtime where it will be
+    // valid
+    CreateInfo.flags &= ~VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT;
+
+    VkRayTracingPipelineCreateInfoKHR *unwrapped = UnwrapInfos(m_State, &CreateInfo, 1);
+
+    // patch in the capture/replay handles we saved
+    VkRayTracingShaderGroupCreateInfoKHR *groups =
+        (VkRayTracingShaderGroupCreateInfoKHR *)unwrapped->pGroups;
+
+    for(uint32_t i = 0; i < unwrapped->groupCount; i++)
+      groups[i].pShaderGroupCaptureReplayHandle =
+          captureReplayHandles.data() + captureReplayHandleSize * i;
+
+    VkResult ret = ObjDisp(device)->CreateRayTracingPipelinesKHR(
+        Unwrap(device), VK_NULL_HANDLE, Unwrap(pipelineCache), 1, unwrapped, NULL, &pipe);
+
+    AddResource(Pipeline, ResourceType::PipelineState, "RT Pipeline");
+
+    if(ret == VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS)
+    {
+      SET_ERROR_RESULT(
+          m_FailedReplayResult, ResultCode::APIHardwareUnsupported,
+          "Failed to re-create RT PSO because capture/replay handle was incompatible.\n"
+          "\n%s",
+          GetPhysDeviceCompatString(false, false).c_str());
+      return false;
+    }
+    else if(ret != VK_SUCCESS)
+    {
+      SET_ERROR_RESULT(m_FailedReplayResult, ResultCode::APIReplayFailed,
+                       "Failed creating RT pipeline, VkResult: %s", ToStr(ret).c_str());
+      return false;
+    }
+    else
+    {
+      ResourceId live;
+
+      if(GetResourceManager()->HasWrapper(ToTypedHandle(pipe)))
+      {
+        live = GetResourceManager()->GetNonDispWrapper(pipe)->id;
+
+        // destroy this instance of the duplicate, as we must have matching create/destroy
+        // calls and there won't be a wrapped resource hanging around to destroy this one.
+        ObjDisp(device)->DestroyPipeline(Unwrap(device), pipe, NULL);
+
+        // whenever the new ID is requested, return the old ID, via replacements.
+        GetResourceManager()->ReplaceResource(Pipeline, GetResourceManager()->GetOriginalID(live));
+      }
+      else
+      {
+        live = GetResourceManager()->WrapResource(Unwrap(device), pipe);
+        GetResourceManager()->AddLiveResource(Pipeline, pipe);
+
+        VulkanCreationInfo::Pipeline &pipeInfo = m_CreationInfo.m_Pipeline[live];
+
+        pipeInfo.Init(GetResourceManager(), m_CreationInfo, live, &CreateInfo);
+      }
+    }
+
+    DerivedResource(device, Pipeline);
+    if(origCache != VK_NULL_HANDLE)
+      DerivedResource(origCache, Pipeline);
+    if(CreateInfo.flags & VK_PIPELINE_CREATE_DERIVATIVE_BIT)
+    {
+      if(CreateInfo.basePipelineHandle != VK_NULL_HANDLE)
+        DerivedResource(CreateInfo.basePipelineHandle, Pipeline);
+    }
+    if(CreateInfo.layout != VK_NULL_HANDLE)
+      DerivedResource(CreateInfo.layout, Pipeline);
+    for(uint32_t i = 0; i < CreateInfo.stageCount; i++)
+    {
+      if(CreateInfo.pStages[i].module != VK_NULL_HANDLE)
+        DerivedResource(CreateInfo.pStages[i].module, Pipeline);
+    }
+
+    if(CreateInfo.pLibraryInfo)
+    {
+      for(uint32_t l = 0; l < CreateInfo.pLibraryInfo->libraryCount; l++)
+      {
+        DerivedResource(CreateInfo.pLibraryInfo->pLibraries[l], Pipeline);
+      }
+    }
+  }
+
+  return true;
+}
+
+VkResult WrappedVulkan::vkCreateRayTracingPipelinesKHR(
+    VkDevice device, VkDeferredOperationKHR deferredOperation, VkPipelineCache pipelineCache,
+    uint32_t createInfoCount, const VkRayTracingPipelineCreateInfoKHR *pCreateInfos,
+    const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines)
+{
+  VkResult ret;
+
+  // to be extra sure just in case the driver doesn't, set pipelines to VK_NULL_HANDLE first.
+  for(uint32_t i = 0; i < createInfoCount; i++)
+    pPipelines[i] = VK_NULL_HANDLE;
+
+  // deferred operations are currently not wrapped
+  SERIALISE_TIME_CALL(ret = ObjDisp(device)->CreateRayTracingPipelinesKHR(
+                          Unwrap(device), deferredOperation, Unwrap(pipelineCache), createInfoCount,
+                          UnwrapInfos(m_State, pCreateInfos, createInfoCount), NULL, pPipelines));
+
+  if(ret == VK_SUCCESS || ret == VK_PIPELINE_COMPILE_REQUIRED)
+  {
+    for(uint32_t i = 0; i < createInfoCount; i++)
+    {
+      // any pipelines that are VK_NULL_HANDLE, silently ignore as they failed but we might have
+      // successfully created some before then.
+      if(pPipelines[i] == VK_NULL_HANDLE)
+        continue;
+
+      ResourceId id = GetResourceManager()->WrapResource(Unwrap(device), pPipelines[i]);
+
+      if(IsCaptureMode(m_State))
+      {
+        Chunk *chunk = NULL;
+
+        {
+          CACHE_THREAD_SERIALISER();
+
+          VkRayTracingPipelineCreateInfoKHR modifiedCreateInfo;
+          const VkRayTracingPipelineCreateInfoKHR *createInfo = &pCreateInfos[i];
+
+          if(createInfo->flags & VK_PIPELINE_CREATE_DERIVATIVE_BIT)
+          {
+            // since we serialise one by one, we need to fixup basePipelineIndex
+            if(createInfo->basePipelineIndex != -1 && createInfo->basePipelineIndex < (int)i)
+            {
+              modifiedCreateInfo = *createInfo;
+              modifiedCreateInfo.basePipelineHandle =
+                  pPipelines[modifiedCreateInfo.basePipelineIndex];
+              modifiedCreateInfo.basePipelineIndex = -1;
+              createInfo = &modifiedCreateInfo;
+            }
+          }
+
+          SCOPED_SERIALISE_CHUNK(VulkanChunk::vkCreateRayTracingPipelinesKHR);
+          Serialise_vkCreateRayTracingPipelinesKHR(ser, device, deferredOperation, pipelineCache, 1,
+                                                   createInfo, NULL, &pPipelines[i]);
+
+          chunk = scope.Get();
+        }
+
+        VkResourceRecord *record = GetResourceManager()->AddResourceRecord(pPipelines[i]);
+        record->AddChunk(chunk);
+
+        if(pCreateInfos[i].flags & VK_PIPELINE_CREATE_DERIVATIVE_BIT)
+        {
+          if(pCreateInfos[i].basePipelineHandle != VK_NULL_HANDLE)
+          {
+            VkResourceRecord *baserecord = GetRecord(pCreateInfos[i].basePipelineHandle);
+            record->AddParent(baserecord);
+
+            RDCDEBUG("Creating pipeline %s base is %s", ToStr(record->GetResourceID()).c_str(),
+                     ToStr(baserecord->GetResourceID()).c_str());
+          }
+          else if(pCreateInfos[i].basePipelineIndex != -1 &&
+                  pCreateInfos[i].basePipelineIndex < (int)i)
+          {
+            VkResourceRecord *baserecord = GetRecord(pPipelines[pCreateInfos[i].basePipelineIndex]);
+            record->AddParent(baserecord);
+          }
+        }
+
+        if(pipelineCache != VK_NULL_HANDLE)
+        {
+          VkResourceRecord *cacherecord = GetRecord(pipelineCache);
+          record->AddParent(cacherecord);
+        }
+
+        if(pCreateInfos[i].layout != VK_NULL_HANDLE)
+        {
+          VkResourceRecord *layoutrecord = GetRecord(pCreateInfos[i].layout);
+          record->AddParent(layoutrecord);
+        }
+
+        for(uint32_t s = 0; s < pCreateInfos[i].stageCount; s++)
+        {
+          VkResourceRecord *modulerecord = GetRecord(pCreateInfos[i].pStages[s].module);
+          if(modulerecord)
+            record->AddParent(modulerecord);
+        }
+
+        if(pCreateInfos[i].pLibraryInfo)
+        {
+          for(uint32_t l = 0; l < pCreateInfos[i].pLibraryInfo->libraryCount; l++)
+          {
+            record->AddParent(GetRecord(pCreateInfos[i].pLibraryInfo->pLibraries[l]));
+          }
+        }
+      }
+      else
+      {
+        GetResourceManager()->AddLiveResource(id, pPipelines[i]);
+
+        m_CreationInfo.m_Pipeline[id].Init(GetResourceManager(), m_CreationInfo, id,
+                                           &pCreateInfos[i]);
+      }
+    }
+  }
+
+  return ret;
+}
+
 INSTANTIATE_FUNCTION_SERIALISED(VkResult, vkCreatePipelineLayout, VkDevice device,
                                 const VkPipelineLayoutCreateInfo *pCreateInfo,
                                 const VkAllocationCallbacks *, VkPipelineLayout *pPipelineLayout);
@@ -1141,3 +1467,9 @@ INSTANTIATE_FUNCTION_SERIALISED(VkResult, vkCreateComputePipelines, VkDevice dev
 INSTANTIATE_FUNCTION_SERIALISED(VkResult, vkCreateShadersEXT, VkDevice device,
                                 uint32_t createInfoCount, const VkShaderCreateInfoEXT *pCreateInfos,
                                 const VkAllocationCallbacks *, VkShaderEXT *pShaders);
+
+INSTANTIATE_FUNCTION_SERIALISED(VkResult, vkCreateRayTracingPipelinesKHR, VkDevice device,
+                                VkDeferredOperationKHR deferredOperation,
+                                VkPipelineCache pipelineCache, uint32_t createInfoCount,
+                                const VkRayTracingPipelineCreateInfoKHR *pCreateInfos,
+                                const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines);
