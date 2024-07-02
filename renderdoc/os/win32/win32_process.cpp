@@ -210,6 +210,12 @@ extern "C" __declspec(dllexport) void __cdecl INTERNAL_SetCaptureFile(const char
     RenderDoc::Inst().SetCaptureFileTemplate(capfile);
 }
 
+extern "C" __declspec(dllexport) void __cdecl INTERNAL_TriggerCapture(uint32_t* frames)
+{
+    if(*frames > 0)
+        RenderDoc::Inst().TriggerCapture(*frames);
+}
+
 extern "C" __declspec(dllexport) void __cdecl INTERNAL_SetDebugLogFile(const char *logfile)
 {
   RENDERDOC_SetDebugLogFile(logfile ? logfile : rdcstr());
@@ -1004,6 +1010,13 @@ rdcpair<RDResult, uint32_t> Process::InjectIntoProcess(uint32_t pid,
 
     InjectFunctionCall(hProcess, loc, "INTERNAL_GetTargetControlIdent", &result.second,
                        sizeof(result.second));
+
+    if (opts.delayForDebugger)
+    {
+        uint32_t frames = 1;
+        InjectFunctionCall(hProcess, loc, "INTERNAL_TriggerCapture", &frames,
+            sizeof(uint32_t));
+    }
 
     if(!env.empty())
     {
