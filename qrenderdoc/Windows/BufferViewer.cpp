@@ -2204,8 +2204,8 @@ static void RT_FetchVertexPipeData(IReplayController *r, ICaptureContext &ctx,
 
   {
     // display the same index values
-    data->out1Config.displayIndices = data->inConfig.indices;
-    data->out1Config.displayIndices->ref();
+    //data->out1Config.displayIndices = data->inConfig.indices;
+    //data->out1Config.displayIndices->ref();
 
     data->out1Config.indices = new BufferData();
     if(action && ib.byteStride != 0 && !idata.isEmpty())
@@ -2228,6 +2228,8 @@ static void RT_FetchVertexPipeData(IReplayController *r, ICaptureContext &ctx,
       {
         memcpy(indices, idata.data(), qMin(idata.size(), numIndices * sizeof(uint32_t)));
       }
+      data->out1Config.displayIndices = data->out1Config.indices;
+      data->out1Config.displayIndices->ref();
     }
   }
 

@@ -171,23 +171,23 @@ void NVCounterEnumerator::Impl::InitEnumerateCounters()
         //-----------------
         // Filter out metrics that count "cycles".
         // The RenderDoc replay loop is not designed for reproducing representative cycle counts.
-        auto itr =
-            std::find_if(dimUnits.begin(), dimUnits.end(), [](const NVPW_DimUnitFactor &factor) {
-              switch(factor.dimUnit)
-              {
-                case NVPW_DIM_UNIT_DRAM_CYCLES:
-                case NVPW_DIM_UNIT_FBP_CYCLES:
-                case NVPW_DIM_UNIT_GPC_CYCLES:
-                case NVPW_DIM_UNIT_NVLRX_CYCLES:
-                case NVPW_DIM_UNIT_NVLTX_CYCLES:
-                case NVPW_DIM_UNIT_PCIE_CYCLES:
-                case NVPW_DIM_UNIT_SYS_CYCLES: return true;
-                default: break;
-              }
-              return false;
-            });
-        if(itr != dimUnits.end())
-          continue;
+        //auto itr =
+        //    std::find_if(dimUnits.begin(), dimUnits.end(), [](const NVPW_DimUnitFactor &factor) {
+        //      switch(factor.dimUnit)
+        //      {
+        //        case NVPW_DIM_UNIT_DRAM_CYCLES:
+        //        case NVPW_DIM_UNIT_FBP_CYCLES:
+        //        case NVPW_DIM_UNIT_GPC_CYCLES:
+        //        case NVPW_DIM_UNIT_NVLRX_CYCLES:
+        //        case NVPW_DIM_UNIT_NVLTX_CYCLES:
+        //        case NVPW_DIM_UNIT_PCIE_CYCLES:
+        //        case NVPW_DIM_UNIT_SYS_CYCLES: return true;
+        //        default: break;
+        //      }
+        //      return false;
+        //    });
+        //if(itr != dimUnits.end())
+        //  continue;
       }
 
       CounterDescription desc = {};
