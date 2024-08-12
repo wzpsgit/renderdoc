@@ -192,6 +192,9 @@ PerformanceCounterSelection::PerformanceCounterSelection(ICaptureContext &ctx,
   connect(ui->load, &QPushButton::clicked, this, &PerformanceCounterSelection::Load);
   connect(ui->sampleCounters, &QPushButton::clicked, this, &PerformanceCounterSelection::accept);
   connect(ui->cancel, &QPushButton::clicked, this, &PerformanceCounterSelection::reject);
+  connect(ui->exportAllCounters, &QPushButton::clicked, this,
+          &PerformanceCounterSelection::exportGPUCounters);
+  
 
   connect(ui->counterTree, &RDTreeWidget::itemChanged, [this](RDTreeWidgetItem *item, int) -> void {
     const QVariant d = item->data(0, CounterIdRole);
@@ -260,6 +263,9 @@ PerformanceCounterSelection::PerformanceCounterSelection(ICaptureContext &ctx,
     {
       counterDescriptions.append(controller->DescribeCounter(counter));
     }
+
+    m_counterDesciptions = counterDescriptions;
+
 
     if(ptr)
     {
@@ -464,6 +470,32 @@ void PerformanceCounterSelection::Load()
   {
     RDDialog::critical(this, tr("Error loading config"),
                        tr("Couldn't open path %1 for reading.").arg(filename));
+  }
+}
+
+void PerformanceCounterSelection::exportGPUCounters()
+{
+    QString filePath = QDir::currentPath() + tr("/all_counters.csv");
+    QFile file(tr("all_counters.csv"));
+  if(file.open(QIODevice::WriteOnly | QIODevice::Text))
+  {
+    QTextStream out(&file);
+    out << "Category,name,description,ByteWidth,\n";
+    for(const CounterDescription &desc : m_counterDesciptions)
+    {
+      out << desc.category << "," << desc.name << "," << desc.description << ","
+          << desc.resultByteWidth << "\n";
+    }
+
+        // 导出成功后, 显示弹窗提示用户
+    QMessageBox::information(
+        this, tr("Export Successful"),
+        tr("GPU counter descriptions have been exported to:\n\n%1").arg(filePath), QMessageBox::Ok);
+  }
+  else
+  {
+    QMessageBox::critical(this, tr("Export Failed"),
+                          tr("Failed to export GPU counter descriptions."), QMessageBox::Ok);
   }
 }
 

@@ -48,10 +48,13 @@ public:
   void SetSelectedCounters(const QList<GPUCounter> &counters);
   QList<GPUCounter> GetSelectedCounters() const;
 
+  QVector<CounterDescription> m_counterDesciptions;
+
 public slots:
   // manual slots
   void Save();
   void Load();
+  void exportGPUCounters();
 
 private slots:
   // automatic slots
