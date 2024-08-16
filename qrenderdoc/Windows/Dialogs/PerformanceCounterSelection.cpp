@@ -490,12 +490,18 @@ void PerformanceCounterSelection::exportGPUCounters()
     std::smatch matches;
     std::map<std::string, std::string> fields;
 
+    auto ReplaceCommas = [&](const std::string &str) -> std::string {
+      std::string result = str;
+      std::replace(result.begin(), result.end(), ',', '_');    // 将逗号替换为下划线
+      return result;
+    };
+
+
     std::regex intro_regex(R"((.*?)<br/>HW Unit: <em>(.*?)</em>)");
     if(std::regex_search(input, matches, intro_regex))
     {
-      fields["Intro"] = matches[1].str();
+      fields["Intro"] = ReplaceCommas(matches[1].str());
     }
-
     // 使用正则表达式搜索并拆分字符串
     while(std::regex_search(input, matches, field_regex))
     {
