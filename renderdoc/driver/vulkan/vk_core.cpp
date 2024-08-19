@@ -103,6 +103,8 @@ void VkInitParams::Set(const VkInstanceCreateInfo *pCreateInfo, ResourceId inst)
   InstanceID = inst;
 }
 
+rdcarray<WrappedVulkan*> WrappedVulkan::m_Capturers;
+
 WrappedVulkan::WrappedVulkan()
 {
   RenderDoc::Inst().RegisterMemoryRegion(this, sizeof(WrappedVulkan));
@@ -174,6 +176,8 @@ WrappedVulkan::WrappedVulkan()
 
     m_CreationInfo.pushConstantDescriptorStorage = ResourceIDGen::GetNewUniqueID();
   }
+
+  m_Capturers.emplace_back(this);
 }
 
 WrappedVulkan::~WrappedVulkan()
@@ -2304,336 +2308,355 @@ void WrappedVulkan::StartFrameCapture(DeviceOwnedWindow devWnd)
     GetResourceManager()->MarkMemoryFrameReferenced((*it)->baseResourceMem, (*it)->memOffset,
                                                     (*it)->memSize, eFrameRef_ReadBeforeWrite);
   }
+
+  // trigger capture for not-presenting capturers
+  for(int i = 0; i < m_Capturers.size(); ++i)
+    if(!m_Capturers[i]->m_Presented)
+        m_Capturers[i]->StartFrameCapture(devWnd);
 }
 
 bool WrappedVulkan::EndFrameCapture(DeviceOwnedWindow devWnd)
 {
   if(!IsActiveCapturing(m_State))
-    return true;
+        return true;
 
   if(m_CaptureFailure)
-  {
-    m_LastCaptureFailed = Timing::GetUnixTimestamp();
-    return DiscardFrameCapture(devWnd);
-  }
+    {
+        m_LastCaptureFailed = Timing::GetUnixTimestamp();
+        return DiscardFrameCapture(devWnd);
+    }
 
-  m_CaptureFailure = false;
+    m_CaptureFailure = false;
 
-  VkSwapchainKHR swap = VK_NULL_HANDLE;
+    VkSwapchainKHR swap = VK_NULL_HANDLE;
 
   if(devWnd.windowHandle)
-  {
     {
-      SCOPED_LOCK(m_SwapLookupLock);
-      auto it = m_SwapLookup.find(devWnd.windowHandle);
+        {
+            SCOPED_LOCK(m_SwapLookupLock);
+            auto it = m_SwapLookup.find(devWnd.windowHandle);
       if(it != m_SwapLookup.end())
-        swap = it->second;
-    }
+                swap = it->second;
+        }
 
     if(swap == VK_NULL_HANDLE)
-    {
-      RDCERR("Output window %p provided for frame capture corresponds with no known swap chain",
-             devWnd.windowHandle);
-      return false;
+        {
+            RDCERR("Output window %p provided for frame capture corresponds with no known swap chain",
+                devWnd.windowHandle);
+            return false;
+        }
     }
-  }
 
-  RDCLOG("Finished capture, Frame %u", m_CapturedFrames.back().frameNumber);
+    RDCLOG("Finished capture, Frame %u", m_CapturedFrames.back().frameNumber);
 
-  VkImage backbuffer = VK_NULL_HANDLE;
+    VkImage backbuffer = VK_NULL_HANDLE;
   const ImageInfo *swapImageInfo = NULL;
-  uint32_t swapQueueIndex = 0;
-  VkImageLayout swapLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    uint32_t swapQueueIndex = 0;
+    VkImageLayout swapLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
   if(swap != VK_NULL_HANDLE)
-  {
-    GetResourceManager()->MarkResourceFrameReferenced(GetResID(swap), eFrameRef_Read);
+    {
+        GetResourceManager()->MarkResourceFrameReferenced(GetResID(swap), eFrameRef_Read);
 
     VkResourceRecord *swaprecord = GetRecord(swap);
-    RDCASSERT(swaprecord->swapInfo);
+        RDCASSERT(swaprecord->swapInfo);
 
     const SwapchainInfo &swapInfo = *swaprecord->swapInfo;
 
-    backbuffer = swapInfo.images[swapInfo.lastPresent.imageIndex].im;
-    swapImageInfo = &swapInfo.imageInfo;
-    swapQueueIndex = GetRecord(swapInfo.lastPresent.presentQueue)->queueFamilyIndex;
-    swapLayout =
-        swapInfo.shared ? VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        backbuffer = swapInfo.images[swapInfo.lastPresent.imageIndex].im;
+        swapImageInfo = &swapInfo.imageInfo;
+        swapQueueIndex = GetRecord(swapInfo.lastPresent.presentQueue)->queueFamilyIndex;
+        swapLayout =
+            swapInfo.shared ? VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-    // mark all images referenced as well
+        // mark all images referenced as well
     for(size_t i = 0; i < swapInfo.images.size(); i++)
-      GetResourceManager()->MarkResourceFrameReferenced(GetResID(swapInfo.images[i].im),
-                                                        eFrameRef_Read);
-  }
-  else
-  {
-    // if a swapchain wasn't specified or found, use the last one presented
+            GetResourceManager()->MarkResourceFrameReferenced(GetResID(swapInfo.images[i].im),
+                eFrameRef_Read);
+    }
+    else
+    {
+        // if a swapchain wasn't specified or found, use the last one presented
     VkResourceRecord *swaprecord = GetResourceManager()->GetResourceRecord(m_LastSwap);
     VkResourceRecord *VRBackbufferRecord =
-        GetResourceManager()->GetResourceRecord(m_CurrentVRBackbuffer);
+            GetResourceManager()->GetResourceRecord(m_CurrentVRBackbuffer);
 
     if(swaprecord)
-    {
-      GetResourceManager()->MarkResourceFrameReferenced(swaprecord->GetResourceID(), eFrameRef_Read);
-      RDCASSERT(swaprecord->swapInfo);
+        {
+            GetResourceManager()->MarkResourceFrameReferenced(swaprecord->GetResourceID(), eFrameRef_Read);
+            RDCASSERT(swaprecord->swapInfo);
 
       const SwapchainInfo &swapInfo = *swaprecord->swapInfo;
 
-      backbuffer = swapInfo.images[swapInfo.lastPresent.imageIndex].im;
-      swapImageInfo = &swapInfo.imageInfo;
-      swapQueueIndex = GetRecord(swapInfo.lastPresent.presentQueue)->queueFamilyIndex;
-      swapLayout =
-          swapInfo.shared ? VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            backbuffer = swapInfo.images[swapInfo.lastPresent.imageIndex].im;
+            swapImageInfo = &swapInfo.imageInfo;
+            swapQueueIndex = GetRecord(swapInfo.lastPresent.presentQueue)->queueFamilyIndex;
+            swapLayout =
+                swapInfo.shared ? VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
-      // mark all images referenced as well
+            // mark all images referenced as well
       for(size_t i = 0; i < swapInfo.images.size(); i++)
-        GetResourceManager()->MarkResourceFrameReferenced(GetResID(swapInfo.images[i].im),
-                                                          eFrameRef_Read);
-    }
+                GetResourceManager()->MarkResourceFrameReferenced(GetResID(swapInfo.images[i].im),
+                    eFrameRef_Read);
+        }
     else if(VRBackbufferRecord)
-    {
-      RDCASSERT(VRBackbufferRecord->resInfo);
-      backbuffer = GetResourceManager()->GetCurrentHandle<VkImage>(m_CurrentVRBackbuffer);
-      swapImageInfo = &VRBackbufferRecord->resInfo->imageInfo;
-      swapQueueIndex = m_QueueFamilyIdx;
-      swapLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        {
+            RDCASSERT(VRBackbufferRecord->resInfo);
+            backbuffer = GetResourceManager()->GetCurrentHandle<VkImage>(m_CurrentVRBackbuffer);
+            swapImageInfo = &VRBackbufferRecord->resInfo->imageInfo;
+            swapQueueIndex = m_QueueFamilyIdx;
+            swapLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-      GetResourceManager()->MarkResourceFrameReferenced(m_CurrentVRBackbuffer, eFrameRef_Read);
+            GetResourceManager()->MarkResourceFrameReferenced(m_CurrentVRBackbuffer, eFrameRef_Read);
+        }
     }
-  }
 
-  rdcarray<VkDeviceMemory> DeadMemories;
-  rdcarray<VkBuffer> DeadBuffers;
+    rdcarray<VkDeviceMemory> DeadMemories;
+    rdcarray<VkBuffer> DeadBuffers;
 
-  // transition back to IDLE atomically
-  {
-    SCOPED_WRITELOCK(m_CapTransitionLock);
-    EndCaptureFrame(backbuffer);
-
-    m_State = CaptureState::BackgroundCapturing;
-
-    // m_SuccessfulCapture = false;
-
-    ObjDisp(GetDev())->DeviceWaitIdle(Unwrap(GetDev()));
-
+    // transition back to IDLE atomically
     {
-      SCOPED_LOCK(m_CoherentMapsLock);
+        SCOPED_WRITELOCK(m_CapTransitionLock);
+        EndCaptureFrame(backbuffer);
+
+        m_State = CaptureState::BackgroundCapturing;
+
+        // m_SuccessfulCapture = false;
+
+        ObjDisp(GetDev())->DeviceWaitIdle(Unwrap(GetDev()));
+
+        {
+            SCOPED_LOCK(m_CoherentMapsLock);
       for(auto it = m_CoherentMaps.begin(); it != m_CoherentMaps.end(); ++it)
-      {
-        FreeAlignedBuffer((*it)->memMapState->refData);
-        (*it)->memMapState->refData = NULL;
-        (*it)->memMapState->needRefData = false;
-      }
-    }
+            {
+                FreeAlignedBuffer((*it)->memMapState->refData);
+                (*it)->memMapState->refData = NULL;
+                (*it)->memMapState->needRefData = false;
+            }
+        }
 
-    {
-      SCOPED_LOCK(m_DeviceAddressResourcesLock);
-      DeadMemories.swap(m_DeviceAddressResources.DeadMemories);
-      DeadBuffers.swap(m_DeviceAddressResources.DeadBuffers);
+        {
+            SCOPED_LOCK(m_DeviceAddressResourcesLock);
+            DeadMemories.swap(m_DeviceAddressResources.DeadMemories);
+            DeadBuffers.swap(m_DeviceAddressResources.DeadBuffers);
+        }
     }
-  }
 
   for(VkDeviceMemory m : DeadMemories)
-    vkFreeMemory(m_Device, m, NULL);
+        vkFreeMemory(m_Device, m, NULL);
 
   for(VkBuffer b : DeadBuffers)
-    vkDestroyBuffer(m_Device, b, NULL);
+        vkDestroyBuffer(m_Device, b, NULL);
 
-  // gather backbuffer screenshot
-  const uint32_t maxSize = 2048;
-  RenderDoc::FramePixels fp;
+    // gather backbuffer screenshot
+    const uint32_t maxSize = 2048;
+    RenderDoc::FramePixels fp;
 
   if(backbuffer != VK_NULL_HANDLE)
-  {
-    VkDevice device = GetDev();
-    VkCommandBuffer cmd = GetNextCmd();
+    {
+        VkDevice device = GetDev();
+        VkCommandBuffer cmd = GetNextCmd();
 
     const VkDevDispatchTable *vt = ObjDisp(device);
 
-    vt->DeviceWaitIdle(Unwrap(device));
+        vt->DeviceWaitIdle(Unwrap(device));
 
     const ImageInfo &imageInfo = *swapImageInfo;
 
-    // since this happens during capture, we don't want to start serialising extra buffer creates,
-    // so we manually create & then just wrap.
-    VkBuffer readbackBuf = VK_NULL_HANDLE;
+        // since this happens during capture, we don't want to start serialising extra buffer creates,
+        // so we manually create & then just wrap.
+        VkBuffer readbackBuf = VK_NULL_HANDLE;
 
-    VkResult vkr = VK_SUCCESS;
+        VkResult vkr = VK_SUCCESS;
 
-    // create readback buffer
-    VkBufferCreateInfo bufInfo = {
-        VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        NULL,
-        0,
-        GetByteSize(imageInfo.extent.width, imageInfo.extent.height, 1, imageInfo.format, 0),
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-    };
-    vt->CreateBuffer(Unwrap(device), &bufInfo, NULL, &readbackBuf);
-    CheckVkResult(vkr);
+        // create readback buffer
+        VkBufferCreateInfo bufInfo = {
+            VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            NULL,
+            0,
+            GetByteSize(imageInfo.extent.width, imageInfo.extent.height, 1, imageInfo.format, 0),
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        };
+        vt->CreateBuffer(Unwrap(device), &bufInfo, NULL, &readbackBuf);
+        CheckVkResult(vkr);
 
-    GetResourceManager()->WrapResource(Unwrap(device), readbackBuf);
+        GetResourceManager()->WrapResource(Unwrap(device), readbackBuf);
 
-    MemoryAllocation readbackMem =
-        AllocateMemoryForResource(readbackBuf, MemoryScope::InitialContents, MemoryType::Readback);
+        MemoryAllocation readbackMem =
+            AllocateMemoryForResource(readbackBuf, MemoryScope::InitialContents, MemoryType::Readback);
 
-    vkr = vt->BindBufferMemory(Unwrap(device), Unwrap(readbackBuf), Unwrap(readbackMem.mem),
-                               readbackMem.offs);
-    CheckVkResult(vkr);
+        vkr = vt->BindBufferMemory(Unwrap(device), Unwrap(readbackBuf), Unwrap(readbackMem.mem),
+            readbackMem.offs);
+        CheckVkResult(vkr);
 
     VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, NULL,
                                           VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
 
-    // do image copy
-    vkr = vt->BeginCommandBuffer(Unwrap(cmd), &beginInfo);
-    CheckVkResult(vkr);
+        // do image copy
+        vkr = vt->BeginCommandBuffer(Unwrap(cmd), &beginInfo);
+        CheckVkResult(vkr);
 
-    uint32_t rowPitch = (uint32_t)GetByteSize(imageInfo.extent.width, 1, 1, imageInfo.format, 0);
+        uint32_t rowPitch = (uint32_t)GetByteSize(imageInfo.extent.width, 1, 1, imageInfo.format, 0);
 
-    VkBufferImageCopy cpy = {
-        0,
-        0,
-        0,
-        {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+        VkBufferImageCopy cpy = {
+            0,
+            0,
+            0,
+            {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+            {
+                0,
+                0,
+                0,
+            },
+            {imageInfo.extent.width, imageInfo.extent.height, 1},
+        };
+
+        VkImageMemoryBarrier bbBarrier = {
+            VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            NULL,
+            0,
+            VK_ACCESS_TRANSFER_READ_BIT,
+            swapLayout,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            swapQueueIndex,
+            m_QueueFamilyIdx,
+            Unwrap(backbuffer),
+            {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+        };
+
+        DoPipelineBarrier(cmd, 1, &bbBarrier);
+
+    if(swapQueueIndex != m_QueueFamilyIdx)
         {
-            0,
-            0,
-            0,
-        },
-        {imageInfo.extent.width, imageInfo.extent.height, 1},
-    };
+            VkCommandBuffer extQCmd = GetExtQueueCmd(swapQueueIndex);
 
-    VkImageMemoryBarrier bbBarrier = {
-        VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        NULL,
-        0,
-        VK_ACCESS_TRANSFER_READ_BIT,
-        swapLayout,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        swapQueueIndex,
-        m_QueueFamilyIdx,
-        Unwrap(backbuffer),
-        {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-    };
+            vkr = vt->BeginCommandBuffer(Unwrap(extQCmd), &beginInfo);
+            CheckVkResult(vkr);
 
-    DoPipelineBarrier(cmd, 1, &bbBarrier);
+            DoPipelineBarrier(extQCmd, 1, &bbBarrier);
+
+            ObjDisp(extQCmd)->EndCommandBuffer(Unwrap(extQCmd));
+
+            SubmitAndFlushExtQueue(swapQueueIndex);
+        }
+
+        vt->CmdCopyImageToBuffer(Unwrap(cmd), Unwrap(backbuffer), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            Unwrap(readbackBuf), 1, &cpy);
+
+        // barrier to switch backbuffer back to present layout
+        std::swap(bbBarrier.oldLayout, bbBarrier.newLayout);
+        std::swap(bbBarrier.srcAccessMask, bbBarrier.dstAccessMask);
+        std::swap(bbBarrier.srcQueueFamilyIndex, bbBarrier.dstQueueFamilyIndex);
+
+        VkBufferMemoryBarrier bufBarrier = {
+            VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            NULL,
+            VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_ACCESS_HOST_READ_BIT,
+            VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED,
+            Unwrap(readbackBuf),
+            0,
+            bufInfo.size,
+        };
+
+        DoPipelineBarrier(cmd, 1, &bbBarrier);
+        DoPipelineBarrier(cmd, 1, &bufBarrier);
+
+        vkr = vt->EndCommandBuffer(Unwrap(cmd));
+        CheckVkResult(vkr);
+
+        SubmitCmds();
+        FlushQ();    // need to wait so we can readback
 
     if(swapQueueIndex != m_QueueFamilyIdx)
-    {
-      VkCommandBuffer extQCmd = GetExtQueueCmd(swapQueueIndex);
+        {
+            VkCommandBuffer extQCmd = GetExtQueueCmd(swapQueueIndex);
 
-      vkr = vt->BeginCommandBuffer(Unwrap(extQCmd), &beginInfo);
-      CheckVkResult(vkr);
+            vkr = vt->BeginCommandBuffer(Unwrap(extQCmd), &beginInfo);
+            CheckVkResult(vkr);
 
-      DoPipelineBarrier(extQCmd, 1, &bbBarrier);
+            DoPipelineBarrier(extQCmd, 1, &bbBarrier);
 
-      ObjDisp(extQCmd)->EndCommandBuffer(Unwrap(extQCmd));
+            ObjDisp(extQCmd)->EndCommandBuffer(Unwrap(extQCmd));
 
-      SubmitAndFlushExtQueue(swapQueueIndex);
-    }
+            SubmitAndFlushExtQueue(swapQueueIndex);
+        }
 
-    vt->CmdCopyImageToBuffer(Unwrap(cmd), Unwrap(backbuffer), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                             Unwrap(readbackBuf), 1, &cpy);
+        const VkDeviceSize alignedSize =
+            AlignUp(readbackMem.size, GetDeviceProps().limits.nonCoherentAtomSize);
 
-    // barrier to switch backbuffer back to present layout
-    std::swap(bbBarrier.oldLayout, bbBarrier.newLayout);
-    std::swap(bbBarrier.srcAccessMask, bbBarrier.dstAccessMask);
-    std::swap(bbBarrier.srcQueueFamilyIndex, bbBarrier.dstQueueFamilyIndex);
-
-    VkBufferMemoryBarrier bufBarrier = {
-        VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-        NULL,
-        VK_ACCESS_TRANSFER_WRITE_BIT,
-        VK_ACCESS_HOST_READ_BIT,
-        VK_QUEUE_FAMILY_IGNORED,
-        VK_QUEUE_FAMILY_IGNORED,
-        Unwrap(readbackBuf),
-        0,
-        bufInfo.size,
-    };
-
-    DoPipelineBarrier(cmd, 1, &bbBarrier);
-    DoPipelineBarrier(cmd, 1, &bufBarrier);
-
-    vkr = vt->EndCommandBuffer(Unwrap(cmd));
-    CheckVkResult(vkr);
-
-    SubmitCmds();
-    FlushQ();    // need to wait so we can readback
-
-    if(swapQueueIndex != m_QueueFamilyIdx)
-    {
-      VkCommandBuffer extQCmd = GetExtQueueCmd(swapQueueIndex);
-
-      vkr = vt->BeginCommandBuffer(Unwrap(extQCmd), &beginInfo);
-      CheckVkResult(vkr);
-
-      DoPipelineBarrier(extQCmd, 1, &bbBarrier);
-
-      ObjDisp(extQCmd)->EndCommandBuffer(Unwrap(extQCmd));
-
-      SubmitAndFlushExtQueue(swapQueueIndex);
-    }
-
-    const VkDeviceSize alignedSize =
-        AlignUp(readbackMem.size, GetDeviceProps().limits.nonCoherentAtomSize);
-
-    // map memory and readback
+        // map memory and readback
     byte *pData = NULL;
-    vkr = vt->MapMemory(Unwrap(device), Unwrap(readbackMem.mem), readbackMem.offs, alignedSize, 0,
+        vkr = vt->MapMemory(Unwrap(device), Unwrap(readbackMem.mem), readbackMem.offs, alignedSize, 0,
                         (void **)&pData);
-    CheckVkResult(vkr);
-    RDCASSERT(pData != NULL);
+        CheckVkResult(vkr);
+        RDCASSERT(pData != NULL);
 
-    fp.len = (uint32_t)readbackMem.size;
-    fp.data = new uint8_t[fp.len];
-    memcpy(fp.data, pData, fp.len);
+        fp.len = (uint32_t)readbackMem.size;
+        fp.data = new uint8_t[fp.len];
+        memcpy(fp.data, pData, fp.len);
 
-    VkMappedMemoryRange range = {
-        VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
-        NULL,
-        Unwrap(readbackMem.mem),
-        readbackMem.offs,
-        alignedSize,
-    };
+        VkMappedMemoryRange range = {
+            VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+            NULL,
+            Unwrap(readbackMem.mem),
+            readbackMem.offs,
+            alignedSize,
+        };
 
-    vkr = vt->InvalidateMappedMemoryRanges(Unwrap(device), 1, &range);
-    CheckVkResult(vkr);
+        vkr = vt->InvalidateMappedMemoryRanges(Unwrap(device), 1, &range);
+        CheckVkResult(vkr);
 
-    vt->UnmapMemory(Unwrap(device), Unwrap(readbackMem.mem));
+        vt->UnmapMemory(Unwrap(device), Unwrap(readbackMem.mem));
 
-    // delete all
-    vt->DestroyBuffer(Unwrap(device), Unwrap(readbackBuf), NULL);
-    GetResourceManager()->ReleaseWrappedResource(readbackBuf);
+        // delete all
+        vt->DestroyBuffer(Unwrap(device), Unwrap(readbackBuf), NULL);
+        GetResourceManager()->ReleaseWrappedResource(readbackBuf);
 
-    ResourceFormat fmt = MakeResourceFormat(imageInfo.format);
-    fp.width = imageInfo.extent.width;
-    fp.height = imageInfo.extent.height;
-    fp.pitch = rowPitch;
-    fp.stride = fmt.compByteWidth * fmt.compCount;
-    fp.bpc = fmt.compByteWidth;
-    fp.bgra = fmt.BGRAOrder();
-    fp.max_width = maxSize;
-    fp.pitch_requirement = 8;
+        ResourceFormat fmt = MakeResourceFormat(imageInfo.format);
+        fp.width = imageInfo.extent.width;
+        fp.height = imageInfo.extent.height;
+        fp.pitch = rowPitch;
+        fp.stride = fmt.compByteWidth * fmt.compCount;
+        fp.bpc = fmt.compByteWidth;
+        fp.bgra = fmt.BGRAOrder();
+        fp.max_width = maxSize;
+        fp.pitch_requirement = 8;
     switch(fmt.type)
-    {
-      case ResourceFormatType::R10G10B10A2:
-        fp.stride = 4;
-        fp.buf1010102 = true;
-        break;
-      case ResourceFormatType::R5G6B5:
-        fp.stride = 2;
-        fp.buf565 = true;
-        break;
-      case ResourceFormatType::R5G5B5A1:
-        fp.stride = 2;
-        fp.buf5551 = true;
-        break;
-      default: break;
+        {
+        case ResourceFormatType::R10G10B10A2:
+            fp.stride = 4;
+            fp.buf1010102 = true;
+            break;
+        case ResourceFormatType::R5G6B5:
+            fp.stride = 2;
+            fp.buf565 = true;
+            break;
+        case ResourceFormatType::R5G5B5A1:
+            fp.stride = 2;
+            fp.buf5551 = true;
+            break;
+        default: break;
+        }
     }
-  }
+
+    // output rdc files for not-presenting capturers
+    for (int i = 0; i < m_Capturers.size(); ++i)
+        if (!m_Capturers[i]->m_Presented)
+            m_Capturers[i]->OutputRDC(&fp);
+
+    return OutputRDC(&fp);
+}
+
+bool WrappedVulkan::OutputRDC(RenderDoc::FramePixels* fp)
+{
+  
+    if (fp == 0)
+        return false;
 
   RDCFile *rdc =
-      RenderDoc::Inst().CreateRDC(RDCDriver::Vulkan, m_CapturedFrames.back().frameNumber, fp);
+      RenderDoc::Inst().CreateRDC(RDCDriver::Vulkan, m_CapturedFrames.back().frameNumber, *fp);
 
   StreamWriter *captureWriter = NULL;
 
@@ -2861,6 +2884,9 @@ void WrappedVulkan::AdvanceFrame()
 
 void WrappedVulkan::Present(DeviceOwnedWindow devWnd)
 {
+  // flag as presented
+  m_Presented = true;
+
   bool activeWindow = devWnd.windowHandle == NULL || RenderDoc::Inst().IsActiveWindow(devWnd);
 
   RenderDoc::Inst().AddActiveDriver(RDCDriver::Vulkan, true);
