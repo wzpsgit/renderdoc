@@ -644,6 +644,21 @@ public:
           width = s.width;
           height = s.height;
 
+
+
+
+          rdcarray<TextureDescription> texs = renderer->GetTextures();
+          for (const TextureDescription& desc : texs)
+          {
+              if (desc.creationFlags & TextureCategory::SwapBuffer)
+              {
+                width = std::max( desc.width,width);
+                height = std::max(desc.height,height);
+                std::cout << "get target size\n";
+                break;
+              }
+          }
+
           //// replay last action
           //auto actions = renderer->GetRootActions();
           //auto lastAction = actions.back();       
