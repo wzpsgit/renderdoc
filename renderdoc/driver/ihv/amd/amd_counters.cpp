@@ -115,6 +115,7 @@ bool AMDCounters::Init(ApiType apiType, void *pContext)
     return false;
   }
 
+
   bool disableCounters = false;
 
   if(apiType == ApiType::Dx12 && m_dx12DebugLayerEnabled)
@@ -156,6 +157,10 @@ bool AMDCounters::Init(ApiType apiType, void *pContext)
     return false;
   }
 
+
+
+
+
   GpaLoggingType loggingType = kGpaLoggingError;
 #if ENABLED(RDOC_DEVEL)
   loggingType = kGpaLoggingErrorAndMessage;
@@ -176,7 +181,7 @@ bool AMDCounters::Init(ApiType apiType, void *pContext)
   }
 
   status = m_pGPUPerfAPI->GpaOpenContext(
-      pContext, kGpaOpenContextHideSoftwareCountersBit | kGpaOpenContextClockModeNoneBit,
+      pContext, kGpaOpenContextDefaultBit | kGpaOpenContextEnableHardwareCountersBit,
       &m_gpaContextId);
   if(AMD_FAILED(status))
   {
@@ -185,6 +190,7 @@ bool AMDCounters::Init(ApiType apiType, void *pContext)
     SAFE_DELETE(m_pGPUPerfAPI);
     return false;
   }
+
 
   m_Counters = EnumerateCounters();
   m_apiType = apiType;
@@ -230,6 +236,9 @@ std::map<uint32_t, CounterDescription> AMDCounters::EnumerateCounters()
 
   GpaUInt32 num;
   GpaStatus status = m_pGPUPerfAPI->GpaGetNumCounters(m_gpaContextId, &num);
+
+
+
   if(AMD_FAILED(status))
   {
     GPA_ERROR("Get number of counters", status);
@@ -420,8 +429,10 @@ bool AMDCounters::BeginMeasurementMode(ApiType apiType, void *pContext)
   RDCASSERT(!m_gpaContextId);
 
   GpaStatus status = m_pGPUPerfAPI->GpaOpenContext(
-      pContext, kGpaOpenContextHideSoftwareCountersBit | kGpaOpenContextClockModePeakBit,
+      pContext, kGpaOpenContextDefaultBit | kGpaOpenContextEnableHardwareCountersBit,
       &m_gpaContextId);
+
+
   if(AMD_FAILED(status))
   {
     GPA_WARNING("Creating context for analysis failed", status);
@@ -565,6 +576,8 @@ rdcarray<CounterResult> AMDCounters::GetCounterData(uint32_t sessionID, uint32_t
       }
     }
   } while(!isReady);
+
+
 
   GpaSessionId gpaSessionId = m_gpaSessionInfo.at(sessionID);
   size_t sampleResultSize = 0u;

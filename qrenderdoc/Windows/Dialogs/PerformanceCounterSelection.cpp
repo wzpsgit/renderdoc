@@ -31,6 +31,8 @@
 
 #include <unordered_map>
 
+
+
 #define JSON_ID "rdocPerformanceCounterSettings"
 #define JSON_VER 1
 
@@ -475,6 +477,45 @@ void PerformanceCounterSelection::Load()
 
 void PerformanceCounterSelection::exportGPUCounters()
 {
+
+    bool isAMD = false;
+    bool isNV = false;
+    
+    for (auto counterdesc : m_counterDesciptions)
+    {
+        if (IsAMDCounter(counterdesc.counter))
+        {
+          isAMD = true;
+          break;
+        }
+        if (IsNvidiaCounter(counterdesc.counter))
+        {
+          isNV = true;
+          break;
+        }
+
+    }
+
+   if(isAMD)
+   {
+      exportAMDGPUCounters();
+   }
+   else if(isNV)
+   {
+     exportNVGPUCounters();
+   }
+
+   else
+   {
+     QMessageBox::critical(this, tr("Export Failed"), tr("Unknow GPU counter"), QMessageBox::Ok);
+   }
+   
+
+   
+}
+
+void PerformanceCounterSelection::exportNVGPUCounters()
+{
   auto strip = [&](std::string &str) -> std::string & {
     auto front = str.find_first_not_of(' ');
     if(front != std::string::npos)
@@ -495,7 +536,6 @@ void PerformanceCounterSelection::exportGPUCounters()
       std::replace(result.begin(), result.end(), ',', '_');    // 将逗号替换为下划线
       return result;
     };
-
 
     std::regex intro_regex(R"((.*?)<br/>HW Unit: <em>(.*?)</em>)");
     if(std::regex_search(input, matches, intro_regex))
@@ -523,8 +563,8 @@ void PerformanceCounterSelection::exportGPUCounters()
     return fields;
   };
 
-  QString filePath = QDir::currentPath() + tr("/all_counters.csv");
-  QFile file(tr("all_counters.csv"));
+  QString filePath = QDir::currentPath() + tr("/all_nv_counters.csv");
+  QFile file(tr("all_nv_counters.csv"));
   if(file.open(QIODevice::WriteOnly | QIODevice::Text))
   {
     QTextStream out(&file);
@@ -532,27 +572,54 @@ void PerformanceCounterSelection::exportGPUCounters()
            "Unit\n";
     for(const CounterDescription &desc : m_counterDesciptions)
     {
-     
-        std::string str = desc.description.c_str();
-        auto details = parse_description(str);
+      std::string str = desc.description.c_str();
+      auto details = parse_description(str);
 
-        out << desc.category << "," << desc.name << "," << details["Intro"].c_str() << ","
-            << desc.resultByteWidth << "," << details["HW Unit"].c_str() << ","
-            << details["MetricType"].c_str() << "," << details["RollupOp"].c_str() << ","
-            << details["Submetric"].c_str() << "," << details["DimUnit"].c_str() << "\n";
-      
+      out << desc.category << "," << desc.name << "," << details["Intro"].c_str() << ","
+          << desc.resultByteWidth << "," << details["HW Unit"].c_str() << ","
+          << details["MetricType"].c_str() << "," << details["RollupOp"].c_str() << ","
+          << details["Submetric"].c_str() << "," << details["DimUnit"].c_str() << "\n";
     }
 
     // 导出成功后, 显示弹窗提示用户
     QMessageBox::information(
         this, tr("Export Successful"),
-        tr("GPU counter descriptions have been exported to:\n\n%1").arg(filePath), QMessageBox::Ok);
+        tr("NV GPU counter descriptions have been exported to:\n\n%1").arg(filePath), QMessageBox::Ok);
   }
   else
   {
     QMessageBox::critical(this, tr("Export Failed"),
                           tr("Failed to export GPU counter descriptions."), QMessageBox::Ok);
   }
+}
+
+void PerformanceCounterSelection::exportAMDGPUCounters()
+{
+
+  QString filePath = QDir::currentPath() + tr("/all_amd_counters.csv");
+  QFile file(tr("all_amd_counters.csv"));
+  if(file.open(QIODevice::WriteOnly | QIODevice::Text))
+  {
+    QTextStream out(&file);
+    out << "Category,Name,Description\n";
+    for(const CounterDescription &desc : m_counterDesciptions)
+    {
+
+         out << desc.category << "," << desc.name << "," << desc.description << "\n";
+    }
+
+    // 导出成功后, 显示弹窗提示用户
+    QMessageBox::information(
+        this, tr("Export Successful"),
+        tr("AMD GPU counter descriptions have been exported to:\n\n%1").arg(filePath), QMessageBox::Ok);
+  }
+  else
+  {
+    QMessageBox::critical(this, tr("Export Failed"),
+                          tr("Failed to export GPU counter descriptions."), QMessageBox::Ok);
+  }
+
+
 }
 
 void PerformanceCounterSelection::on_enabledCounters_activated(const QModelIndex &index)

@@ -1,316 +1,308 @@
 //==============================================================================
-// Copyright (c) 2010-2021 Advanced Micro Devices, Inc. All rights reserved.
-/// @author AMD Developer Tools Team
-/// @file
-/// @brief  Defines the data types and enumerations used by GPUPerfAPI.
-///         This file does not need to be directly included by an application
-///         that uses GPUPerfAPI.
+// Copyright (c) 2020-2021 Advanced Micro Devices, Inc. All rights reserved.
+/// \author AMD Developer Tools Team
+/// \file
+/// \brief  Deprecated header; use gpu_performance_api/gpu_perf_api_types.h
 //==============================================================================
 
-#ifndef GPU_PERFORMANCE_API_GPU_PERF_API_TYPES_H_
-#define GPU_PERFORMANCE_API_GPU_PERF_API_TYPES_H_
+#ifndef GPU_PERF_API_TYPES_H_
+#define GPU_PERF_API_TYPES_H_
+
+#pragma message("Warning: You are including a deprecated header. Please use gpu_performance_api/gpu_perf_api_types.h")
 
 #include <limits.h>
 
+#include "gpu_performance_api/gpu_perf_api_types.h"
+
+// Platform specific definitions
 #ifdef _WIN32
 #include <Windows.h>
-typedef HMODULE LibHandle;  ///< Typedef for HMODULE for loading the library on windows.
-typedef GUID    GpaUuid;    ///< Typedef for Windows GUID definition.
+typedef GUID GPA_UUID;  ///< typedef for Windows GUID definition
 #else
-typedef void* LibHandle;  ///< Typedef for void* for loading the library on linux.
-
-/// @brief Structure for holding UUID.
-typedef struct _GpaUuid
+/// Structure for holding UUID
+typedef struct GPA_UUID
 {
-    unsigned long  data_1;     ///< First part of the UUID data.
-    unsigned short data_2;     ///< Second part of the UUID data.
-    unsigned short data_3;     ///< Third part of the UUID data.
-    unsigned char  data_4[8];  ///< Fourth part of the UUID data.
+    unsigned long  m_data1;     ///< first part of the UUID data
+    unsigned short m_data2;     ///< second part of the UUID data
+    unsigned short m_data3;     ///< third part of the UUID data
+    unsigned char  m_data4[8];  ///< fourth part of the UUID data
 
 #ifdef __cplusplus
-    /// @brief Operator overloaded function for equality comparison.
-    ///
-    /// @param other_uuid The item being compared.
-    ///
-    /// @return True if UUIDs are equal otherwise false.
-    bool operator==(const _GpaUuid& other_uuid)
+    /// operator overloaded function for equality comparison
+    /// \param otherUUID the item being compared
+    /// \return true if UUIDs are equal otherwise false
+    bool operator==(const GPA_UUID& otherUUID)
     {
-        bool is_equal = true;
-        is_equal &= data_1 == other_uuid.data_1;
-        is_equal &= data_2 == other_uuid.data_2;
-        is_equal &= data_3 == other_uuid.data_3;
-        is_equal &= data_4[0] == other_uuid.data_4[0];
-        is_equal &= data_4[1] == other_uuid.data_4[1];
-        is_equal &= data_4[2] == other_uuid.data_4[2];
-        is_equal &= data_4[3] == other_uuid.data_4[3];
-        is_equal &= data_4[4] == other_uuid.data_4[4];
-        is_equal &= data_4[5] == other_uuid.data_4[5];
-        is_equal &= data_4[6] == other_uuid.data_4[6];
-        is_equal &= data_4[7] == other_uuid.data_4[7];
-        return is_equal;
+        bool isEqual = true;
+        isEqual &= m_data1 == otherUUID.m_data1;
+        isEqual &= m_data2 == otherUUID.m_data2;
+        isEqual &= m_data3 == otherUUID.m_data3;
+        isEqual &= m_data4[0] == otherUUID.m_data4[0];
+        isEqual &= m_data4[1] == otherUUID.m_data4[1];
+        isEqual &= m_data4[2] == otherUUID.m_data4[2];
+        isEqual &= m_data4[3] == otherUUID.m_data4[3];
+        isEqual &= m_data4[4] == otherUUID.m_data4[4];
+        isEqual &= m_data4[5] == otherUUID.m_data4[5];
+        isEqual &= m_data4[6] == otherUUID.m_data4[6];
+        isEqual &= m_data4[7] == otherUUID.m_data4[7];
+        return isEqual;
     }
 #endif
-} GpaUuid;
+} GPA_UUID;
 #endif
 
-typedef float          GpaFloat32;  ///< GPA specific type for 32-bit float.
-typedef double         GpaFloat64;  ///< GPA specific type for 64-bit float.
-typedef unsigned char  GpaUInt8;    ///< GPA specific type for 8-bit unsigned integer.
-typedef unsigned short GpaUInt16;   ///< GPA specific type for 16-bit unsigned integer.
-typedef unsigned int   GpaUInt32;   ///< GPA specific type for 32-bit unsigned integer.
+// Type definitions
+typedef float          gpa_float32;  ///< GPA specific type for 32-bit float
+typedef double         gpa_float64;  ///< GPA specific type for 64-bit float
+typedef unsigned char  gpa_uint8;    ///< GPA specific type for 8-bit unsigned integer
+typedef unsigned short gpa_uint16;   ///< GPA specific type for 16-bit unsigned integer
+typedef unsigned int   gpa_uint32;   ///< GPA specific type for 32-bit unsigned integer
 
 #ifdef _WIN32
-typedef unsigned __int64 GpaUInt64;  ///< GPA specific type for 64-bit unsigned integer.
-#else                                // _WIN32
-#ifndef GPA_LIB_DECL
-#ifdef __cplusplus
-#define GPA_LIB_DECL extern "C"
-#else
-#define GPA_LIB_DECL
-#endif  // _cplusplus
+typedef unsigned __int64 gpa_uint64;  ///< GPA specific type for 64-bit unsigned integer
+#else                                 // _WIN32
+
+typedef unsigned int       UINT;        ///< GPA specific type to define UINT on Linux
+typedef unsigned long long gpa_uint64;  ///< GPA specific type for 64-bit unsigned integer
+
 #endif
 
-typedef unsigned long long GpaUInt64;  ///< GPA specific type for 64-bit unsigned integer.
+// Limit definitions
 
-#ifndef UNREFERENCED_PARAMETER
-#define UNREFERENCED_PARAMETER(x) (void)(x)
-#endif
-
-#define _strcmpi(a, b) strcasecmp(a, b)
-#define _stricmp(a, b) strcasecmp(a, b)
-
-#define strcpy_s(dst, ndst, src) strcpy(dst, src)
-#define strcat_s(dst, ndst, src) strcat(dst, src)
-#define strtok_s(a, b, c) strtok(a, b)
-#define strnlen_s(a, b) strlen(a)
-#define strncpy_s(a, b, c, d) strncpy(a, c, d)
-
-#define wcscat_s(dest, dest_size, src) wcscat(dest, src)
-#define wcscpy_s(dest, dest_size, src) wcscpy(dest, src)
-#define wcsncpy_s(dest, dest_size, src, count) wcsncpy(dest, src, count)
-#define wcsnlen_s(str, str_length) wcsnlen(str, str_length)
-
-#ifndef TRUE
-#define TRUE 1
-#endif
-
-#ifndef FALSE
-#define FALSE 0
-#endif
-
-#endif  // __linux__
-
-/// Macro for max uint32.
+/// Macro for max uint32
 #define GPA_UINT32_MAX UINT_MAX
 
-/// Macro for max uint64.
+/// Macro for max uint64
 #define GPA_UINT64_MAX ULLONG_MAX
 
-/// Macro to define opaque pointer types.
-#define GPA_DEFINE_OBJECT(ObjectType) typedef struct _Gpa##ObjectType* Gpa##ObjectType;
+/// Macro to define opaque pointer types
+#define GPA_DEFINE_OBJECT_DEPRECATED(ObjectType) typedef struct _Gpa##ObjectType* GPA_##ObjectType;
 
-/// Context ID opaque pointer type.
-GPA_DEFINE_OBJECT(ContextId)
+/// Context ID opaque pointer type
+GPA_DEFINE_OBJECT_DEPRECATED(ContextId)
 
-/// Session ID opaque pointer type.
-GPA_DEFINE_OBJECT(SessionId)
+/// Session ID opaque pointer type
+GPA_DEFINE_OBJECT_DEPRECATED(SessionId)
 
-/// Command List ID opaque pointer type.
-GPA_DEFINE_OBJECT(CommandListId)
+/// Command List ID opaque pointer type
+GPA_DEFINE_OBJECT_DEPRECATED(CommandListId)
 
-/// Macro for null command list.
+/// Macro for null command list
 #define GPA_NULL_COMMAND_LIST NULL
 
-/// @brief Status enumerations.
+/// Status enumerations
 typedef enum
 {
-    kGpaStatusOk                                    = 0,
-    kGpaStatusResultNotReady                        = 1,
-    kGpaStatusMax                                   = kGpaStatusResultNotReady,
-    kGpaStatusErrorNullPointer                      = -1,
-    kGpaStatusErrorContextNotOpen                   = -2,
-    kGpaStatusErrorContextAlreadyOpen               = -3,
-    kGpaStatusErrorIndexOutOfRange                  = -4,
-    kGpaStatusErrorCounterNotFound                  = -5,
-    kGpaStatusErrorAlreadyEnabled                   = -6,
-    kGpaStatusErrorNoCountersEnabled                = -7,
-    kGpaStatusErrorNotEnabled                       = -8,
-    kGpaStatusErrorCommandListAlreadyEnded          = -9,
-    kGpaStatusErrorCommandListAlreadyStarted        = -10,
-    kGpaStatusErrorCommandListNotEnded              = -11,
-    kGpaStatusErrorNotEnoughPasses                  = -12,
-    kGpaStatusErrorSampleNotStarted                 = -13,
-    kGpaStatusErrorSampleAlreadyStarted             = -14,
-    kGpaStatusErrorSampleNotEnded                   = -15,
-    kGpaStatusErrorCannotChangeCountersWhenSampling = -16,
-    kGpaStatusErrorSessionNotFound                  = -17,
-    kGpaStatusErrorSampleNotFound                   = -18,
-    kGpaStatusErrorContextNotFound                  = -19,
-    kGpaStatusErrorCommandListNotFound              = -20,
-    kGpaStatusErrorReadingSampleResult              = -21,
-    kGpaStatusErrorVariableNumberOfSamplesInPasses  = -22,
-    kGpaStatusErrorFailed                           = -23,
-    kGpaStatusErrorHardwareNotSupported             = -24,
-    kGpaStatusErrorDriverNotSupported               = -25,
-    kGpaStatusErrorApiNotSupported                  = -26,
-    kGpaStatusErrorInvalidParameter                 = -27,
-    kGpaStatusErrorLibLoadFailed                    = -28,
-    kGpaStatusErrorLibLoadMajorVersionMismatch      = -29,
-    kGpaStatusErrorLibLoadMinorVersionMismatch      = -30,
-    kGpaStatusErrorGpaNotInitialized                = -31,
-    kGpaStatusErrorGpaAlreadyInitialized            = -32,
-    kGpaStatusErrorSampleInSecondaryCommandList     = -33,
-    kGpaStatusErrorIncompatibleSampleTypes          = -34,
-    kGpaStatusErrorSessionAlreadyStarted            = -35,
-    kGpaStatusErrorSessionNotStarted                = -36,
-    kGpaStatusErrorSessionNotEnded                  = -37,
-    kGpaStatusErrorInvalidDataType                  = -38,
-    kGpaStatusErrorInvalidCounterEquation           = -39,
-    kGpaStatusErrorTimeout                          = -40,
-    kGpaStatusErrorLibAlreadyLoaded                 = -41,
-    kGpaStatusErrorOtherSessionActive               = -42,
-    kGpaStatusErrorException                        = -43,
-    kGpaStatusMin                                   = kGpaStatusErrorException,
-    kGpaStatusInternal                              = 256,  ///< Status codes used internally within GPUPerfAPI.
-} GpaStatus;
+    GPA_STATUS_OK                                         = 0,
+    GPA_STATUS_RESULT_NOT_READY                           = 1,
+    GPA_STATUS_MAX                                        = GPA_STATUS_RESULT_NOT_READY,
+    GPA_STATUS_ERROR_NULL_POINTER                         = -1,
+    GPA_STATUS_ERROR_CONTEXT_NOT_OPEN                     = -2,
+    GPA_STATUS_ERROR_CONTEXT_ALREADY_OPEN                 = -3,
+    GPA_STATUS_ERROR_INDEX_OUT_OF_RANGE                   = -4,
+    GPA_STATUS_ERROR_COUNTER_NOT_FOUND                    = -5,
+    GPA_STATUS_ERROR_ALREADY_ENABLED                      = -6,
+    GPA_STATUS_ERROR_NO_COUNTERS_ENABLED                  = -7,
+    GPA_STATUS_ERROR_NOT_ENABLED                          = -8,
+    GPA_STATUS_ERROR_COMMAND_LIST_ALREADY_ENDED           = -9,
+    GPA_STATUS_ERROR_COMMAND_LIST_ALREADY_STARTED         = -10,
+    GPA_STATUS_ERROR_COMMAND_LIST_NOT_ENDED               = -11,
+    GPA_STATUS_ERROR_NOT_ENOUGH_PASSES                    = -12,
+    GPA_STATUS_ERROR_SAMPLE_NOT_STARTED                   = -13,
+    GPA_STATUS_ERROR_SAMPLE_ALREADY_STARTED               = -14,
+    GPA_STATUS_ERROR_SAMPLE_NOT_ENDED                     = -15,
+    GPA_STATUS_ERROR_CANNOT_CHANGE_COUNTERS_WHEN_SAMPLING = -16,
+    GPA_STATUS_ERROR_SESSION_NOT_FOUND                    = -17,
+    GPA_STATUS_ERROR_SAMPLE_NOT_FOUND                     = -18,
+    GPA_STATUS_ERROR_CONTEXT_NOT_FOUND                    = -19,
+    GPA_STATUS_ERROR_COMMAND_LIST_NOT_FOUND               = -20,
+    GPA_STATUS_ERROR_READING_SAMPLE_RESULT                = -21,
+    GPA_STATUS_ERROR_VARIABLE_NUMBER_OF_SAMPLES_IN_PASSES = -22,
+    GPA_STATUS_ERROR_FAILED                               = -23,
+    GPA_STATUS_ERROR_HARDWARE_NOT_SUPPORTED               = -24,
+    GPA_STATUS_ERROR_DRIVER_NOT_SUPPORTED                 = -25,
+    GPA_STATUS_ERROR_API_NOT_SUPPORTED                    = -26,
+    GPA_STATUS_ERROR_INVALID_PARAMETER                    = -27,
+    GPA_STATUS_ERROR_LIB_LOAD_FAILED                      = -28,
+    GPA_STATUS_ERROR_LIB_LOAD_MAJOR_VERSION_MISMATCH      = -29,
+    GPA_STATUS_ERROR_LIB_LOAD_MINOR_VERSION_MISMATCH      = -30,
+    GPA_STATUS_ERROR_GPA_NOT_INITIALIZED                  = -31,
+    GPA_STATUS_ERROR_GPA_ALREADY_INITIALIZED              = -32,
+    GPA_STATUS_ERROR_SAMPLE_IN_SECONDARY_COMMAND_LIST     = -33,
+    GPA_STATUS_ERROR_INCOMPATIBLE_SAMPLE_TYPES            = -34,
+    GPA_STATUS_ERROR_SESSION_ALREADY_STARTED              = -35,
+    GPA_STATUS_ERROR_SESSION_NOT_STARTED                  = -36,
+    GPA_STATUS_ERROR_SESSION_NOT_ENDED                    = -37,
+    GPA_STATUS_ERROR_INVALID_DATATYPE                     = -38,
+    GPA_STATUS_ERROR_INVALID_COUNTER_EQUATION             = -39,
+    GPA_STATUS_ERROR_TIMEOUT                              = -40,
+    GPA_STATUS_ERROR_LIB_ALREADY_LOADED                   = -41,
+    GPA_STATUS_ERROR_OTHER_SESSION_ACTIVE                 = -42,
+    GPA_STATUS_ERROR_EXCEPTION                            = -43,
+    GPA_STATUS_MIN                                        = GPA_STATUS_ERROR_EXCEPTION,
+    // following are status codes used internally within GPUPerfAPI
+    GPA_STATUS_INTERNAL = 256,
+} GPA_Status;
 
-/// Typedef for a set of flags that can be combined into an integer.
-typedef GpaUInt32 GpaFlags;
+/// Typedef for a set of flags that can be combined into an integer
+typedef gpa_uint32 GPA_Flags;
 
-/// @brief Flags to pass in when initializing GPA.
+/// Flags to pass into GPA_Initialize()
 typedef enum
 {
-    kGpaInitializeDefaultBit = 0,  ///< Initialize GPA using all default options.
-} GpaInitializeBits;
+    GPA_INITIALIZE_DEFAULT_BIT = 0,  ///< Initialize GPA using all default options
+} GPA_Initialize_Bits;
 
 /// Allows GPA_Initialize_Bits to be combined into a single parameter.
-typedef GpaFlags GpaInitializeFlags;
+typedef GPA_Flags GPA_InitializeFlags;
 
-/// @brief Flags to pass in when opening a GPA context.
+/// Flags to pass into GPA_OpenContext()
 typedef enum
 {
-    kGpaOpenContextDefaultBit =
-        0,  ///< Open contexts using all default options (all counters exposed, clocks are set to stable frequencies which are known to be power and thermal sustainable. The ratio between the engine and memory clock frequencies will be kept the same as much as possible).
-    kGpaOpenContextHideDerivedCountersBit  = 0x01,                                   ///< Prevent the derived counters from being exposed.
-    kGpaOpenContextHidePublicCountersBit   = kGpaOpenContextHideDerivedCountersBit,  ///< For backwards compatibility.
-    kGpaOpenContextHideSoftwareCountersBit = 0x02,                                   ///< Prevent the software counters from being exposed.
-    kGpaOpenContextHideHardwareCountersBit = 0x04,                                   ///< Prevent the hardware counters from being exposed.
-    kGpaOpenContextClockModeNoneBit = 0x0008,  ///< Clock frequencies are not altered and may vary widely during profiling based on GPU usage and other factors.
-    kGpaOpenContextClockModePeakBit =
+    GPA_OPENCONTEXT_DEFAULT_BIT =
+        0,  ///< Open contexts using all default options (all counters exposed, clocks are set to stable frequencies which are known to be power and thermal sustainable. The ratio between the engine and memory clock frequencies will be kept the same as much as possible)
+    GPA_OPENCONTEXT_HIDE_DERIVED_COUNTERS_BIT  = 0x01,                                       ///< Prevent the derived counters from being exposed
+    GPA_OPENCONTEXT_HIDE_PUBLIC_COUNTERS_BIT   = GPA_OPENCONTEXT_HIDE_DERIVED_COUNTERS_BIT,  ///< For backwards compatibility
+    GPA_OPENCONTEXT_HIDE_SOFTWARE_COUNTERS_BIT = 0x02,  ///< Prevent the software counters from being exposed
+    GPA_OPENCONTEXT_HIDE_HARDWARE_COUNTERS_BIT = 0x04,  ///< Prevent the hardware counters from being exposed
+    GPA_OPENCONTEXT_CLOCK_MODE_NONE_BIT =
+        0x0008,  ///< Clock frequencies are not altered and may vary widely during profiling based on GPU usage and other factors.
+    GPA_OPENCONTEXT_CLOCK_MODE_PEAK_BIT =
         0x0010,  ///< Clocks are set to peak frequencies. In most cases this is safe to do for short periods of time while profiling. However, the GPU clock frequencies could still be reduced from peak level under power and thermal constraints.
-    kGpaOpenContextClockModeMinMemoryBit =
+    GPA_OPENCONTEXT_CLOCK_MODE_MIN_MEMORY_BIT =
         0x0020,  ///< The memory clock frequency is set to the minimum level, while the engine clock is set to a power and thermal sustainable level.
-    kGpaOpenContextClockModeMinEngineBit =
+    GPA_OPENCONTEXT_CLOCK_MODE_MIN_ENGINE_BIT =
         0x0040,  ///< The engine clock frequency is set to the minimum level, while the memory clock is set to a power and thermal sustainable level.
-    kGpaOpenContextEnableHardwareCountersBit = 0x0080  ///< Include the hardware counters when exposing counters.
-} GpaOpenContextBits;
+    GPA_OPENCONTEXT_ENABLE_HARDWARE_COUNTERS_BIT = 0x0080  ///< Include the hardware counters when exposing counters
+} GPA_OpenContext_Bits;
 
 /// Allows GPA_OpenContext_Bits to be combined into a single parameter.
-typedef GpaFlags GpaOpenContextFlags;
+typedef GPA_Flags GPA_OpenContextFlags;
 
-/// @brief Value type definitions.
+/// Value type definitions
 typedef enum
 {
-    kGpaDataTypeFloat64,  ///< Result will be a 64-bit float.
-    kGpaDataTypeUint64,   ///< Result will be a 64-bit unsigned int.
-    kGpaDataTypeLast      ///< Marker indicating last element.
-} GpaDataType;
+    GPA_DATA_TYPE_FLOAT64,  ///< Result will be a 64-bit float
+    GPA_DATA_TYPE_UINT64,   ///< Result will be a 64-bit unsigned int
+    GPA_DATA_TYPE__LAST     ///< Marker indicating last element
+} GPA_Data_Type;
 
-/// @brief Result usage type definitions.
+/// Result usage type definitions
 typedef enum
 {
-    kGpaUsageTypeRatio,         ///< Result is a ratio of two different values or types.
-    kGpaUsageTypePercentage,    ///< Result is a percentage, typically within [0,100] range, but may be higher for certain counters.
-    kGpaUsageTypeCycles,        ///< Result is in clock cycles.
-    kGpaUsageTypeMilliseconds,  ///< Result is in milliseconds.
-    kGpaUsageTypeBytes,         ///< Result is in bytes.
-    kGpaUsageTypeItems,         ///< Result is a count of items or objects (ie, vertices, triangles, threads, pixels, texels, etc).
-    kGpaUsageTypeKilobytes,     ///< Result is in kilobytes.
-    kGpaUsageTypeNanoseconds,   ///< Result is in nanoseconds.
-    kGpaUsageTypeLast           ///< Marker indicating last element.
-} GpaUsageType;
+    GPA_USAGE_TYPE_RATIO,         ///< Result is a ratio of two different values or types
+    GPA_USAGE_TYPE_PERCENTAGE,    ///< Result is a percentage, typically within [0,100] range, but may be higher for certain counters
+    GPA_USAGE_TYPE_CYCLES,        ///< Result is in clock cycles
+    GPA_USAGE_TYPE_MILLISECONDS,  ///< Result is in milliseconds
+    GPA_USAGE_TYPE_BYTES,         ///< Result is in bytes
+    GPA_USAGE_TYPE_ITEMS,         ///< Result is a count of items or objects (ie, vertices, triangles, threads, pixels, texels, etc)
+    GPA_USAGE_TYPE_KILOBYTES,     ///< Result is in kilobytes
+    GPA_USAGE_TYPE_NANOSECONDS,   ///< Result is in nanoseconds
+    GPA_USAGE_TYPE__LAST          ///< Marker indicating last element
+} GPA_Usage_Type;
 
-/// @brief Logging type definitions.
+/// Logging type definitions
 typedef enum
 {
-    kGpaLoggingNone                    = 0x00,                                                      ///< No logging.
-    kGpaLoggingError                   = 0x01,                                                      ///< Log errors.
-    kGpaLoggingMessage                 = 0x02,                                                      ///< Log messages.
-    kGpaLoggingErrorAndMessage         = kGpaLoggingError | kGpaLoggingMessage,                     ///< Log errors and messages.
-    kGpaLogErrorAndMessage             = kGpaLoggingErrorAndMessage,                                ///< Log errors and messages - Backward Compatibility.
-    kGpaLoggingTrace                   = 0x04,                                                      ///< Log traces.
-    kGpaLoggingErrorAndTrace           = kGpaLoggingError | kGpaLoggingTrace,                       ///< Log errors and traces.
-    kGpaLoggingMessageAndTrace         = kGpaLoggingMessage | kGpaLoggingTrace,                     ///< Log messages traces.
-    kGpaLoggingErrorMessageAndTrace    = kGpaLoggingError | kGpaLoggingMessage | kGpaLoggingTrace,  ///< Log errors and messages and traces.
-    kGpaLoggingAll                     = 0xFF,                                                      ///< Log all.
-    kGpaLoggingDebugError              = 0x0100,                                                    ///< Log debugging errors.
-    kGpaLoggingDebugMessage            = 0x0200,                                                    ///< Log debugging messages.
-    kGpaLoggingDebugTrace              = 0x0400,                                                    ///< Log debugging traces.
-    kGpaLoggingDebugCounterDefinitions = 0x0800,                                                    ///< Log debugging counter definitions.
-    kGpaLoggingInternal                = 0x1000,                                                    ///< Log internal GPA.
-    kGpaLoggingDebugAll                = 0xFF00                                                     ///< Log all debugging.
-} GpaLoggingType;
+    GPA_LOGGING_NONE                    = 0x00,                                                         ///< No logging
+    GPA_LOGGING_ERROR                   = 0x01,                                                         ///< Log errors
+    GPA_LOGGING_MESSAGE                 = 0x02,                                                         ///< Log messages
+    GPA_LOGGING_ERROR_AND_MESSAGE       = GPA_LOGGING_ERROR | GPA_LOGGING_MESSAGE,                      ///< Log errors and messages
+    GPA_LOG_ERROR_AND_MESSAGE           = GPA_LOGGING_ERROR_AND_MESSAGE,                                ///< Log errors and messages - Backward Compatibility
+    GPA_LOGGING_TRACE                   = 0x04,                                                         ///< Log traces
+    GPA_LOGGING_ERROR_AND_TRACE         = GPA_LOGGING_ERROR | GPA_LOGGING_TRACE,                        ///< Log errors and traces
+    GPA_LOGGING_MESSAGE_AND_TRACE       = GPA_LOGGING_MESSAGE | GPA_LOGGING_TRACE,                      ///< Log messages traces
+    GPA_LOGGING_ERROR_MESSAGE_AND_TRACE = GPA_LOGGING_ERROR | GPA_LOGGING_MESSAGE | GPA_LOGGING_TRACE,  ///< Log errors and messages and traces
+    GPA_LOGGING_ALL                     = 0xFF,                                                         ///< Log all
+    GPA_LOGGING_DEBUG_ERROR             = 0x0100,                                                       ///< Log debugging errors
+    GPA_LOGGING_DEBUG_MESSAGE           = 0x0200,                                                       ///< Log debugging messages
+    GPA_LOGGING_DEBUG_TRACE             = 0x0400,                                                       ///< Log debugging traces
+    GPA_LOGGING_DEBUG_COUNTERDEFS       = 0x0800,                                                       ///< Log debugging counter defs
+    GPA_LOGGING_INTERNAL                = 0x1000,                                                       ///< Log internal GPA
+    GPA_LOGGING_DEBUG_ALL               = 0xFF00                                                        ///< Log all debugging
+} GPA_Logging_Type;
 
-/// @brief APIs Supported (either publicly or internally) by GPUPerfAPI.
+/// APIs Supported (either publicly or internally) by GPUPerfAPI
 typedef enum
 {
-    kGpaApiStart,                     ///< Marker indicating first element.
-    kGpaApiDirectx11 = kGpaApiStart,  ///< DirectX 11 API.
-    kGpaApiDirectx12,                 ///< DirectX 12 API.
-    kGpaApiOpengl,                    ///< OpenGL API.
-    kGpaApiOpencl,                    ///< OpenCL API.
-    kGpaApiDeprecated,                ///< API support has been deprecated.
-    kGpaApiVulkan,                    ///< Vulkan API.
-    kGpaApiNoSupport,                 ///< APIs which are not yet supported or for which support has been removed.
-    kGpaApiLast                       ///< Marker indicating last element.
-} GpaApiType;
+    GPA_API__START,                       ///< Marker indicating first element
+    GPA_API_DIRECTX_11 = GPA_API__START,  ///< DirectX 11 API
+    GPA_API_DIRECTX_12,                   ///< DirectX 12 API
+    GPA_API_OPENGL,                       ///< OpenGL API
+    GPA_API_OPENCL,                       ///< OpenCL API
+    GPA_API_DEPRECATED,                   ///< API support has been deprecated
+    GPA_API_VULKAN,                       ///< Vulkan API
+    GPA_API_NO_SUPPORT,                   ///< APIs which are not yet supported or for which support has been removed
+    GPA_API__LAST                         ///< Marker indicating last element
+} GPA_API_Type;
 
-/// @brief This enum needs to be kept up to date with GDT_HW_GENERATION in DeviceInfo.h.
+/// This enum needs to be kept up to date with GDT_HW_GENERATION in DeviceInfo.h
 typedef enum
 {
-    kGpaHwGenerationNone,                                   ///< Undefined hw generation.
-    kGpaHwGenerationNvidia,                                 ///< Used for nvidia cards by GPA.
-    kGpaHwGenerationIntel,                                  ///< Used for Intel cards by GPA.
-    kGpaHwGenerationGfx6,                                   ///< GFX IP 6.
-    kGpaHwGenerationSouthernIsland = kGpaHwGenerationGfx6,  ///< For backwards compatibility.
-    kGpaHwGenerationGfx7,                                   ///< GFX IP 7.
-    kGpaHwGenerationSeaIsland = kGpaHwGenerationGfx7,       ///< For backwards compatibility.
-    kGpaHwGenerationGfx8,                                   ///< GFX IP 8.
-    kGpaHwGenerationVolcanicIsland = kGpaHwGenerationGfx8,  ///< For backwards compatibility.
-    kGpaHwGenerationGfx9,                                   ///< GFX IP 9.
-    kGpaHwGenerationGfx10,                                  ///< GFX IP 10.
-    kGpaHwGenerationGfx103,                                 ///< GFX IP 10.3.
-    kGpaHwGenerationLast                                    ///< Marker indicating last element.
-} GpaHwGeneration;
+    GPA_HW_GENERATION_NONE,                                     ///< undefined hw generation
+    GPA_HW_GENERATION_NVIDIA,                                   ///< Used for nvidia cards by GPA
+    GPA_HW_GENERATION_INTEL,                                    ///< Used for Intel cards by GPA
+    GPA_HW_GENERATION_GFX6,                                     ///< GFX IP 6
+    GPA_HW_GENERATION_SOUTHERNISLAND = GPA_HW_GENERATION_GFX6,  ///< For backwards compatibility
+    GPA_HW_GENERATION_GFX7,                                     ///< GFX IP 7
+    GPA_HW_GENERATION_SEAISLAND = GPA_HW_GENERATION_GFX7,       ///< For backwards compatibility
+    GPA_HW_GENERATION_GFX8,                                     ///< GFX IP 8
+    GPA_HW_GENERATION_VOLCANICISLAND = GPA_HW_GENERATION_GFX8,  ///< For backwards compatibility
+    GPA_HW_GENERATION_GFX9,                                     ///< GFX IP 9
+    GPA_HW_GENERATION_GFX10,                                    ///< GFX IP 10
+    GPA_HW_GENERATION_GFX103,                                   ///< GFX IP 10.3
+    GPA_HW_GENERATION__LAST                                     ///< Marker indicating last element
+} GPA_Hw_Generation;
 
-/// @brief Command list / command buffer types.
+/// Command list / command buffer types
 typedef enum
 {
-    kGpaCommandListNone,       ///< No command list, used for APIs that do not directly expose command lists or command buffers (DirectX 11, OpenGL, OpenCL).
-    kGpaCommandListPrimary,    ///< Corresponds to DirectX 12 direct/compute/copy command list and Vulkan primary vkCommandBuffer.
-    kGpaCommandListSecondary,  ///< Corresponds to DirectX 12 bundle and Vulkan secondary vkCommandBuffer.
-    kGpaCommandListLast        ///< Marker indicating last element.
-} GpaCommandListType;
+    GPA_COMMAND_LIST_NONE,       ///< no command list, used for APIs that do not directly expose command lists or command buffers (DirectX 11, OpenGL, OpenCL)
+    GPA_COMMAND_LIST_PRIMARY,    ///< corresponds to DirectX 12 direct/compute/copy command list and Vulkan primary vkCommandBuffer
+    GPA_COMMAND_LIST_SECONDARY,  ///< corresponds to DirectX 12 bundle and Vulkan secondary vkCommandBuffer
+    GPA_COMMAND_LIST__LAST       ///< Marker indicating last element
+} GPA_Command_List_Type;
 
-/// @brief Counter sample types - used to indicate which sample types are supported by a counter.
+#ifdef GPA_PIX_BUILD
+/// Allows GPA_SQTT_Instruction_Bits to be combined into a single parameter.
+typedef GPA_Flags GPA_SqttInstructionFlags;
+#endif // GPA_PIX_BUILD
+
+/// Counter sample types - used to indicate which sample types are supported by a counter
 typedef enum
 {
-    kGpaCounterSampleTypeDiscrete,  ///< Discrete counter type -- discrete counters provide a single value per workload measured.
-} GpaCounterSampleType;
+#ifdef GPA_PIX_BUILD
+    GPA_COUNTER_SAMPLE_TYPE_DISCRETE = 0x1,  ///< Discrete counter type -- discrete counters provide a single value per workload measured
+    GPA_COUNTER_SAMPLE_TYPE_STREAMING = 0x2,  ///< Streaming counter type -- streaming counters provide interval-based multiple values per workload measured
+#else
+    GPA_COUNTER_SAMPLE_TYPE_DISCRETE,  ///< Discrete counter type -- discrete counters provide a single value per workload measured
+#endif // !GPA_PIX_BUILD
+} GPA_Counter_Sample_Type;
 
-/// @brief Context Sample types -- used to indicate which sample types are supported by a context. A context can support any combination of these.
+/// Context Sample types -- used to indicate which sample types are supported by a context. A context can support any combination of these
 typedef enum
 {
-    kGpaContextSampleTypeDiscreteCounter = 0x01,  ///< Discrete counters sample type -- discrete counters provide a single value per workload measured.
-} GpaContextSampleTypeBits;
+    GPA_CONTEXT_SAMPLE_TYPE_DISCRETE_COUNTER = 0x01,  ///< Discrete counters sample type -- discrete counters provide a single value per workload measured
+#ifdef GPA_PIX_BUILD
+    GPA_CONTEXT_SAMPLE_TYPE_STREAMING_COUNTER =
+    0x02,  ///< Streaming counters sample type -- streaming counters provide interval-based multiple values per workload measured
+    GPA_CONTEXT_SAMPLE_TYPE_SQTT =
+    0x04,  ///< SQTT sample type -- provides detailed wave-level SQTT information per workload measured. For some driver stacks, the SQTT-data may be wrapped in an RGP-file format
+#endif // GPA_PIX_BUILD
+} GPA_Context_Sample_Type_Bits;
 
-/// @brief Allows GPA_Context_Sample_Type_Bits to be combined into a single parameter.
-typedef GpaFlags GpaContextSampleTypeFlags;
+/// Allows GPA_Context_Sample_Type_Bits to be combined into a single parameter.
+typedef GPA_Flags GPA_ContextSampleTypeFlags;
 
-/// @brief Session Sample types -- used by the client to tell GPUPerfAPI which sample types will be created for a session.
+/// Session Sample types -- used by the client to tell GPUPerfAPI which sample types will be created for a session
 typedef enum
 {
-    kGpaSessionSampleTypeDiscreteCounter,  ///< Discrete counters sample type -- discrete counters provide a single value per workload measured.
-} GpaSessionSampleType;
+    GPA_SESSION_SAMPLE_TYPE_DISCRETE_COUNTER,  ///< Discrete counters sample type -- discrete counters provide a single value per workload measured
+#ifdef GPA_PIX_BUILD
+    GPA_SESSION_SAMPLE_TYPE_STREAMING_COUNTER,  ///< Streaming counters sample type -- streaming counters provide interval-based multiple values per workload measured
+    GPA_SESSION_SAMPLE_TYPE_SQTT,  ///< SQTT sample type -- provides detailed wave-level SQTT information per workload measured. For some driver stacks, the SQTT-data may be wrapped in an RGP-file format.
+    GPA_SESSION_SAMPLE_TYPE__LAST
+#endif // GPA_PIX_BUILD
+} GPA_Session_Sample_Type;
 
-#endif  // GPU_PERFORMANCE_API_GPU_PERF_API_TYPES_H_
+#endif  // GPU_PERF_API_TYPES_H_

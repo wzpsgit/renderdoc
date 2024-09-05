@@ -1,12 +1,16 @@
 //==============================================================================
-// Copyright (c) 2018-2021 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2018-2023 Advanced Micro Devices, Inc. All rights reserved.
 /// @author AMD Developer Tools Team
 /// @file
-/// @brief  GPA Stub entry points.
+/// @brief  Deprecated header; use gpu_performance_api/gpu_perf_api_stub.h
 //==============================================================================
 
-#ifndef GPU_PERFORMANCE_API_GPU_PERF_API_STUB_H_
-#define GPU_PERFORMANCE_API_GPU_PERF_API_STUB_H_
+#ifndef GPU_PERF_API_STUB_H_
+#define GPU_PERF_API_STUB_H_
+
+#pragma message("Warning: You are including a deprecated header. Please use gpu_performance_api/gpu_perf_api_stub.h")
+
+#include "gpu_performance_api/gpu_perf_api_stub.h"
 
 #ifdef _WIN32
 #pragma warning(push)
@@ -15,284 +19,470 @@
 
 #include <string.h>
 
-#define RETURN_GPA_SUCCESS return kGpaStatusOk
+#define RETURN_GPA_SUCCESS_DEPRECATED return GPA_STATUS_OK
 
-static inline GpaStatus GpaRegisterLoggingCallback(GpaLoggingType logging_type, GpaLoggingCallbackPtrType callback_function)
+// Logging
+
+static inline GPA_Status GPA_RegisterLoggingCallback(GPA_Logging_Type loggingType, GPA_LoggingCallbackPtrType pCallbackFuncPtr)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaInitialize(GpaInitializeFlags flags)
+// Init / Destroy GPA
+
+static inline GPA_Status GPA_Initialize(GPA_InitializeFlags flags)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaDestroy()
+static inline GPA_Status GPA_Destroy()
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaOpenContext(void* context, GpaOpenContextFlags flags, GpaContextId* context_id)
+// Context Startup / Finish
+
+static inline GPA_Status GPA_OpenContext(void* pContext, GPA_OpenContextFlags flags, GPA_ContextId* pContextId)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaCloseContext(GpaContextId context_id)
+static inline GPA_Status GPA_CloseContext(GPA_ContextId contextId)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetSupportedSampleTypes(GpaContextId gpa_context_id, GpaContextSampleTypeFlags* sample_types)
+// Context Interrogation
+
+static inline GPA_Status GPA_GetSupportedSampleTypes(GPA_ContextId contextId, GPA_ContextSampleTypeFlags* pSampleTypes)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetDeviceAndRevisionId(GpaContextId gpa_context_id, GpaUInt32* device_id, GpaUInt32* revision_id)
+static inline GPA_Status GPA_GetDeviceAndRevisionId(GPA_ContextId contextId, gpa_uint32* pDeviceId, gpa_uint32* pRevisionId)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetDeviceName(GpaContextId gpa_context_id, const char** device_name)
+static inline GPA_Status GPA_GetDeviceName(GPA_ContextId contextId, const char** ppDeviceName)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetNumCounters(GpaContextId gpa_context_id, GpaUInt32* number_of_counters)
+#ifdef GPA_PIX_BUILD
+static inline GPA_Status GPA_UpdateDeviceInformation(GPA_ContextId context_id,
+                                                     gpa_uint32    num_shader_engines,
+                                                     gpa_uint32    num_compute_units,
+                                                     gpa_uint32    num_simds,
+                                                     gpa_uint32    num_waves_per_simd)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+#endif // GPA_PIX_BUILD
+
+// Counter Interrogation
+
+#ifdef GPA_PIX_BUILD
+static inline GPA_Status GPA_GetNumCounters(GPA_SessionId sessionId, gpa_uint32* pCount)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetCounterName(GpaContextId gpa_context_id, GpaUInt32 index, const char** counter_name)
+static inline GPA_Status GPA_GetCounterName(GPA_SessionId sessionId, gpa_uint32 index, const char** ppName)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetCounterIndex(GpaContextId gpa_context_id, const char* counter_name, GpaUInt32* counter_index)
+static inline GPA_Status GPA_GetCounterIndex(GPA_SessionId sessionId, const char* pCounterName, gpa_uint32* pIndex)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetCounterGroup(GpaContextId gpa_context_id, GpaUInt32 index, const char** counter_group)
+static inline GPA_Status GPA_GetCounterGroup(GPA_SessionId sessionId, gpa_uint32 index, const char** ppGroup)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetCounterDescription(GpaContextId gpa_context_id, GpaUInt32 index, const char** counter_description)
+static inline GPA_Status GPA_GetCounterDescription(GPA_SessionId sessionId, gpa_uint32 index, const char** ppDescription)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetCounterDataType(GpaContextId gpa_context_id, GpaUInt32 index, GpaDataType* counter_data_type)
+static inline GPA_Status GPA_GetCounterDataType(GPA_SessionId sessionId, gpa_uint32 index, GPA_Data_Type* pCounterDataType)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetCounterUsageType(GpaContextId gpa_context_id, GpaUInt32 index, GpaUsageType* counter_usage_type)
+static inline GPA_Status GPA_GetCounterUsageType(GPA_SessionId sessionId, gpa_uint32 index, GPA_Usage_Type* pCounterUsageType)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetCounterUuid(GpaContextId gpa_context_id, GpaUInt32 index, GpaUuid* counter_uuid)
+static inline GPA_Status GPA_GetCounterUuid(GPA_SessionId sessionId, gpa_uint32 index, GPA_UUID* pCounterUuid)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetCounterSampleType(GpaContextId gpa_context_id, GpaUInt32 index, GpaCounterSampleType* counter_sample_type)
+static inline GPA_Status GPA_GetCounterSampleType(GPA_SessionId sessionId, gpa_uint32 index, GPA_Counter_Sample_Type* pCounterSampleType)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+#else
+static inline GPA_Status GPA_GetNumCounters(GPA_ContextId contextId, gpa_uint32* pCount)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetDataTypeAsStr(GpaDataType counter_data_type, const char** type_as_str)
+static inline GPA_Status GPA_GetCounterName(GPA_ContextId contextId, gpa_uint32 index, const char** ppName)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetUsageTypeAsStr(GpaUsageType counter_usage_type, const char** usage_type_as_str)
+static inline GPA_Status GPA_GetCounterIndex(GPA_ContextId contextId, const char* pCounterName, gpa_uint32* pIndex)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaCreateSession(GpaContextId gpa_context_id, GpaSessionSampleType sample_type, GpaSessionId* session_id)
+static inline GPA_Status GPA_GetCounterGroup(GPA_ContextId contextId, gpa_uint32 index, const char** ppGroup)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaDeleteSession(GpaSessionId gpa_session_id)
+static inline GPA_Status GPA_GetCounterDescription(GPA_ContextId contextId, gpa_uint32 index, const char** ppDescription)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaBeginSession(GpaSessionId gpa_session_id)
+static inline GPA_Status GPA_GetCounterDataType(GPA_ContextId contextId, gpa_uint32 index, GPA_Data_Type* pCounterDataType)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaEndSession(GpaSessionId gpa_session_id)
+static inline GPA_Status GPA_GetCounterUsageType(GPA_ContextId contextId, gpa_uint32 index, GPA_Usage_Type* pCounterUsageType)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaEnableCounter(GpaSessionId gpa_session_id, GpaUInt32 counter_index)
+static inline GPA_Status GPA_GetCounterUuid(GPA_ContextId contextId, gpa_uint32 index, GPA_UUID* pCounterUuid)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaDisableCounter(GpaSessionId gpa_session_id, GpaUInt32 counter_index)
+static inline GPA_Status GPA_GetCounterSampleType(GPA_ContextId contextId, gpa_uint32 index, GPA_Counter_Sample_Type* pCounterSampleType)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+#endif
+
+static inline GPA_Status GPA_GetDataTypeAsStr(GPA_Data_Type counterDataType, const char** ppTypeStr)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaEnableCounterByName(GpaSessionId gpa_session_id, const char* counter_name)
+static inline GPA_Status GPA_GetUsageTypeAsStr(GPA_Usage_Type counterUsageType, const char** ppUsageTypeStr)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaDisableCounterByName(GpaSessionId gpa_session_id, const char* counter_name)
+// Session handling
+
+static inline GPA_Status GPA_CreateSession(GPA_ContextId contextId, GPA_Session_Sample_Type sampleType, GPA_SessionId* pSessionId)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaEnableAllCounters(GpaSessionId gpa_session_id)
+static inline GPA_Status GPA_DeleteSession(GPA_SessionId sessionId)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaDisableAllCounters(GpaSessionId gpa_session_id)
+static inline GPA_Status GPA_BeginSession(GPA_SessionId sessionId)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetPassCount(GpaSessionId gpa_session_id, GpaUInt32* number_of_passes)
+#ifdef GPA_PIX_BUILD
+static inline GPA_Status GPA_RestartSession(GPA_SessionId sessionId)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+#endif // GPA_PIX_BUILD
+
+static inline GPA_Status GPA_EndSession(GPA_SessionId sessionId)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetNumEnabledCounters(GpaSessionId gpa_session_id, GpaUInt32* enabled_counter_count)
+#ifdef GPA_PIX_BUILD
+static GPA_Status GPA_AbortSession(GPA_SessionId sessionId)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetEnabledIndex(GpaSessionId gpa_session_id, GpaUInt32 enabledNumber, GpaUInt32* enabled_counter_index)
+// SQTT functions
+
+static GPA_Status GPA_SqttGetInstructionMask(GPA_SessionId sessionId, GPA_SqttInstructionFlags* pSqttInstructionMask)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaIsCounterEnabled(GpaSessionId gpa_session_id, GpaUInt32 counter_index)
+static GPA_Status GPA_SqttSetInstructionMask(GPA_SessionId sessionId, GPA_SqttInstructionFlags sqttInstructionMask)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaBeginCommandList(GpaSessionId       session_id,
-                                            GpaUInt32          pass_index,
-                                            void*              command_list,
-                                            GpaCommandListType command_list_type,
-                                            GpaCommandListId*  gpa_command_list_id)
+static GPA_Status GPA_SqttGetComputeUnitId(GPA_SessionId sessionId, gpa_uint32* pSqttComputeUnitId)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaEndCommandList(GpaCommandListId command_list_id)
+static GPA_Status GPA_SqttSetComputeUnitId(GPA_SessionId sessionId, gpa_uint32 sqttComputeUnitId)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaBeginSample(GpaUInt32 sample_id, GpaCommandListId command_list_id)
+static GPA_Status GPA_SqttWarmup(GPA_SessionId sessionId)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaEndSample(GpaCommandListId command_list_id)
+static GPA_Status GPA_SqttBegin(GPA_SessionId sessionId, void* pCommandList)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaContinueSampleOnCommandList(GpaUInt32 source_sample_id, GpaCommandListId primary_gpa_command_list_id)
+static GPA_Status GPA_SqttEnd(GPA_SessionId sessionId, void* pCommandList)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaCopySecondarySamples(GpaCommandListId secondary_gpa_command_list_id,
-                                                GpaCommandListId primary_gpa_command_list_id,
-                                                GpaUInt32        number_of_samples,
-                                                GpaUInt32*       new_sample_ids)
+static GPA_Status GPA_SqttGetSampleResultSize(GPA_SessionId sessionId, size_t* pSampleResultSizeInBytes)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetSampleCount(GpaSessionId gpa_session_id, GpaUInt32* sample_count)
+static GPA_Status GPA_SqttGetSampleResult(GPA_SessionId sessionId, size_t sampleResultSizeInBytes, void* pSqttResults)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetSampleId(GpaSessionId gpa_session_id, GpaUInt32 index, GpaUInt32* sample_id)
+// SPM functions
+
+static GPA_Status GPA_SpmSetSampleInterval(GPA_SessionId sessionId, gpa_uint32 interval)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaIsPassComplete(GpaSessionId gpa_session_id, GpaUInt32 pass_index)
+static GPA_Status GPA_SpmSetDuration(GPA_SessionId sessionId, gpa_uint32 nsDuration)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaIsSessionComplete(GpaSessionId gpa_session_id)
+static GPA_Status GPA_SpmBegin(GPA_SessionId sessionId, void* pCommandList)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetSampleResultSize(GpaSessionId gpa_session_id, GpaUInt32 sample_id, size_t* sample_result_size_in_bytes)
+static GPA_Status GPA_SpmEnd(GPA_SessionId sessionId, void* pCommandList)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetSampleResult(GpaSessionId gpa_session_id, GpaUInt32 sample_id, size_t sample_result_size_in_bytes, void* counter_sample_results)
+static GPA_Status GPA_SpmGetSampleResultSize(GPA_SessionId sessionId, size_t* pSampleResultSizeInBytes)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline const char* GpaGetStatusAsStr(GpaStatus status)
+static GPA_Status GPA_SpmGetSampleResult(GPA_SessionId sessionId, size_t sampleResultSizeInBytes, void* pSqttResults)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static GPA_Status GPA_SpmCalculateDerivedCounters(GPA_SessionId sessionId,
+                                                  GpaSpmData*   pSpmData,
+                                                  gpa_uint32    derivedCounterCount,
+                                                  gpa_uint64*   pDerivedCounterResults)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+#endif // GPA_PIX_BUILD
+
+// Counter Scheduling
+
+static inline GPA_Status GPA_EnableCounter(GPA_SessionId sessionId, gpa_uint32 index)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_DisableCounter(GPA_SessionId sessionId, gpa_uint32 index)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_EnableCounterByName(GPA_SessionId sessionId, const char* pCounterName)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_DisableCounterByName(GPA_SessionId sessionId, const char* pCounterName)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_EnableAllCounters(GPA_SessionId sessionId)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_DisableAllCounters(GPA_SessionId sessionId)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+// Query Counter Scheduling
+
+static inline GPA_Status GPA_GetPassCount(GPA_SessionId sessionId, gpa_uint32* pNumPasses)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_GetNumEnabledCounters(GPA_SessionId sessionId, gpa_uint32* pCount)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_GetEnabledIndex(GPA_SessionId sessionId, gpa_uint32 enabledNumber, gpa_uint32* pEnabledCounterIndex)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_IsCounterEnabled(GPA_SessionId sessionId, gpa_uint32 counterIndex)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+// Sample Handling
+
+static inline GPA_Status GPA_BeginCommandList(GPA_SessionId         sessionId,
+                                              gpa_uint32            passIndex,
+                                              void*                 pCommandList,
+                                              GPA_Command_List_Type command_list_type,
+                                              GPA_CommandListId*    pCommandListId)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_EndCommandList(GPA_CommandListId command_list_id)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_BeginSample(gpa_uint32 sampleId, GPA_CommandListId command_list_id)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_EndSample(GPA_CommandListId command_list_id)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_ContinueSampleOnCommandList(gpa_uint32 srcSampleId, GPA_CommandListId primaryCommandListId)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_CopySecondarySamples(GPA_CommandListId secondaryCommandListId,
+                                                  GPA_CommandListId primaryCommandListId,
+                                                  gpa_uint32        numSamples,
+                                                  gpa_uint32*       pNewSampleIds)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_GetSampleCount(GPA_SessionId sessionId, gpa_uint32* pSampleCount)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_GetSampleId(GPA_SessionId sessionId, gpa_uint32 index, gpa_uint32* pSampleId)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+// Query Results
+
+static inline GPA_Status GPA_IsPassComplete(GPA_SessionId sessionId, gpa_uint32 passIndex)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_IsSessionComplete(GPA_SessionId sessionId)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_GetSampleResultSize(GPA_SessionId sessionId, gpa_uint32 sampleId, size_t* sampleResultSizeInBytes)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+static inline GPA_Status GPA_GetSampleResult(GPA_SessionId sessionId, gpa_uint32 sampleId, size_t sampleResultSizeInBytes, void* pCounterSampleResults)
+{
+    RETURN_GPA_SUCCESS_DEPRECATED;
+}
+
+// Status / Error Query
+
+static inline const char* GPA_GetStatusAsStr(GPA_Status status)
 {
     return NULL;
 }
 
-static inline GpaStatus GpaGetVersion(GpaUInt32* major_version, GpaUInt32* minor_version, GpaUInt32* build_version, GpaUInt32* update_version)
+// GPA API Version
+
+static inline GPA_Status GPA_GetVersion(gpa_uint32* pMajorVersion, gpa_uint32* pMinorVersion, gpa_uint32* pBuild, gpa_uint32* pUpdateVersion)
 {
-    RETURN_GPA_SUCCESS;
+    RETURN_GPA_SUCCESS_DEPRECATED;
 }
 
-static inline GpaStatus GpaGetFuncTable(void* gpa_func_table)
+// GPA API Table
+
+static inline GPA_Status GPA_GetFuncTable(void* pGPAFuncTable)
 {
     // All of the GPA functions will reside in user memory as this structure will be compiled along with the user code.
     // Fill the function table with the function in user memory.
-    GpaFunctionTable* local_function_table_pointer = (GpaFunctionTable*)(gpa_func_table);
+    GPAFunctionTable* pLocalFuncTable = (GPAFunctionTable*)(pGPAFuncTable);
 
-    GpaUInt32 major_version                = GPA_FUNCTION_TABLE_MAJOR_VERSION_NUMBER;
-    GpaUInt32 correct_major_version        = (major_version == local_function_table_pointer->major_version ? 1 : 0);
-    GpaUInt32 client_supplied_minor_verion = local_function_table_pointer->minor_version;
+    gpa_uint32 majorVersion           = GPA_FUNCTION_TABLE_MAJOR_VERSION_NUMBER;
+    gpa_uint32 correctMajorVersion    = (majorVersion == pLocalFuncTable->m_majorVer ? 1 : 0);
+    gpa_uint32 clientSuppliedMinorVer = pLocalFuncTable->m_minorVer;
 
-    local_function_table_pointer->major_version = GPA_FUNCTION_TABLE_MAJOR_VERSION_NUMBER;
-    local_function_table_pointer->minor_version = GPA_FUNCTION_TABLE_MINOR_VERSION_NUMBER;
+    pLocalFuncTable->m_majorVer = GPA_FUNCTION_TABLE_MAJOR_VERSION_NUMBER;
+    pLocalFuncTable->m_minorVer = GPA_FUNCTION_TABLE_MINOR_VERSION_NUMBER;
 
-    if (!correct_major_version)
+    if (!correctMajorVersion)
     {
-        return kGpaStatusErrorLibLoadMajorVersionMismatch;
+        return GPA_STATUS_ERROR_LIB_LOAD_MAJOR_VERSION_MISMATCH;
     }
 
-    if (client_supplied_minor_verion > GPA_FUNCTION_TABLE_MINOR_VERSION_NUMBER)
+    if (clientSuppliedMinorVer > GPA_FUNCTION_TABLE_MINOR_VERSION_NUMBER)
     {
-        return kGpaStatusErrorLibLoadMajorVersionMismatch;
+        return GPA_STATUS_ERROR_LIB_LOAD_MINOR_VERSION_MISMATCH;
     }
 
-    GpaFunctionTable new_function_table;
-#define GPA_FUNCTION_PREFIX(func) new_function_table.func = func;  ///< Macro used by gpu_perf_api_functions.h
+    GPAFunctionTable localFuncTable;
+#define GPA_DEPRECATED_FUNCTION_PREFIX(func) localFuncTable.func = func;  ///< Macro used by GPAFunctions.h
+// Deprecated header
 #include "gpu_perf_api_functions.h"
-#undef GPA_FUNCTION_PREFIX
+#undef GPA_DEPRECATED_FUNCTION_PREFIX
 
-    memcpy(gpa_func_table, &new_function_table, client_supplied_minor_verion);
-    return kGpaStatusOk;
+    memcpy(pGPAFuncTable, &localFuncTable, clientSuppliedMinorVer);
+    return GPA_STATUS_OK;
 }
 
 #ifdef _WIN32
 #pragma warning(pop)
 #endif
 
-#endif  // GPU_PERFORMANCE_API_GPU_PERF_API_STUB_H_
+#endif  // GPU_PERF_API_STUB_H_

@@ -55,6 +55,8 @@ public slots:
   void Save();
   void Load();
   void exportGPUCounters();
+  void exportNVGPUCounters();
+  void exportAMDGPUCounters();
 
 private slots:
   // automatic slots
