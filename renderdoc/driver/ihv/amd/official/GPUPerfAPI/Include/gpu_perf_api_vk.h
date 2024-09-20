@@ -10,8 +10,7 @@
 
 #pragma message("Warning: You are including a deprecated header. Please use gpu_performance_api/gpu_perf_api_vk.h")
 
-#include "vulkan/vulkan.h"
-
+#include "driver/vulkan/official/vulkan.h"
 #include "gpu_performance_api/gpu_perf_api_vk.h"
 
 /// The struct that should be supplied to GPA_OpenContext().
