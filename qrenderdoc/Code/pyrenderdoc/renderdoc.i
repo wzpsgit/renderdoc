@@ -594,3 +594,9 @@ extern "C" PyObject *RENDERDOC_DumpObject(PyObject *obj)
   interfaceCheckTypes = swig_type_initial;
   interfaceCheckNumTypes = sizeof(swig_type_initial)/sizeof(swig_type_initial[0]);
 %}
+
+%inline %{
+    const char* GetPythonVersion() {
+        return PY_VERSION;  
+    }
+%}
