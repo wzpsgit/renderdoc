@@ -289,6 +289,9 @@ private:
   friend struct VulkanRenderState;
   friend class VulkanShaderCache;
 
+  static rdcarray<WrappedVulkan*> m_Capturers;
+  bool m_Presented = false;
+
   struct ScopedDebugMessageSink
   {
     ScopedDebugMessageSink(WrappedVulkan *driver);
@@ -1059,6 +1062,7 @@ private:
   RDCDriver GetFrameCaptureDriver() { return RDCDriver::Vulkan; }
   void StartFrameCapture(DeviceOwnedWindow devWnd);
   bool EndFrameCapture(DeviceOwnedWindow devWnd);
+  bool OutputRDC(RenderDoc::FramePixels* fp);
   bool DiscardFrameCapture(DeviceOwnedWindow devWnd);
 
   void AdvanceFrame();

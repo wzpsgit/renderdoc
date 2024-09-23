@@ -1,9 +1,11 @@
 //==============================================================================
-// Copyright (c) 2017-2021 Advanced Micro Devices, Inc. All rights reserved.
-/// @author AMD Developer Tools Team
-/// @file
-/// @brief GPA Interface Loader Utility header file
+// Copyright (c) 2020-2021 Advanced Micro Devices, Inc. All rights reserved.
+/// \author AMD Developer Tools Team
+/// \file
+/// \brief Deprecated header; use gpu_performance_api/gpu_perf_api_interface_loader.h
 //==============================================================================
+
+#pragma message("Warning: You are including a deprecated header. Please use gpu_performance_api/gpu_perf_api_interface_loader.h")
 
 // Note: For usage, copy and paste (and then uncomment) the
 // following four lines into a compilation unit that uses
@@ -11,456 +13,220 @@
 // static/extern data declared in this header file:
 
 // #ifdef __cplusplus
-// GpaApiManager* GpaApiManager::gpa_api_manager_ = nullptr;
+// GPAApiManager* GPAApiManager::m_pGpaApiManager = nullptr;
 // #endif
-// GpaFuncTableInfo* gpa_function_table_info = NULL;
+// GPAFuncTableInfo* g_pFuncTableInfo = NULL;
 
 // In order to use this header file with a debug build of GPA
 // the "USE_DEBUG_GPA" preprocessor macro should be defined before
 // including this header file
 
-// In order to use this header file with an internal build of GPA
-// the "USE_INTERNAL_GPA" preprocessor macro should be defined before
-// including this header file
+#ifndef GPU_PERF_API_INTERFACE_LOADER_H_
+#define GPU_PERF_API_INTERFACE_LOADER_H_
 
-#ifndef GPU_PERFORMANCE_API_GPU_PERF_API_INTERFACE_LOADER_H_
-#define GPU_PERFORMANCE_API_GPU_PERF_API_INTERFACE_LOADER_H_
+// New header
+#include "gpu_performance_api/gpu_perf_api_interface_loader.h"
 
-#ifdef _WIN32
-#include <Windows.h>
-#define GPA_MAX_PATH MAX_PATH  ///< Macro for max path length.
-#ifdef _WIN64
-#define GPA_IS_64_BIT  ///< Macro specifying 64-bit build.
-#else
-#define GPA_IS_32_BIT  ///< Macro specifying 32-bit build.
-#endif
-#else
-#include <dlfcn.h>
-#include <unistd.h>
-#define GPA_MAX_PATH 4096  ///< Macro for max path length.
-#ifdef __x86_64__
-#define GPA_IS_64_BIT  ///< Macro specifying 64-bit build.
-#else
-#define GPA_IS_32_BIT  ///< Macro specifying 32-bit build.
-#endif
-#endif
-
-#include <wchar.h>
-#include <stdlib.h>
-#include <string.h>
-#ifdef __cplusplus
-#include <string>
-#endif
-
+// Deprecated headers
+#include "gpu_perf_api_types.h"
 #include "gpu_perf_api.h"
 
-#ifdef UNICODE
-typedef wchar_t LocaleChar;  ///< Typedef for ANSI vs. Unicode character.
-#ifdef __cplusplus
-typedef std::wstring LocaleString;  ///< Typedef for ANSI vs. Unicode string.
-#endif
+#define GPA_GET_FUNCTION_TABLE_FUNCTION_NAME_DEPRECATED "GPA_GetFuncTable"  ///< Macro for GPA_GetFuncTable entry point
 
-#define TFORMAT2(x) L##x        ///< Macro for string expansion.
-#define TFORMAT(x) TFORMAT2(x)  ///< Macro for string expansion.
-
-#define STR_CAT(dest, dest_size, src) wcscat_s(dest, dest_size, src)                    ///< Macro for safe strcat.
-#define STR_COPY(dest, dest_size, src) wcscpy_s(dest, dest_size, src)                   ///< Macro for safe strcpy.
-#define STR_NCOPY(dest, dest_size, src, count) wcsncpy_s(dest, dest_size, src, count);  ///< Macro for safe strncpy.
-#define STR_LEN(str, str_length) wcsnlen_s(str, str_length)                             ///< Macro for safe strnlen.
-#define MEM_CPY(dest, src, count) wmemcpy(dest, src, count)
-#define MEM_SET(ptr, wc, num) wmemset(ptr, wc, num)
-
-#else
-typedef char        LocaleChar;    ///< Typedef for ANSI vs. Unicode character.
-#ifdef __cplusplus
-typedef std::string LocaleString;  ///< Typedef for ANSI vs. Unicode string.
-#endif
-
-#define TFORMAT(x) (x)  ///< Macro for string expansion.
-
-#define STR_CAT(dest, dest_size, src) strcat_s(dest, dest_size, src)                    ///< Macro for safe strcat.
-#define STR_COPY(dest, dest_size, src) strcpy_s(dest, dest_size, src)                   ///< Macro for safe strcpy.
-#define STR_NCOPY(dest, dest_size, src, count) strncpy_s(dest, dest_size, src, count);  ///< Macro for safe strncpy.
-#define STR_LEN(str, str_length) strnlen_s(str, str_length)                             ///< Macro for safe strnlen.
-#define MEM_CPY(dest, src, count) memcpy(dest, src, count)
-#define MEM_SET(ptr, wc, num) memset(ptr, wc, num)
-#endif
-
-#define GPA_OPENCL_LIB TFORMAT("GPUPerfAPICL")       ///< Macro for base name of GPA OpenCL library.
-#define GPA_OPENGL_LIB TFORMAT("GPUPerfAPIGL")       ///< Macro for base name of GPA OpenGL library.
-#define GPA_DIRECTX11_LIB TFORMAT("GPUPerfAPIDX11")  ///< Macro for base name of GPA DirectX 11 library.
-#define GPA_DIRECTX12_LIB TFORMAT("GPUPerfAPIDX12")  ///< Macro for base name of GPA DirectX 12 library.
-#define GPA_VULKAN_LIB TFORMAT("GPUPerfAPIVK")       ///< Macro for base name of GPA Vulkan library.
-
-#ifdef _WIN32
-#define GPA_LIB_PREFIX TFORMAT("")           ///< Macro for platform-specific lib file prefix.
-#define GPA_LIB_SUFFIX TFORMAT(".dll")       ///< Macro for platform-specific lib file suffix.
-#define GPA_X64_ARCH_SUFFIX TFORMAT("-x64")  ///< Macro for 64-bit lib file architecture suffix.
-#define GPA_X86_ARCH_SUFFIX TFORMAT("")      ///< Macro for 32-bit lib file architecture suffix.
-#else
-#define GPA_LIB_PREFIX TFORMAT("lib")      ///< Macro for platform-specific lib file prefix.
-#define GPA_LIB_SUFFIX TFORMAT(".so")      ///< Macro for platform-specific lib file suffix.
-#define GPA_X64_ARCH_SUFFIX TFORMAT("")    ///< Macro for 64-bit lib file architecture suffix.
-#define GPA_X86_ARCH_SUFFIX TFORMAT("32")  ///< Macro for 32-bit lib file architecture suffix.
-#endif
-
-#define GPA_DEBUG_SUFFIX TFORMAT("-d")            ///< Macro for debug suffix.
-#define GPA_INTERNAL_SUFFIX TFORMAT("-Internal")  ///< Macro for internal build lib file suffix.
-
-#define ARRAY_LENGTH(x) (sizeof(x) / sizeof(x[0]))  ///< Macro to calculate array length.
-
-#define GPA_GET_FUNCTION_TABLE_FUNCTION_NAME "GpaGetFuncTable"  ///< Macro for GpaGetFuncTable entrypoint.
-
-/// @brief GPAFunctionTableInfo structure.
-typedef struct _GpaFuncTableInfo
+/// GPAFunctionTableInfo structure
+typedef struct _GPAFuncTableInfo
 {
-    GpaApiType        gpa_api_type;          ///< API type.
-    GpaFunctionTable* gpa_func_table;        ///< GPA function table.
-    LibHandle         lib_handle;            ///< Library handle.
-    void*             next_func_table_info;  ///< Pointer to next function table info.
-} GpaFuncTableInfo;
+    GPA_API_Type      m_gpaApiType;     ///< API type
+    GPAFunctionTable* m_pGpaFuncTable;  ///< GPA function table
+    LibHandle         m_libHandle;      ///< library handle
+    void*             m_pNext;          ///< pointer to next function table info
+} GPAFuncTableInfo;
 
-extern GpaFuncTableInfo* gpa_function_table_info;  ///< Global instance of GPA function table info.
+extern GPAFuncTableInfo* g_pFuncTableInfo;  ///< global instance of GPA function table info
 
-/// @brief Replaces the Windows style path separator to Unix style.
-///
-/// @param [in] file_path File path.
-/// @param [out] last_separator_position If not null, last separator position in the path string will be returned.
-static inline void Win2UnixPathSeparator(LocaleChar* file_path, unsigned int* last_separator_position)
+/// Get the current working directory
+/// \return the current working directory
+static const LocaleChar* GPAIL_GetWorkingDirectoryPath()
 {
-    unsigned int counter        = 0;
-    unsigned int last_slash_pos = 0;
-
-    while ('\0' != file_path[counter])
-    {
-        if ('\\' == file_path[counter])
-        {
-            file_path[counter] = '/';
-        }
-
-        if ('/' == file_path[counter])
-        {
-            last_slash_pos = counter;
-        }
-
-        ++counter;
-    }
-
-    if (NULL != last_separator_position)
-    {
-        *last_separator_position = last_slash_pos;
-    }
+    return GpaInterfaceLoaderGetWorkingDirectoryPath();
 }
 
-/// @brief Get the current working directory.
-///
-/// @return The current working directory.
-static const LocaleChar* GpaInterfaceLoaderGetWorkingDirectoryPath()
+/// Gets the library file name for the given API
+/// \param[in] pApiType type of the API
+/// \return library file name
+static inline const LocaleChar* GPAIL_GetLibraryFileName(GPA_API_Type pApiType)
 {
-    static LocaleChar working_directory_static_string[GPA_MAX_PATH];
-
-    working_directory_static_string[0]                   = 0;
-    LocaleChar temp_working_directory_path[GPA_MAX_PATH] = {0};
-
-#ifdef _WIN32
-    GetModuleFileName(NULL, temp_working_directory_path, ARRAY_LENGTH(temp_working_directory_path));
-#else
-    int  len;
-    char temp_working_directory_path_in_char[GPA_MAX_PATH] = {0};
-    len = readlink("/proc/self/exe", temp_working_directory_path_in_char, ARRAY_LENGTH(temp_working_directory_path_in_char) - 1);
-
-    if (len != -1)
-    {
-        temp_working_directory_path[len] = '\0';
-    }
-
-#ifdef UNICODE
-    mbstowcs(temp_working_directory_path, temp_working_directory_path_in_char, ARRAY_LENGTH(temp_working_directory_path_in_char));
-#else
-    MEM_CPY(temp_working_directory_path, temp_working_directory_path_in_char, ARRAY_LENGTH(temp_working_directory_path_in_char));
-#endif
-#endif
-
-    unsigned int last_slash_position = 0;
-
-    Win2UnixPathSeparator(temp_working_directory_path, &last_slash_position);
-
-    MEM_SET(working_directory_static_string, 0, ARRAY_LENGTH(working_directory_static_string));
-    STR_NCOPY(working_directory_static_string, ARRAY_LENGTH(working_directory_static_string), temp_working_directory_path, last_slash_position);
-    return working_directory_static_string;
+    return GpaInterfaceLoaderGetLibraryFileName((GpaApiType)pApiType);
 }
 
-/// @brief Gets the library file name for the given API.
-///
-/// @param [in] gpa_api_type Type of the API.
-///
-/// @return Library file name.
-static inline const LocaleChar* GpaInterfaceLoaderGetLibraryFileName(GpaApiType gpa_api_type)
+/// Get the library full path
+/// \param[in] apiType type of the API
+/// \param[in] pLibPath local path to the library files
+/// \return library with full path
+static inline const LocaleChar* GPAIL_GetLibraryFullPath(GPA_API_Type apiType, const LocaleChar* pLibPath)
 {
-    static LocaleChar filename_static_string[GPA_MAX_PATH];
-
-    filename_static_string[0] = 0;
-
-    STR_CAT(filename_static_string, ARRAY_LENGTH(filename_static_string), GPA_LIB_PREFIX);
-
-    switch (gpa_api_type)
-    {
-#ifdef _WIN32
-    case kGpaApiDirectx11:
-        STR_CAT(filename_static_string, ARRAY_LENGTH(filename_static_string), GPA_DIRECTX11_LIB);
-        break;
-
-    case kGpaApiDirectx12:
-        STR_CAT(filename_static_string, ARRAY_LENGTH(filename_static_string), GPA_DIRECTX12_LIB);
-        break;
-
-    case kGpaApiOpencl:
-        STR_CAT(filename_static_string, ARRAY_LENGTH(filename_static_string), GPA_OPENCL_LIB);
-        break;
-#endif
-
-    case kGpaApiOpengl:
-        STR_CAT(filename_static_string, ARRAY_LENGTH(filename_static_string), GPA_OPENGL_LIB);
-        break;
-
-    case kGpaApiVulkan:
-        STR_CAT(filename_static_string, ARRAY_LENGTH(filename_static_string), GPA_VULKAN_LIB);
-        break;
-
-    default:
-        MEM_SET(filename_static_string, 0, ARRAY_LENGTH(filename_static_string));
-        return filename_static_string;
-    }
-
-#ifdef GPA_IS_64_BIT
-    STR_CAT(filename_static_string, ARRAY_LENGTH(filename_static_string), GPA_X64_ARCH_SUFFIX);
-#else
-    STR_CAT(filename_static_string, ARRAY_LENGTH(filename_static_string), GPA_X86_ARCH_SUFFIX);
-#endif
-
-#ifdef USE_DEBUG_GPA
-    STR_CAT(filename_static_string, ARRAY_LENGTH(filename_static_string), GPA_DEBUG_SUFFIX);
-#endif
-
-#ifdef USE_INTERNAL_GPA
-    STR_CAT(filename_static_string, ARRAY_LENGTH(filename_static_string), GPA_INTERNAL_SUFFIX);
-#endif
-
-    STR_CAT(filename_static_string, ARRAY_LENGTH(filename_static_string), GPA_LIB_SUFFIX);
-
-    return filename_static_string;
+    return GpaInterfaceLoaderGetLibraryFullPath((GpaApiType)apiType, pLibPath);
 }
 
-/// @brief Get the library full path.
-
-/// @param [in] gpa_api_type Type of the API.
-/// @param [in] lib_path Local path to the library files.
-///
-/// @return Library with full path.
-static inline const LocaleChar* GpaInterfaceLoaderGetLibraryFullPath(GpaApiType gpa_api_type, const LocaleChar* lib_path)
+/// Loads the dll and initialize the function table for the given API
+/// \param[in] apiType type of the API to be loaded
+/// \param[in] pLibPath path to the folder containing dll
+/// \return GPA_STATUS_OK upon successful operation
+static inline GPA_Status GPAIL_LoadApi(GPA_API_Type apiType, const LocaleChar* pLibPath)
 {
-    static LocaleChar lib_path_static_string[GPA_MAX_PATH];
+    // Dummy calls
+    GPAIL_GetWorkingDirectoryPath();
+    GPAIL_GetLibraryFileName(apiType);
 
-    lib_path_static_string[0] = 0;
-
-    const LocaleChar* lib_name = GpaInterfaceLoaderGetLibraryFileName(gpa_api_type);
-
-    if (STR_LEN(lib_name, GPA_MAX_PATH) > 1)
-    {
-        LocaleChar temp_lib_file_name[GPA_MAX_PATH]     = {0};
-        LocaleChar temp_working_directory[GPA_MAX_PATH] = {0};
-
-        STR_COPY(temp_lib_file_name, ARRAY_LENGTH(temp_lib_file_name), lib_name);
-
-        if (NULL == lib_path)
-        {
-            const LocaleChar* working_directory_path = GpaInterfaceLoaderGetWorkingDirectoryPath();
-            STR_COPY(temp_working_directory, ARRAY_LENGTH(temp_working_directory), working_directory_path);
-        }
-        else
-        {
-            STR_COPY(temp_working_directory, ARRAY_LENGTH(temp_working_directory), lib_path);
-            Win2UnixPathSeparator(temp_working_directory, NULL);
-        }
-
-        size_t stringLength = STR_LEN(temp_working_directory, ARRAY_LENGTH(temp_working_directory));
-
-        if (temp_working_directory[stringLength - 1] != '/')
-        {
-            temp_working_directory[stringLength]     = '/';
-            temp_working_directory[stringLength + 1] = '\0';
-        }
-
-        MEM_SET(lib_path_static_string, 0, ARRAY_LENGTH(lib_path_static_string));
-        STR_COPY(lib_path_static_string, ARRAY_LENGTH(lib_path_static_string), temp_working_directory);
-        STR_CAT(lib_path_static_string, ARRAY_LENGTH(lib_path_static_string), temp_lib_file_name);
-    }
-
-    return lib_path_static_string;
-}
-
-/// @brief Loads the dll and initialize the function table for the given API.
-///
-/// @param [in] api_type Type of the API to be loaded.
-/// @param [in] lib_path Path to the folder containing dll.
-///
-/// @return The status of the operation.
-/// @retval kGpaStatusOk On success.
-/// @retval kGpaStatusErrorFailed If an internal error occurred.
-/// @retval kGpaStatusErrorApiNotSupported The desired API is not supported on the current system.
-/// @retval kGpaStatusErrorLibAlreadyLoaded The necessary library has already been loaded.
-/// @retval kGpaStatusErrorLibLoadFailed The library failed to load.
-static inline GpaStatus GpaInterfaceLoaderLoadApi(GpaApiType api_type, const LocaleChar* lib_path)
-{
 #if DISABLE_GPA
-    UNREFERENCED_PARAMETER(api_type);
-    UNREFERENCED_PARAMETER(lib_path);
-    if (NULL == gpa_function_table_info)
+    UNREFERENCED_PARAMETER(apiType);
+    UNREFERENCED_PARAMETER(pLibPath);
+    if (NULL == g_pFuncTableInfo)
     {
-        gpa_function_table_info                 = (GpaFuncTableInfo*)malloc(sizeof(GpaFuncTableInfo));
-        gpa_function_table_info->gpa_func_table = (GpaFunctionTable*)malloc(sizeof(GpaFunctionTable));
+        g_pFuncTableInfo                  = (GPAFuncTableInfo*)malloc(sizeof(GPAFuncTableInfo));
+        g_pFuncTableInfo->m_pGpaFuncTable = (GPAFunctionTable*)malloc(sizeof(GPAFunctionTable));
     }
 
-    gpa_function_table_info->gpa_api_type                  = kGpaApiLast;
-    gpa_function_table_info->lib_handle                    = NULL;
-    gpa_function_table_info->gpa_func_table->major_version = GPA_FUNCTION_TABLE_MAJOR_VERSION_NUMBER;
-    gpa_function_table_info->gpa_func_table->minor_version = GPA_FUNCTION_TABLE_MINOR_VERSION_NUMBER;
-    GpaStatus status                                       = GpaGetFuncTable(gpa_function_table_info->gpa_func_table);
-    gpa_function_table_info->next_func_table_info          = NULL;
+    g_pFuncTableInfo->m_gpaApiType                = GPA_API__LAST;
+    g_pFuncTableInfo->m_libHandle                 = NULL;
+    g_pFuncTableInfo->m_pGpaFuncTable->m_majorVer = GPA_FUNCTION_TABLE_MAJOR_VERSION_NUMBER;
+    g_pFuncTableInfo->m_pGpaFuncTable->m_minorVer = GPA_FUNCTION_TABLE_MINOR_VERSION_NUMBER;
+    GPA_Status status                             = GPA_GetFuncTable(g_pFuncTableInfo->m_pGpaFuncTable);
+    g_pFuncTableInfo->m_pNext                     = NULL;
 #else
-    if (NULL == gpa_function_table_info)
+    if (NULL == g_pFuncTableInfo)
     {
-        gpa_function_table_info = (GpaFuncTableInfo*)malloc(sizeof(GpaFuncTableInfo));
+        g_pFuncTableInfo = (GPAFuncTableInfo*)malloc(sizeof(GPAFuncTableInfo));
 
-        if (NULL != gpa_function_table_info)
+        if (NULL != g_pFuncTableInfo)
         {
-            gpa_function_table_info->gpa_api_type         = kGpaApiNoSupport;
-            gpa_function_table_info->lib_handle           = NULL;
-            gpa_function_table_info->gpa_func_table       = NULL;
-            gpa_function_table_info->next_func_table_info = NULL;
+            g_pFuncTableInfo->m_gpaApiType    = GPA_API_NO_SUPPORT;
+            g_pFuncTableInfo->m_libHandle     = NULL;
+            g_pFuncTableInfo->m_pGpaFuncTable = NULL;
+            g_pFuncTableInfo->m_pNext         = NULL;
         }
     }
 
-    GpaStatus status = kGpaStatusErrorFailed;
+    GPA_Status status = GPA_STATUS_ERROR_FAILED;
 
-    if (NULL != gpa_function_table_info)
+    if (NULL != g_pFuncTableInfo)
     {
-        status = kGpaStatusOk;
+        status = GPA_STATUS_OK;
 
-        if (api_type >= kGpaApiStart && api_type < kGpaApiNoSupport)
+        if (apiType >= GPA_API__START && apiType < GPA_API_NO_SUPPORT)
         {
-            const LocaleChar* lib_name = GpaInterfaceLoaderGetLibraryFileName(api_type);
+            const LocaleChar* pLibName = GPAIL_GetLibraryFileName(apiType);
 
-            if (NULL == lib_name)
+            if (NULL == pLibName)
             {
-                return kGpaStatusErrorApiNotSupported;
+                return GPA_STATUS_ERROR_API_NOT_SUPPORTED;
             }
 
             {
-                GpaFuncTableInfo* function_table_info = gpa_function_table_info;
+                GPAFuncTableInfo* pFunctionTableInfo = g_pFuncTableInfo;
 
-                while (NULL != function_table_info)
+                while (NULL != pFunctionTableInfo)
                 {
-                    if (function_table_info->gpa_api_type == api_type)
+                    if (pFunctionTableInfo->m_gpaApiType == apiType)
                     {
-                        return kGpaStatusErrorLibAlreadyLoaded;
+                        return GPA_STATUS_ERROR_LIB_ALREADY_LOADED;
                     }
 
-                    function_table_info = (GpaFuncTableInfo*)function_table_info->next_func_table_info;
+                    pFunctionTableInfo = (GPAFuncTableInfo*)pFunctionTableInfo->m_pNext;
                 }
             }
 
-            const LocaleChar* lib_full_path = GpaInterfaceLoaderGetLibraryFullPath(api_type, lib_path);
-            LibHandle         lib_handle    = NULL;
+            const LocaleChar* pLibFullPath = GPAIL_GetLibraryFullPath(apiType, pLibPath);
+            LibHandle         libHandle    = NULL;
 
 #ifdef _WIN32
-            lib_handle                      = LoadLibrary(lib_full_path);
+            libHandle                      = LoadLibrary(pLibFullPath);
 #else
 
 #ifdef UNICODE
-            char lib_full_path_char[GPA_MAX_PATH];
-            int  ret                = wcstombs(lib_full_path_char, lib_full_path, GPA_MAX_PATH);
-            lib_full_path_char[ret] = '\0';
-            lib_handle              = dlopen(lib_full_path_char, RTLD_LAZY);
+            char libFullPathChar[GPA_MAX_PATH];
+            int  ret             = wcstombs(libFullPathChar, pLibFullPath, GPA_MAX_PATH);
+            libFullPathChar[ret] = '\0';
+            libHandle            = dlopen(libFullPathChar, RTLD_LAZY);
 #else
-            lib_handle = dlopen(lib_full_path, RTLD_LAZY);
+            libHandle = dlopen(pLibFullPath, RTLD_LAZY);
 #endif
 
 #endif
-            GpaGetFuncTablePtrType gpa_get_func_table;
+            GPA_GetFuncTablePtrType funcTableFn;
 
-            if (NULL != lib_handle)
+            if (NULL != libHandle)
             {
 #ifdef _WIN32
-                gpa_get_func_table = (GpaGetFuncTablePtrType)(GetProcAddress(lib_handle, GPA_GET_FUNCTION_TABLE_FUNCTION_NAME));
+                funcTableFn = (GPA_GetFuncTablePtrType)(GetProcAddress(libHandle, GPA_GET_FUNCTION_TABLE_FUNCTION_NAME_DEPRECATED));
 #else
-                gpa_get_func_table = (GpaGetFuncTablePtrType)(dlsym(lib_handle, GPA_GET_FUNCTION_TABLE_FUNCTION_NAME));
+                funcTableFn = (GPA_GetFuncTablePtrType)(dlsym(libHandle, GPA_GET_FUNCTION_TABLE_FUNCTION_NAME_DEPRECATED));
 #endif
 
-                if (NULL != gpa_get_func_table)
+                if (NULL != funcTableFn)
                 {
-                    GpaFunctionTable* gpa_func_table = (GpaFunctionTable*)malloc(sizeof(GpaFunctionTable));
+                    GPAFunctionTable* pGPAFuncTable = (GPAFunctionTable*)malloc(sizeof(GPAFunctionTable));
 
-                    if (NULL == gpa_func_table)
+                    if (NULL == pGPAFuncTable)
                     {
-                        return kGpaStatusErrorFailed;
+                        return GPA_STATUS_ERROR_FAILED;
                     }
 
-                    gpa_func_table->major_version = GPA_FUNCTION_TABLE_MAJOR_VERSION_NUMBER;
-                    gpa_func_table->minor_version = GPA_FUNCTION_TABLE_MINOR_VERSION_NUMBER;
-                    status                        = gpa_get_func_table((void*)(gpa_func_table));
+                    pGPAFuncTable->m_majorVer = GPA_FUNCTION_TABLE_MAJOR_VERSION_NUMBER;
+                    pGPAFuncTable->m_minorVer = GPA_FUNCTION_TABLE_MINOR_VERSION_NUMBER;
+                    status                    = funcTableFn((void*)(pGPAFuncTable));
 
-                    if (kGpaStatusOk == status)
+                    if (GPA_STATUS_OK == status)
                     {
-                        if (NULL == gpa_function_table_info->gpa_func_table)
+                        if (NULL == g_pFuncTableInfo->m_pGpaFuncTable)
                         {
-                            gpa_function_table_info->gpa_api_type         = api_type;
-                            gpa_function_table_info->gpa_func_table       = gpa_func_table;
-                            gpa_function_table_info->lib_handle           = lib_handle;
-                            gpa_function_table_info->next_func_table_info = NULL;
+                            g_pFuncTableInfo->m_gpaApiType    = apiType;
+                            g_pFuncTableInfo->m_pGpaFuncTable = pGPAFuncTable;
+                            g_pFuncTableInfo->m_libHandle     = libHandle;
+                            g_pFuncTableInfo->m_pNext         = NULL;
                         }
                         else
                         {
-                            GpaFuncTableInfo* new_table_info = (GpaFuncTableInfo*)malloc(sizeof(GpaFuncTableInfo));
+                            GPAFuncTableInfo* pNewTableInfo = (GPAFuncTableInfo*)malloc(sizeof(GPAFuncTableInfo));
 
-                            if (NULL == new_table_info)
+                            if (NULL == pNewTableInfo)
                             {
-                                return kGpaStatusErrorFailed;
+                                return GPA_STATUS_ERROR_FAILED;
                             }
 
-                            new_table_info->gpa_api_type         = api_type;
-                            new_table_info->gpa_func_table       = gpa_func_table;
-                            new_table_info->lib_handle           = lib_handle;
-                            new_table_info->next_func_table_info = NULL;
+                            pNewTableInfo->m_gpaApiType    = apiType;
+                            pNewTableInfo->m_pGpaFuncTable = pGPAFuncTable;
+                            pNewTableInfo->m_libHandle     = libHandle;
+                            pNewTableInfo->m_pNext         = NULL;
 
-                            GpaFuncTableInfo* function_table_info = gpa_function_table_info;
+                            GPAFuncTableInfo* pFunctionTableInfo = g_pFuncTableInfo;
 
-                            while (NULL != function_table_info->next_func_table_info)
+                            while (NULL != pFunctionTableInfo->m_pNext)
                             {
-                                function_table_info = (GpaFuncTableInfo*)function_table_info->next_func_table_info;
+                                pFunctionTableInfo = (GPAFuncTableInfo*)pFunctionTableInfo->m_pNext;
                             }
 
-                            function_table_info->next_func_table_info = new_table_info;
+                            pFunctionTableInfo->m_pNext = pNewTableInfo;
                         }
                     }
                     else
                     {
-                        free(gpa_func_table);
+                        free(pGPAFuncTable);
                     }
                 }
                 else
                 {
-                    status = kGpaStatusErrorLibLoadFailed;
+                    status = GPA_STATUS_ERROR_LIB_LOAD_FAILED;
                 }
             }
             else
             {
-                status = kGpaStatusErrorLibLoadFailed;
+                status = GPA_STATUS_ERROR_LIB_LOAD_FAILED;
             }
         }
         else
         {
-            status = kGpaStatusErrorApiNotSupported;
+            status = GPA_STATUS_ERROR_API_NOT_SUPPORTED;
         }
     }
 #endif
@@ -468,257 +234,238 @@ static inline GpaStatus GpaInterfaceLoaderLoadApi(GpaApiType api_type, const Loc
     return status;
 }
 
-/// @brief Get the function table for the given API.
-///
-/// @param [in] gpa_api_type API type.
-///
-/// @return Pointer to the API function table if loaded, otherwise null pointer.
-static inline const GpaFunctionTable* GpaInterfaceLoaderGetFunctionTable(GpaApiType gpa_api_type)
+/// Get the function table for the given API
+/// \param[in] apiType API type
+/// \return returns pointer to the API function table if loaded otherwise null pointer
+static inline const GPAFunctionTable* GPAIL_GetFunctionTable(GPA_API_Type apiType)
 {
 #if DISABLE_GPA
-    UNREFERENCED_PARAMETER(gpa_api_type);
-    return gpa_function_table_info->gpa_func_table;
+    UNREFERENCED_PARAMETER(apiType);
+    return g_pFuncTableInfo->m_pGpaFuncTable;
 #else
-    GpaFuncTableInfo* function_table_info = gpa_function_table_info;
-    GpaFunctionTable* function_table      = NULL;
+    GPAFuncTableInfo* pFunctionTableInfo = g_pFuncTableInfo;
+    GPAFunctionTable* pRetFuncTable      = NULL;
 
-    while (NULL != function_table_info)
+    while (NULL != pFunctionTableInfo)
     {
-        if (function_table_info->gpa_api_type == gpa_api_type)
+        if (pFunctionTableInfo->m_gpaApiType == apiType)
         {
-            function_table = function_table_info->gpa_func_table;
+            pRetFuncTable = pFunctionTableInfo->m_pGpaFuncTable;
             break;
         }
 
-        function_table_info = (GpaFuncTableInfo*)function_table_info->next_func_table_info;
+        pFunctionTableInfo = (GPAFuncTableInfo*)pFunctionTableInfo->m_pNext;
     }
 
-    return function_table;
+    return pRetFuncTable;
 #endif
 }
 
-/// @brief Unloads the function table for the given API.
-///
-/// @param [in] gpa_api_type API type.
-///
-/// @return kGpaStatusOk upon successful operation.
-static inline GpaStatus GpaInterfaceLoaderUnLoadApi(GpaApiType gpa_api_type)
+/// Unloads the function table for the given API
+/// \param[in] apiType API type
+/// \return GPA_STATUS_OK upon successful operation
+static inline GPA_Status GPAIL_UnLoadApi(GPA_API_Type apiType)
 {
 #if DISABLE_GPA
-    UNREFERENCED_PARAMETER(gpa_api_type);
-    return kGpaStatusOk;
+    UNREFERENCED_PARAMETER(apiType);
+    return GPA_STATUS_OK;
 #else
-    GpaStatus status = kGpaStatusErrorFailed;
+    GPA_Status status = GPA_STATUS_ERROR_FAILED;
 
-    GpaFuncTableInfo* function_table_info = gpa_function_table_info;
+    GPAFuncTableInfo* pFunctionTableInfo = g_pFuncTableInfo;
 
-    while (NULL != function_table_info)
+    while (NULL != pFunctionTableInfo)
     {
-        if (function_table_info->gpa_api_type == gpa_api_type)
+        if (pFunctionTableInfo->m_gpaApiType == apiType)
         {
-            free(function_table_info->gpa_func_table);
-            LibHandle lib_handle = function_table_info->lib_handle;
+            free(pFunctionTableInfo->m_pGpaFuncTable);
+            LibHandle libHandle = pFunctionTableInfo->m_libHandle;
 
-            if (NULL != lib_handle)
+            if (NULL != libHandle)
             {
 #ifdef _WIN32
-                FreeLibrary(lib_handle);
+                FreeLibrary(libHandle);
 #else
-                dlclose(lib_handle);
+                dlclose(libHandle);
 #endif
-                function_table_info->lib_handle     = NULL;
-                function_table_info->gpa_func_table = NULL;
-                status                              = kGpaStatusOk;
+                pFunctionTableInfo->m_libHandle     = NULL;
+                pFunctionTableInfo->m_pGpaFuncTable = NULL;
+                status                              = GPA_STATUS_OK;
                 break;
             }
         }
 
-        function_table_info = (GpaFuncTableInfo*)function_table_info->next_func_table_info;
+        pFunctionTableInfo = (GPAFuncTableInfo*)pFunctionTableInfo->m_pNext;
     }
 
     return status;
 #endif
 }
 
-/// @brief Clears the loader.
-static inline void GpaInterfaceLoaderClearLoader()
+/// Clears the loader
+static inline void GPAIL_ClearLoader()
 {
 #if DISABLE_GPA
-    gpa_function_table_info->gpa_api_type         = kGpaApiNoSupport;
-    gpa_function_table_info->lib_handle           = NULL;
-    gpa_function_table_info->next_func_table_info = NULL;
-    gpa_function_table_info->gpa_func_table       = NULL;
+    g_pFuncTableInfo->m_gpaApiType    = GPA_API_NO_SUPPORT;
+    g_pFuncTableInfo->m_libHandle     = NULL;
+    g_pFuncTableInfo->m_pNext         = NULL;
+    g_pFuncTableInfo->m_pGpaFuncTable = NULL;
 #else
-    if (NULL != gpa_function_table_info)
+    if (NULL != g_pFuncTableInfo)
     {
-        while (NULL != gpa_function_table_info->next_func_table_info)
+        while (NULL != g_pFuncTableInfo->m_pNext)
         {
-            GpaFuncTableInfo* function_table_info = (GpaFuncTableInfo*)(gpa_function_table_info->next_func_table_info);
+            GPAFuncTableInfo* pFunctionTableInfo = (GPAFuncTableInfo*)(g_pFuncTableInfo->m_pNext);
 
-            if (NULL != function_table_info->lib_handle)
+            if (NULL != pFunctionTableInfo->m_libHandle)
             {
 #ifdef _WIN32
-                FreeLibrary(function_table_info->lib_handle);
+                FreeLibrary(pFunctionTableInfo->m_libHandle);
 #else
-                dlclose(function_table_info->lib_handle);
+                dlclose(pFunctionTableInfo->m_libHandle);
 #endif
-                function_table_info->lib_handle = NULL;
+                pFunctionTableInfo->m_libHandle = NULL;
             }
 
-            if (NULL != function_table_info->gpa_func_table)
+            if (NULL != pFunctionTableInfo->m_pGpaFuncTable)
             {
-                free(function_table_info->gpa_func_table);
-                function_table_info->gpa_func_table = NULL;
+                free(pFunctionTableInfo->m_pGpaFuncTable);
+                pFunctionTableInfo->m_pGpaFuncTable = NULL;
             }
 
-            if (NULL != function_table_info->next_func_table_info)
+            if (NULL != pFunctionTableInfo->m_pNext)
             {
-                gpa_function_table_info->next_func_table_info = function_table_info->next_func_table_info;
-                free(function_table_info);
+                g_pFuncTableInfo->m_pNext = pFunctionTableInfo->m_pNext;
+                free(pFunctionTableInfo);
             }
             else
             {
-                gpa_function_table_info->next_func_table_info = NULL;
+                g_pFuncTableInfo->m_pNext = NULL;
             }
         }
 
-        if (NULL != gpa_function_table_info->lib_handle)
+        if (NULL != g_pFuncTableInfo->m_libHandle)
         {
 #ifdef _WIN32
-            FreeLibrary(gpa_function_table_info->lib_handle);
+            FreeLibrary(g_pFuncTableInfo->m_libHandle);
 #else
-            dlclose(gpa_function_table_info->lib_handle);
+            dlclose(g_pFuncTableInfo->m_libHandle);
 #endif
-            gpa_function_table_info->lib_handle = NULL;
+            g_pFuncTableInfo->m_libHandle = NULL;
         }
 
-        if (NULL != gpa_function_table_info->gpa_func_table)
+        if (NULL != g_pFuncTableInfo->m_pGpaFuncTable)
         {
-            free(gpa_function_table_info->gpa_func_table);
-            gpa_function_table_info->gpa_func_table = NULL;
+            free(g_pFuncTableInfo->m_pGpaFuncTable);
+            g_pFuncTableInfo->m_pGpaFuncTable = NULL;
         }
 
-        gpa_function_table_info->gpa_api_type = kGpaApiNoSupport;
-        free(gpa_function_table_info);
-        gpa_function_table_info = NULL;
+        g_pFuncTableInfo->m_gpaApiType = GPA_API_NO_SUPPORT;
+        free(g_pFuncTableInfo);
+        g_pFuncTableInfo = NULL;
     }
 #endif
 }
 
 #ifdef __cplusplus
-/// @brief Singleton Class to handle the loading and unloading the possible APIs.
-class GpaApiManager
+/// Singleton Class to handle the loading and unloading the possible APIs
+class GPAApiManager
 {
 public:
-    /// @brief Returns the instance of the GPAApiManger.
-    ///
-    /// @return The instance of the GpiApiManager.
-    static GpaApiManager* Instance()
+    /// Returns the instance of the GPAApiManger
+    /// \return returns  the instance of the GPAApiManager
+    static GPAApiManager* Instance()
     {
-        if (nullptr == gpa_api_manager_)
+        if (nullptr == m_pGpaApiManager)
         {
-            gpa_api_manager_ = new (std::nothrow) GpaApiManager();
+            m_pGpaApiManager = new (std::nothrow) GPAApiManager();
         }
 
-        return gpa_api_manager_;
+        return m_pGpaApiManager;
     }
 
-    /// @brief Deletes the static instance instance.
+    /// Deletes the static instance instance
     static void DeleteInstance()
     {
-        if (nullptr != gpa_api_manager_)
+        if (nullptr != m_pGpaApiManager)
         {
-            delete gpa_api_manager_;
-            gpa_api_manager_ = nullptr;
+            delete m_pGpaApiManager;
+            m_pGpaApiManager = nullptr;
         }
     }
 
-    /// @brief Loads the dll and initialize the function table for the passed API type.
-    ///
-    /// @param [in] api_type Type of the API to be loaded.
-    /// @param[in] lib_path Path to the folder containing dll.
-    ///
-    /// @return The status of the operation.
-    /// @retval kGpaStatusOk On success.
-    /// @retval kGpaStatusErrorFailed If an internal error occurred.
-    /// @retval kGpaStatusErrorApiNotSupported The desired API is not supported on the current system.
-    /// @retval kGpaStatusErrorLibAlreadyLoaded The necessary library has already been loaded.
-    /// @retval kGpaStatusErrorLibLoadFailed The library failed to load.
-    GpaStatus LoadApi(const GpaApiType& api_type, const LocaleString lib_path = LocaleString()) const
+    /// Loads the dll and initialize the function table for the passed API type
+    /// \param[in] apiType type of the API to be loaded
+    /// \param[in] libPath path to the folder containing dll
+    /// \return returns appropriate status of the operation
+    GPA_Status LoadApi(const GPA_API_Type& apiType, const LocaleString libPath = LocaleString()) const
     {
-        LocaleChar lib_path_as_char[GPA_MAX_PATH] = {0};
-        bool       local_path_given               = false;
+        LocaleChar libPathAsChar[GPA_MAX_PATH] = {0};
+        bool       localPathGiven              = false;
 
-        if (!lib_path.empty())
+        if (!libPath.empty())
         {
-            STR_COPY(lib_path_as_char, ARRAY_LENGTH(lib_path_as_char), lib_path.c_str());
-            local_path_given = true;
+            STR_COPY(libPathAsChar, ARRAY_LENGTH(libPathAsChar), libPath.c_str());
+            localPathGiven = true;
         }
 
-        return GpaInterfaceLoaderLoadApi(api_type, local_path_given ? lib_path_as_char : NULL);
+        return GPAIL_LoadApi(apiType, localPathGiven ? libPathAsChar : NULL);
     }
 
-    /// @brief Unloads the function table for the passed API.
-    ///
-    /// @param [in] api_type API type.
-    void UnloadApi(const GpaApiType& apiType) const
+    /// Unloads the function table for the passed API
+    /// \param[in] apiType API type
+    void UnloadApi(const GPA_API_Type& apiType) const
     {
-        GpaInterfaceLoaderUnLoadApi(apiType);
+        GPAIL_UnLoadApi(apiType);
     }
 
-    /// @brief Get the function table for the passed API.
-    ///
-    /// @param [in] api_type API type.
-    ///
-    /// @return Pointer to the API function table if loaded, otherwise null pointer.
-    GpaFunctionTable* GetFunctionTable(const GpaApiType& api_type) const
+    /// Get the function table for the passed API
+    /// \param[in] apiType API type
+    /// \return returns pointer to the API function table if loaded otherwise null pointer
+    GPAFunctionTable* GetFunctionTable(const GPA_API_Type& apiType) const
     {
-        return const_cast<GpaFunctionTable*>(GpaInterfaceLoaderGetFunctionTable(api_type));
+        return const_cast<GPAFunctionTable*>(GPAIL_GetFunctionTable(apiType));
     }
 
-    /// @brief Gets the library file name for the given API.
-    ///
-    /// @param [in] api_type Type of the API.
-    ///
-    /// @return Library file name string.
-    LocaleString GetLibraryFileName(const GpaApiType& api_type) const
+    /// Gets the library file name for the given API
+    /// \param[in] apiType type of the API
+    /// \return library file name string
+    LocaleString GetLibraryFileName(const GPA_API_Type& apiType) const
     {
-        return LocaleString(GpaInterfaceLoaderGetLibraryFileName(api_type));
+        return LocaleString(GPAIL_GetLibraryFileName(apiType));
     }
 
-    /// @brief Get the library full path.
-    ///
-    /// @param [in] api_type Type of the API.
-    /// @param [in,opt] lib_path Local path to the library files.
-    ///
-    /// @return Library with full path string.
-    LocaleString GetLibraryFullPath(const GpaApiType& api_type, const LocaleString lib_path = LocaleString()) const
+    /// Get the library full path
+    /// \param[in] apiType type of the API
+    /// \param[in,opt] libPath local path to the library files
+    /// \return library with full path string
+    LocaleString GetLibraryFullPath(const GPA_API_Type& apiType, const LocaleString libPath = LocaleString()) const
     {
-        LocaleChar lib_path_as_char[GPA_MAX_PATH] = {0};
-        bool       local_path_given              = false;
+        LocaleChar libPathAsChar[GPA_MAX_PATH] = {0};
+        bool       localPathGiven              = false;
 
-        if (!lib_path.empty())
+        if (!libPath.empty())
         {
-            STR_COPY(lib_path_as_char, ARRAY_LENGTH(lib_path_as_char), lib_path.c_str());
-            local_path_given = true;
+            STR_COPY(libPathAsChar, ARRAY_LENGTH(libPathAsChar), libPath.c_str());
+            localPathGiven = true;
         }
 
-        return LocaleString(GpaInterfaceLoaderGetLibraryFullPath(api_type, local_path_given ? lib_path_as_char : NULL));
+        return LocaleString(GPAIL_GetLibraryFullPath(apiType, localPathGiven ? libPathAsChar : NULL));
     }
 
 private:
-    /// @brief Constructor.
-    GpaApiManager() = default;
+    /// Constructor
+    GPAApiManager() = default;
 
-    /// @brief Destructor.
-    ~GpaApiManager()
+    /// Destructor
+    ~GPAApiManager()
     {
-        GpaInterfaceLoaderClearLoader();
+        GPAIL_ClearLoader();
     }
 
-    static GpaApiManager* gpa_api_manager_;  ///< GPA Api Manager pointer.
+    static GPAApiManager* m_pGpaApiManager;  ///< GPA Api Manager pointer
 };
 
 #endif  //__cplusplus
 
-#endif  // GPU_PERFORMANCE_API_GPU_PERF_API_INTERFACE_LOADER_H_
+#endif  // GPU_PERF_API_INTERFACE_LOADER_H_

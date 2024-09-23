@@ -25,7 +25,7 @@
 #include <QDialog>
 #include <QMap>
 #include "Code/Interface/QRDInterface.h"
-
+#include<regex>
 namespace Ui
 {
 class PerformanceCounterSelection;
@@ -48,10 +48,15 @@ public:
   void SetSelectedCounters(const QList<GPUCounter> &counters);
   QList<GPUCounter> GetSelectedCounters() const;
 
+  QVector<CounterDescription> m_counterDesciptions;
+
 public slots:
   // manual slots
   void Save();
   void Load();
+  void exportGPUCounters();
+  void exportNVGPUCounters();
+  void exportAMDGPUCounters();
 
 private slots:
   // automatic slots

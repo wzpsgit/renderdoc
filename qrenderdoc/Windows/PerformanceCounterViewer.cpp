@@ -394,6 +394,8 @@ void PerformanceCounterViewer::OnEventChanged(uint32_t eventId)
   }
 }
 
+
+
 void PerformanceCounterViewer::on_counterResults_doubleClicked(const QModelIndex &index)
 {
   uint32_t eid = index.data(EIDRole).toUInt();
@@ -459,4 +461,15 @@ void PerformanceCounterViewer::on_saveCSV_clicked()
                          tr("Cannot find target directory to save to"));
     }
   }
+}
+
+
+void PerformanceCounterViewer::exportCounterDescriptions()
+{
+
+}
+
+
+void PerformanceCounterViewer::on_exportCounters_clicked()
+{
 }

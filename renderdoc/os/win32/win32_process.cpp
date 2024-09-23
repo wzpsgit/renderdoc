@@ -210,6 +210,12 @@ extern "C" __declspec(dllexport) void __cdecl INTERNAL_SetCaptureFile(const char
     RenderDoc::Inst().SetCaptureFileTemplate(capfile);
 }
 
+extern "C" __declspec(dllexport) void __cdecl INTERNAL_TriggerCapture(uint32_t* frames)
+{
+    if(*frames > 0)
+        RenderDoc::Inst().TriggerCapture(*frames);
+}
+
 extern "C" __declspec(dllexport) void __cdecl INTERNAL_SetDebugLogFile(const char *logfile)
 {
   RENDERDOC_SetDebugLogFile(logfile ? logfile : rdcstr());
@@ -1005,6 +1011,13 @@ rdcpair<RDResult, uint32_t> Process::InjectIntoProcess(uint32_t pid,
     InjectFunctionCall(hProcess, loc, "INTERNAL_GetTargetControlIdent", &result.second,
                        sizeof(result.second));
 
+    if (opts.delayForDebugger)
+    {
+        uint32_t frames = 1;
+        InjectFunctionCall(hProcess, loc, "INTERNAL_TriggerCapture", &frames,
+            sizeof(uint32_t));
+    }
+
     if(!env.empty())
     {
       for(const EnvironmentModification &e : env)
@@ -1231,8 +1244,8 @@ RDResult BackupAndChangeRegistry(GlobalHookData &hookdata, const rdcstr &shimpat
   // get shorter because the shim filename is bigger than 8.3.
 
   DWORD nativeShortSize = GetShortPathNameW(StringFormat::UTF82Wide(shimpathNative).c_str(), NULL,
-                                            (DWORD)shimpathNative.length());
-  if(nativeShortSize == (DWORD)shimpathNative.length() + 1)
+                                            0);
+  if(nativeShortSize == 0)
   {
     RETURN_ERROR_RESULT(
         ResultCode::FileIOFailed,
@@ -1240,12 +1253,11 @@ RDResult BackupAndChangeRegistry(GlobalHookData &hookdata, const rdcstr &shimpat
         "For the global hook, short paths must be enabled where RenderDoc is installed.");
   }
 
+  DWORD wow32ShortSize = GetShortPathNameW(StringFormat::UTF82Wide(shimpathWow32).c_str(), NULL, 0);
   if(!shimpathWow32.empty())
   {
-    DWORD wow32ShortSize = GetShortPathNameW(StringFormat::UTF82Wide(shimpathWow32).c_str(), NULL,
-                                             (DWORD)shimpathWow32.length());
 
-    if(wow32ShortSize == (DWORD)shimpathWow32.length() + 1)
+    if(wow32ShortSize == 0)
     {
       RETURN_ERROR_RESULT(
           ResultCode::FileIOFailed,
@@ -1293,7 +1305,7 @@ RDResult BackupAndChangeRegistry(GlobalHookData &hookdata, const rdcstr &shimpat
   ret = RegSetValueExA(keyNative, "LoadAppInit_DLLs", 0, REG_DWORD, (const BYTE *)&one, sizeof(one));
   REG_CHECK("Could not set LoadAppInit_DLLs");
 
-  rdcwstr shortpath(shimpathNative.size());
+  rdcwstr shortpath(nativeShortSize);
   GetShortPathNameW(StringFormat::UTF82Wide(shimpathNative).c_str(), shortpath.data(),
                     (DWORD)shortpath.length());
 
@@ -1322,7 +1334,7 @@ RDResult BackupAndChangeRegistry(GlobalHookData &hookdata, const rdcstr &shimpat
     ret = RegSetValueExA(keyWow32, "LoadAppInit_DLLs", 0, REG_DWORD, (const BYTE *)&one, sizeof(one));
     REG_CHECK("Could not set LoadAppInit_DLLs");
 
-    shortpath = rdcwstr(shimpathWow32.size());
+    shortpath = rdcwstr(wow32ShortSize);
     GetShortPathNameW(StringFormat::UTF82Wide(shimpathWow32).c_str(), shortpath.data(),
                       (DWORD)shortpath.length());
 

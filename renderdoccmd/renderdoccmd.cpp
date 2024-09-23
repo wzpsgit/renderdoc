@@ -536,8 +536,8 @@ public:
   virtual void AddOptions(cmdline::parser &parser)
   {
     parser.set_footer("<capture.rdc>");
-    parser.add<uint32_t>("width", 'w', "The preview window width.", false, 1280);
-    parser.add<uint32_t>("height", 'h', "The preview window height.", false, 720);
+    parser.add<uint32_t>("width", 'w', "The preview window width.", false, 0);
+    parser.add<uint32_t>("height", 'h', "The preview window height.", false, 0);
     parser.add<uint32_t>("loops", 'l', "How many times to loop the replay, or 0 for indefinite.",
                          false, 0);
     parser.add<std::string>("remote-host", 0,
@@ -603,6 +603,11 @@ public:
 
       if(result.OK())
       {
+        if (width == 0 || height == 0)
+        {
+            width = 1280;
+            height = 720;
+        }
         DisplayRendererPreview(renderer, width, height, loops);
 
         remote->CloseCapture(renderer);
@@ -632,6 +637,45 @@ public:
       IReplayController *renderer = NULL;
       ResultDetails result = {};
       rdctie(result, renderer) = file->OpenCapture(ReplayOptions(), NULL);
+
+      if (width == 0 || height == 0)
+      {
+          auto s = file->GetThumbnail(FileType::PNG, 65535);
+          width = s.width;
+          height = s.height;
+
+
+
+
+          rdcarray<TextureDescription> texs = renderer->GetTextures();
+          for (const TextureDescription& desc : texs)
+          {
+              if (desc.creationFlags & TextureCategory::SwapBuffer)
+              {
+                width = std::max( desc.width,width);
+                height = std::max(desc.height,height);
+                std::cout << "get target size\n";
+                break;
+              }
+          }
+
+          //// replay last action
+          //auto actions = renderer->GetRootActions();
+          //auto lastAction = actions.back();       
+          //while (!lastAction.children.empty())
+          //    lastAction = lastAction.children.back();
+          //renderer->SetFrameEvent(lastAction.eventId, true);
+
+          //// update the viewport
+          //const PipeState& state = renderer->GetPipelineState();
+          //Viewport viewport = state.GetViewport(0);
+          //if (viewport.width > width || viewport.height > height)
+          //{
+          //    width = uint32_t(viewport.width);
+          //    height = uint32_t(viewport.height);
+          //}
+
+      }
 
       file->Shutdown();
 

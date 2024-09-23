@@ -31,6 +31,8 @@
 
 #include <unordered_map>
 
+
+
 #define JSON_ID "rdocPerformanceCounterSettings"
 #define JSON_VER 1
 
@@ -192,6 +194,9 @@ PerformanceCounterSelection::PerformanceCounterSelection(ICaptureContext &ctx,
   connect(ui->load, &QPushButton::clicked, this, &PerformanceCounterSelection::Load);
   connect(ui->sampleCounters, &QPushButton::clicked, this, &PerformanceCounterSelection::accept);
   connect(ui->cancel, &QPushButton::clicked, this, &PerformanceCounterSelection::reject);
+  connect(ui->exportGPUCounters, &QPushButton::clicked, this,
+          &PerformanceCounterSelection::exportGPUCounters);
+ 
 
   connect(ui->counterTree, &RDTreeWidget::itemChanged, [this](RDTreeWidgetItem *item, int) -> void {
     const QVariant d = item->data(0, CounterIdRole);
@@ -260,6 +265,9 @@ PerformanceCounterSelection::PerformanceCounterSelection(ICaptureContext &ctx,
     {
       counterDescriptions.append(controller->DescribeCounter(counter));
     }
+
+    m_counterDesciptions = counterDescriptions;
+
 
     if(ptr)
     {
@@ -465,6 +473,153 @@ void PerformanceCounterSelection::Load()
     RDDialog::critical(this, tr("Error loading config"),
                        tr("Couldn't open path %1 for reading.").arg(filename));
   }
+}
+
+void PerformanceCounterSelection::exportGPUCounters()
+{
+
+    bool isAMD = false;
+    bool isNV = false;
+    
+    for (auto counterdesc : m_counterDesciptions)
+    {
+        if (IsAMDCounter(counterdesc.counter))
+        {
+          isAMD = true;
+          break;
+        }
+        if (IsNvidiaCounter(counterdesc.counter))
+        {
+          isNV = true;
+          break;
+        }
+
+    }
+
+   if(isAMD)
+   {
+      exportAMDGPUCounters();
+   }
+   else if(isNV)
+   {
+     exportNVGPUCounters();
+   }
+
+   else
+   {
+     QMessageBox::critical(this, tr("Export Failed"), tr("Unknow GPU counter"), QMessageBox::Ok);
+   }
+   
+
+   
+}
+
+void PerformanceCounterSelection::exportNVGPUCounters()
+{
+  auto strip = [&](std::string &str) -> std::string & {
+    auto front = str.find_first_not_of(' ');
+    if(front != std::string::npos)
+    {
+      auto back = str.find_last_not_of(' ');
+      str = str.substr(front, back - front + 1);
+    }
+    return str;
+  };
+
+  auto parse_description = [&](std::string input) -> std::map<std::string, std::string> {
+    std::regex field_regex(R"((HW Unit|MetricType|RollupOp|Submetric|DimUnit):\s*<em>([^<]*)</em>)");
+    std::smatch matches;
+    std::map<std::string, std::string> fields;
+
+    auto ReplaceCommas = [&](const std::string &str) -> std::string {
+      std::string result = str;
+      std::replace(result.begin(), result.end(), ',', '_');    // 将逗号替换为下划线
+      return result;
+    };
+
+    std::regex intro_regex(R"((.*?)<br/>HW Unit: <em>(.*?)</em>)");
+    if(std::regex_search(input, matches, intro_regex))
+    {
+      fields["Intro"] = ReplaceCommas(matches[1].str());
+    }
+    // 使用正则表达式搜索并拆分字符串
+    while(std::regex_search(input, matches, field_regex))
+    {
+      fields[matches[1].str()] = matches[2].str();
+      input = matches.suffix().str();    // 更新剩余的字符串
+    }
+
+    // 确保所有指定的字段都被添加到映射中，如果没有找到则添加空字符串
+    std::vector<std::string> specificFields = {"HW Unit", "MetricType", "RollupOp", "Submetric",
+                                               "DimUnit"};
+    for(const auto &field : specificFields)
+    {
+      if(fields.find(field) == fields.end())
+      {
+        fields[field] = "";
+      }
+    }
+
+    return fields;
+  };
+
+  QString filePath = QDir::currentPath() + tr("/all_nv_counters.csv");
+  QFile file(tr("all_nv_counters.csv"));
+  if(file.open(QIODevice::WriteOnly | QIODevice::Text))
+  {
+    QTextStream out(&file);
+    out << "Category,Name,Description,ByteWidth,HW Unit,Metric Type,Rollup Op,Submetric,Dim "
+           "Unit\n";
+    for(const CounterDescription &desc : m_counterDesciptions)
+    {
+      std::string str = desc.description.c_str();
+      auto details = parse_description(str);
+
+      out << desc.category << "," << desc.name << "," << details["Intro"].c_str() << ","
+          << desc.resultByteWidth << "," << details["HW Unit"].c_str() << ","
+          << details["MetricType"].c_str() << "," << details["RollupOp"].c_str() << ","
+          << details["Submetric"].c_str() << "," << details["DimUnit"].c_str() << "\n";
+    }
+
+    // 导出成功后, 显示弹窗提示用户
+    QMessageBox::information(
+        this, tr("Export Successful"),
+        tr("NV GPU counter descriptions have been exported to:\n\n%1").arg(filePath), QMessageBox::Ok);
+  }
+  else
+  {
+    QMessageBox::critical(this, tr("Export Failed"),
+                          tr("Failed to export GPU counter descriptions."), QMessageBox::Ok);
+  }
+}
+
+void PerformanceCounterSelection::exportAMDGPUCounters()
+{
+
+  QString filePath = QDir::currentPath() + tr("/all_amd_counters.csv");
+  QFile file(tr("all_amd_counters.csv"));
+  if(file.open(QIODevice::WriteOnly | QIODevice::Text))
+  {
+    QTextStream out(&file);
+    out << "Category,Name,Description\n";
+    for(const CounterDescription &desc : m_counterDesciptions)
+    {
+
+         out << desc.category << "," << desc.name << "," << desc.description << "\n";
+    }
+
+    // 导出成功后, 显示弹窗提示用户
+    QMessageBox::information(
+        this, tr("Export Successful"),
+        tr("AMD GPU counter descriptions have been exported to:\n\n%1").arg(filePath), QMessageBox::Ok);
+  }
+  else
+  {
+    QMessageBox::critical(this, tr("Export Failed"),
+                          tr("Failed to export GPU counter descriptions."), QMessageBox::Ok);
+  }
+
+
 }
 
 void PerformanceCounterSelection::on_enabledCounters_activated(const QModelIndex &index)

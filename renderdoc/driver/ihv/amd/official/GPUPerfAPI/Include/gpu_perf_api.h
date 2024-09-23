@@ -1,779 +1,625 @@
 //==============================================================================
 // Copyright (c) 2010-2021 Advanced Micro Devices, Inc. All rights reserved.
-/// @author AMD Developer Tools Team
-/// @file
-/// @brief  This is the header file that must be included by an application that
-///         wishes to use GPUPerfAPI. It defines all the available entry points.
+/// \author AMD Developer Tools Team
+/// \file
+/// \brief  Deprecated header; use gpu_performance_api/gpu_perf_api.h
 //==============================================================================
 
-#ifndef GPU_PERFORMANCE_API_GPU_PERF_API_H_
-#define GPU_PERFORMANCE_API_GPU_PERF_API_H_
+#ifndef GPU_PERF_API_H_
+#define GPU_PERF_API_H_
 
-#include <stddef.h>
+#pragma message("Warning: You are including a deprecated header. Please use gpu_performance_api/gpu_perf_api.h")
 
-#ifndef GPA_LIB_DECL
-/// Macro for exporting an API function.
-#ifdef _WIN32
-#ifdef __cplusplus
-#define GPA_LIB_DECL extern "C" __declspec(dllimport)
-#else
-#define GPA_LIB_DECL __declspec(dllimport)
-#endif
-#else  //__linux__
-#ifdef __cplusplus
-#define GPA_LIB_DECL extern "C"
-#else
-#define GPA_LIB_DECL extern
-#endif
-#endif
-#endif
+// New header
+#include "gpu_performance_api/gpu_perf_api.h"
 
-#if DISABLE_GPA
-#define USE_GPA 0  ///< Macro used to determine if GPA functions should be stubbed out.
-#else
-#define USE_GPA 1  ///< Macro used to determine if GPA functions should be stubbed out.
-#endif
-
-#include "gpu_perf_api_function_types.h"
+// Deprecated headers
 #include "gpu_perf_api_types.h"
+#include "gpu_perf_api_function_types.h"
 
-#define GPA_FUNCTION_TABLE_MAJOR_VERSION_NUMBER \
-    3  ///< API major version -- will be incremented if/when there are non-backwards compatible API changes introduced.
-#define GPA_FUNCTION_TABLE_MINOR_VERSION_NUMBER \
-    (sizeof(struct _GpaFunctionTable))  ///< API minor version -- set to the structure size; will increase when new API functions are added.
-
-/// @brief Structure to hold the function table of the exported GPA APIs.
-typedef struct _GpaFunctionTable
+/// Structure to hold the function table of the exported GPA APIs
+typedef struct _GPAFunctionTable
 {
-    GpaUInt32 major_version;  ///< API major version.
-    GpaUInt32 minor_version;  ///< API minor version.
+    gpa_uint32 m_majorVer;  ///< API major version
+    gpa_uint32 m_minorVer;  ///< API minor version
 
-#define GPA_FUNCTION_PREFIX(func) func##PtrType func;  ///< Macro used by gpu_perf_api_functions.h.
+#define GPA_DEPRECATED_FUNCTION_PREFIX(func) func##PtrType func;  ///< Macro used by gpu_perf_api_functions_deprecated.h
+// Deprecated header
 #include "gpu_perf_api_functions.h"
-#undef GPA_FUNCTION_PREFIX
+#undef GPA_DEPRECATED_FUNCTION_PREFIX
 
 #ifdef __cplusplus
-    /// @brief Constructor.
-    _GpaFunctionTable()
+    /// Constructor
+    _GPAFunctionTable()
     {
-        major_version = GPA_FUNCTION_TABLE_MAJOR_VERSION_NUMBER;
-        minor_version = GPA_FUNCTION_TABLE_MINOR_VERSION_NUMBER;
-#define GPA_FUNCTION_PREFIX(func) func = nullptr;  ///< Macro used by gpu_perf_api_functions.h.
+        m_majorVer = GPA_FUNCTION_TABLE_MAJOR_VERSION_NUMBER;
+        m_minorVer = GPA_FUNCTION_TABLE_MINOR_VERSION_NUMBER;
+#define GPA_DEPRECATED_FUNCTION_PREFIX(func) func = nullptr;  ///< Macro used by gpu_perf_api_functions_deprecated.h
+// Deprecated header
 #include "gpu_perf_api_functions.h"
-#undef GPA_FUNCTION_PREFIX
+#undef GPA_DEPRECATED_FUNCTION_PREFIX
     }
 #endif
 
-} GpaFunctionTable;
+} GPAFunctionTable;
 
 #if USE_GPA
 
-/// @defgroup gpa_api_version GPA API Version
+// GPA API Version
 
-/// @brief Gets the GPA version.
+/// \brief Gets the GPA version
 ///
-/// @ingroup gpa_api_version
-///
-/// @param [out] major_version The value that will hold the major version of GPA upon successful execution.
-/// @param [out] minor_version The value that will hold the minor version of GPA upon successful execution.
-/// @param [out] build_version The value that will hold the build number of GPA upon successful execution.
-/// @param [out] update_version The value that will hold the update version of GPA upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorException If an unexpected error occurred.
-GPA_LIB_DECL GpaStatus GpaGetVersion(GpaUInt32* major_version, GpaUInt32* minor_version, GpaUInt32* build_version, GpaUInt32* update_version);
+/// \param[out] pMajorVersion The value that will hold the major version of GPA upon successful execution.
+/// \param[out] pMinorVersion The value that will hold the minor version of GPA upon successful execution.
+/// \param[out] pBuild The value that will hold the build number of GPA upon successful execution.
+/// \param[out] pUpdateVersion The value that will hold the update version of GPA upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetVersion(gpa_uint32* pMajorVersion, gpa_uint32* pMinorVersion, gpa_uint32* pBuild, gpa_uint32* pUpdateVersion);
 
-/// @defgroup gpa_api_table GPA API Function Table
+// GPA API Table
 
-/// @brief Gets the GPA API function table.
+/// \brief Gets the GPA API function table.
 ///
-/// @ingroup gpa_api_table
-///
-/// @param [out] gpa_func_table pointer to GPA Function table structure.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorLibLoadMajorVersionMismatch If the major version of the loaded binary does not match the header's.
-/// @retval kGpaStatusErrorLibLoadMinorVersionMismatch If the minor version of the loaded binary does not match the header's.
-/// @retval kGpaStatusErrorException If an unexpected error occurred.
-GPA_LIB_DECL GpaStatus GpaGetFuncTable(void* gpa_func_table);
+/// \param[out] pGPAFuncTable pointer to GPA Function table structure.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetFuncTable(void* pGPAFuncTable);
 
-/// @defgroup gpa_logging Logging
+// Logging
 
-/// @brief Registers a callback function to receive log messages.
+/// \brief Registers a callback function to receive log messages.
 ///
 /// Only one callback function can be registered, so the implementation should be able
 /// to handle the different types of messages. A parameter to the callback function will
 /// indicate the message type being received. Messages will not contain a newline character
 /// at the end of the message.
-///
-/// @ingroup gpa_logging
-///
-/// @param [in] logging_type Identifies the type of messages to receive callbacks for.
-/// @param [in] callback_func_ptr Pointer to the callback function.
-///
-/// @retval kGpaStatusOk On Success.
-/// @retval kGpaStatusErrorNullPointer If callback_func_ptr is nullptr and the logging_type is not kGpaLoggingNone.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaRegisterLoggingCallback(GpaLoggingType logging_type, GpaLoggingCallbackPtrType callback_func_ptr);
+/// \param[in] loggingType Identifies the type of messages to receive callbacks for.
+/// \param[in] pCallbackFuncPtr Pointer to the callback function.
+/// \return GPA_STATUS_OK, unless the callbackFuncPtr is nullptr and the loggingType is not
+/// GPA_LOGGING_NONE, in which case GPA_STATUS_ERROR_NULL_POINTER is returned.
+GPA_LIB_DECL GPA_Status GPA_RegisterLoggingCallback(GPA_Logging_Type loggingType, GPA_LoggingCallbackPtrType pCallbackFuncPtr);
 
-/// @defgroup gpa_init_destroy GPA Initialization and Destruction
+// Init / Destroy GPA
 
-/// @brief Initializes the driver so that counters are exposed.
+/// \brief Initializes the driver so that counters are exposed.
 ///
 /// This function must be called before the rendering context or device is created. In the case of DirectX 12
 /// or Vulkan, this function must be called before a queue is created.
-///
-/// @ingroup gpa_init_destroy
-///
-/// @param [in] gpa_initialize_flags Flags used to initialize GPA. This should be a combination of GpaInitializeBits.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorGpaAlreadyInitialized If GPA is already initialized.
-/// @retval kGpaStatusErrorInvalidParameter If invalid flags have been supplied.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaInitialize(GpaInitializeFlags gpa_initialize_flags);
+/// \param[in] flags Flags used to initialize GPA. This should be a combination of GPA_Initialize_Bits.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_Initialize(GPA_InitializeFlags flags);
 
-/// @brief Undoes any initialization to ensure proper behavior in applications that are not being profiled.
+/// \brief Undoes any initialization to ensure proper behavior in applications that are not being profiled.
 ///
 /// This function must be called after the rendering context or device is released / destroyed.
-///
-/// @ingroup gpa_init_destroy
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorGpaNotInitialized If GPA has not been initialized.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaDestroy();
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_Destroy();
 
-/// @defgroup gpa_context_start_finish GPA Context Startup and Finish
+// Context Startup / Finish
 
-/// @brief Opens the specified context, which provides access to GPU performance counters.
+/// \brief Opens the specified context, which provides access to GPU performance counters.
 ///
-/// This function must be called after GpaInitialize and before any other GPA functions.
-///
-/// @ingroup gpa_context_start_finish
-///
-/// @param [in] api_context The context to open counters for. Typically a device pointer. Refer to GPA API documentation for further details.
-/// @param [in] gpa_open_context_flags Flags used to initialize the context. This should be a combination of GpaOpenContextBits.
-/// @param [out] gpa_context_id Unique identifier of the opened context.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If either of the context parameters are NULL.
-/// @retval kGpaStatusErrorContextAlreadyOpen If the context has already been opened.
-/// @retval kGpaStatusErrorInvalidParameter If one the flags is invalid.
-/// @retval kGpaStatusErrorHardwareNotSupported If the hardware is not supported.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaOpenContext(void* api_context, GpaOpenContextFlags gpa_open_context_flags, GpaContextId* gpa_context_id);
+/// This function must be called after GPA_Initialize and before any other GPA functions.
+/// \param[in] pContext The context to open counters for. Typically a device pointer. Refer to GPA API documentation for further details.
+/// \param[in] flags Flags used to initialize the context. This should be a combination of GPA_OpenContext_Bits.
+/// \param[out] pContextId Unique identifier of the opened context.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_OpenContext(void* pContext, GPA_OpenContextFlags flags, GPA_ContextId* pContextId);
 
-/// @brief Closes the specified context, which ends access to GPU performance counters.
+/// \brief Closes the specified context, which ends access to GPU performance counters.
 ///
-/// GPA functions should not be called again until the counters are reopened with GpaOpenContext.
-///
-/// @ingroup gpa_context_start_finish
-///
-/// @param [in] gpa_context_id Unique identifier of the opened context.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorInvalidParameter The supplied context has invalid state.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaCloseContext(GpaContextId gpa_context_id);
+/// GPA functions should not be called again until the counters are reopened with GPA_OpenContext.
+/// \param[in] contextId Unique identifier of the opened context.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_CloseContext(GPA_ContextId contextId);
 
-/// @defgroup gpa_context_interrogation GPA Context Interrogation
+// Context Interrogation
 
-/// @brief Gets a mask of the sample types supported by the specified context.
+/// \brief Gets a mask of the sample types supported by the specified context.
 ///
 /// A call to GPA_CreateSession will fail if the requested sample types are not compatible with the context's sample types.
 /// supported by the context.
-///
-/// @ingroup gpa_context_interrogation
-///
-/// @param [in] gpa_context_id Unique identifier of the opened context.
-/// @param [out] sample_types The value that will be set to the mask of the supported sample types upon successful execution. This will be a combination of GPA_Sample_Bits.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetSupportedSampleTypes(GpaContextId gpa_context_id, GpaContextSampleTypeFlags* sample_types);
+/// \param[in] contextId Unique identifier of the opened context.
+/// \param[out] pSampleTypes The value that will be set to the mask of the supported sample types upon successful execution. This will be a combination of GPA_Sample_Bits.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetSupportedSampleTypes(GPA_ContextId contextId, GPA_ContextSampleTypeFlags* pSampleTypes);
 
-/// @brief Gets the GPU device id and revision id associated with the specified context.
+/// \brief Gets the GPU device id and revision id associated with the specified context.
 ///
-/// @ingroup gpa_context_interrogation
-///
-/// @param[in] gpa_context_id Unique identifier of the opened context.
-/// @param[out] device_id The value that will be set to the device id upon successful execution.
-/// @param[out] revision_id The value that will be set to the device revision id upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetDeviceAndRevisionId(GpaContextId gpa_context_id, GpaUInt32* device_id, GpaUInt32* revision_id);
+/// \param[in] contextId Unique identifier of the opened context.
+/// \param[out] pDeviceId The value that will be set to the device id upon successful execution.
+/// \param[out] pRevisionId The value that will be set to the device revision id upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetDeviceAndRevisionId(GPA_ContextId contextId, gpa_uint32* pDeviceId, gpa_uint32* pRevisionId);
 
-/// @brief Gets the device name of the GPU associated with the specified context.
+/// \brief Gets the device name of the GPU associated with the specified context.
 ///
-/// @ingroup gpa_context_interrogation
-///
-/// @param[in] gpa_context_id Unique identifier of the opened context.
-/// @param[out] device_name The value that will be set to the device name upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetDeviceName(GpaContextId gpa_context_id, const char** device_name);
+/// \param[in] contextId Unique identifier of the opened context.
+/// \param[out] ppDeviceName The value that will be set to the device name upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetDeviceName(GPA_ContextId contextId, const char** ppDeviceName);
 
-/// @defgroup gpa_counter_interrogation GPA Counter Interrogation
+#ifdef GPA_PIX_BUILD
+/// @brief Overrides the device information for the specified context.
+///
+/// @param context_id Unique identifier of the opened context.
+/// @param num_shader_engines The number of shader engines.
+/// @param num_compute_units The total number of compute units.
+/// @param num_simds The total number of SIMDS.
+/// @param num_waves_per_simd The number of waves per SIMD.
+/// @return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status
+GPA_UpdateDeviceInformation(GPA_ContextId context_id, gpa_uint32 num_shader_engines, gpa_uint32 num_compute_units, gpa_uint32 num_simds, gpa_uint32 num_waves_per_simd);
+#endif // GPA_PIX_BUILD
 
-/// @brief Gets the number of counters available.
-///
-/// @ingroup gpa_counter_interrogation
-///
-/// @param[in] gpa_context_id Unique identifier of the opened context.
-/// @param[out] number_of_counters The value which will hold the count upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetNumCounters(GpaContextId gpa_context_id, GpaUInt32* number_of_counters);
+// Counter Interrogation
 
-/// @brief Gets the name of the specified counter.
+#ifdef GPA_PIX_BUILD
+/// \brief Gets the number of counters available.
 ///
-/// @ingroup gpa_counter_interrogation
+/// \param[in] sessionId Unique identifier of a session.
+/// \param[out] pCount The value which will hold the count upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetNumCounters(GPA_SessionId sessionId, gpa_uint32* pCount);
+#else
+/// \brief Gets the number of counters available.
 ///
-/// @param[in] gpa_context_id Unique identifier of the opened context.
-/// @param[in] index The index of the counter whose name is needed. Must lie between 0 and (GpaGetNumCounters result - 1).
-/// @param[out] counter_name The address which will hold the name upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorIndexOutOfRange If the counter index is out of range.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetCounterName(GpaContextId gpa_context_id, GpaUInt32 index, const char** counter_name);
+/// \param[in] contextId Unique identifier of the opened context.
+/// \param[out] pCount The value which will hold the count upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetNumCounters(GPA_ContextId contextId, gpa_uint32* pCount);
+#endif // !GPA_PIX_BUILD
 
-/// @brief Gets index of a counter given its name (case insensitive).
+#ifdef GPA_PIX_BUILD
+/// \brief Gets the name of the specified counter.
 ///
-/// @ingroup gpa_counter_interrogation
+/// \param[in] sessionId Unique identifier of a session.
+/// \param[in] index The index of the counter whose name is needed. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] ppName The address which will hold the name upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterName(GPA_SessionId sessionId, gpa_uint32 index, const char** ppName);
+#else
+/// \brief Gets the name of the specified counter.
 ///
-/// @param [in] gpa_context_id Unique identifier of the session.
-/// @param [in] counter_name The name of the counter whose index is needed.
-/// @param [out] counter_index The address which will hold the index upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorCounterNotFound If the supplied counter name cannot be found.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetCounterIndex(GpaContextId gpa_context_id, const char* counter_name, GpaUInt32* counter_index);
+/// \param[in] contextId Unique identifier of the opened context.
+/// \param[in] index The index of the counter whose name is needed. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] ppName The address which will hold the name upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterName(GPA_ContextId contextId, gpa_uint32 index, const char** ppName);
+#endif // !GPA_PIX_BUILD
 
-/// @brief Gets the group of the specified counter.
+#ifdef GPA_PIX_BUILD
+/// \brief Gets index of a counter given its name (case insensitive).
 ///
-/// @ingroup gpa_counter_interrogation
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[in] pCounterName The name of the counter whose index is needed.
+/// \param[out] pIndex The address which will hold the index upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterIndex(GPA_SessionId sessionId, const char* pCounterName, gpa_uint32* pIndex);
+#else
+/// \brief Gets index of a counter given its name (case insensitive).
 ///
-/// @param [in] gpa_context_id Unique identifier of the opened context.
-/// @param [in] index The index of the counter whose group is needed. Must lie between 0 and (GpaGetNumCounters result - 1).
-/// @param [out] counter_group The address which will hold the group string upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorIndexOutOfRange If the counter index is out of range.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetCounterGroup(GpaContextId gpa_context_id, GpaUInt32 index, const char** counter_group);
+/// \param[in] contextId Unique identifier of the opened context.
+/// \param[in] pCounterName The name of the counter whose index is needed.
+/// \param[out] pIndex The address which will hold the index upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterIndex(GPA_ContextId contextId, const char* pCounterName, gpa_uint32* pIndex);
+#endif // !GPA_PIX_BUILD
 
-/// @brief Gets the description of the specified counter.
+#ifdef GPA_PIX_BUILD
+/// \brief Gets the group of the specified counter.
 ///
-/// @ingroup gpa_counter_interrogation
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[in] index The index of the counter whose group is needed. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] ppGroup The address which will hold the group string upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterGroup(GPA_SessionId sessionId, gpa_uint32 index, const char** ppGroup);
+#else
+/// \brief Gets the group of the specified counter.
 ///
-/// @param [in] gpa_context_id Unique identifier of the opened context.
-/// @param [in] index The index of the counter whose description is needed. Must lie between 0 and (GpaGetNumCounters result - 1).
-/// @param [out] counter_description The address which will hold the description upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorIndexOutOfRange If the counter index is out of range.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetCounterDescription(GpaContextId gpa_context_id, GpaUInt32 index, const char** counter_description);
+/// \param[in] contextId Unique identifier of the opened context.
+/// \param[in] index The index of the counter whose group is needed. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] ppGroup The address which will hold the group string upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterGroup(GPA_ContextId contextId, gpa_uint32 index, const char** ppGroup);
+#endif // !GPA_PIX_BUILD
 
-/// @brief Gets the data type of the specified counter.
+#ifdef GPA_PIX_BUILD
+/// \brief Gets the description of the specified counter.
 ///
-/// @ingroup gpa_counter_interrogation
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[in] index The index of the counter whose description is needed.. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] ppDescription The address which will hold the description upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterDescription(GPA_SessionId sessionId, gpa_uint32 index, const char** ppDescription);
+#else
+/// \brief Gets the description of the specified counter.
 ///
-/// @param [in] gpa_context_id Unique identifier of the opened context.
-/// @param [in] index The index of the counter whose data type is needed. Must lie between 0 and (GpaGetNumCounters result - 1).
-/// @param [out] counter_data_type The value which will hold the counter data type upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorIndexOutOfRange If the counter index is out of range.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetCounterDataType(GpaContextId gpa_context_id, GpaUInt32 index, GpaDataType* counter_data_type);
+/// \param[in] contextId Unique identifier of the opened context.
+/// \param[in] index The index of the counter whose description is needed.. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] ppDescription The address which will hold the description upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterDescription(GPA_ContextId contextId, gpa_uint32 index, const char** ppDescription);
+#endif // !GPA_PIX_BUILD
 
-/// @brief Gets the usage type of the specified counter.
+#ifdef GPA_PIX_BUILD
+/// \brief Gets the data type of the specified counter.
 ///
-/// @ingroup gpa_counter_interrogation
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[in] index The index of the counter whose data type is needed.. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] pCounterDataType The value which will hold the counter data type upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterDataType(GPA_SessionId sessionId, gpa_uint32 index, GPA_Data_Type* pCounterDataType);
+#else
+/// \brief Gets the data type of the specified counter.
 ///
-/// @param [in] gpa_context_id Unique identifier of the opened context.
-/// @param [in] index The index of the counter whose usage type is needed. Must lie between 0 and (GpaGetNumCounters result - 1).
-/// @param [out] counter_usage_type The value which will hold the counter usage type upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorIndexOutOfRange If the counter index is out of range.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetCounterUsageType(GpaContextId gpa_context_id, GpaUInt32 index, GpaUsageType* counter_usage_type);
+/// \param[in] contextId Unique identifier of the opened context.
+/// \param[in] index The index of the counter whose data type is needed.. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] pCounterDataType The value which will hold the counter data type upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterDataType(GPA_ContextId contextId, gpa_uint32 index, GPA_Data_Type* pCounterDataType);
+#endif // !GPA_PIX_BUILD
 
-/// @brief Gets the UUID of the specified counter.
+#ifdef GPA_PIX_BUILD
+/// \brief Gets the usage type of the specified counter.
 ///
-/// @ingroup gpa_counter_interrogation
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[in] index The index of the counter whose usage type is needed.. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] pCounterUsageType The value which will hold the counter usage type upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterUsageType(GPA_SessionId sessionId, gpa_uint32 index, GPA_Usage_Type* pCounterUsageType);
+#else
+/// \brief Gets the usage type of the specified counter.
 ///
-/// @param [in] gpa_context_id Unique identifier of the opened context.
-/// @param [in] index The index of the counter whose UUID is needed. Must lie between 0 and (GpaGetNumCounters result - 1).
-/// @param [out] counter_uuid The value which will hold the counter UUID upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorIndexOutOfRange If the counter index is out of range.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetCounterUuid(GpaContextId gpa_context_id, GpaUInt32 index, GpaUuid* counter_uuid);
+/// \param[in] contextId Unique identifier of the opened context.
+/// \param[in] index The index of the counter whose usage type is needed.. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] pCounterUsageType The value which will hold the counter usage type upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterUsageType(GPA_ContextId contextId, gpa_uint32 index, GPA_Usage_Type* pCounterUsageType);
+#endif // !GPA_PIX_BUILD
 
-/// @brief Gets the supported sample type of the specified counter.
+#ifdef GPA_PIX_BUILD
+/// \brief Gets the UUID of the specified counter.
 ///
-/// Currently, only a single counter type (discrete) is supported.
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[in] index The index of the counter whose UUID is needed.. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] pCounterUuid The value which will hold the counter UUID upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterUuid(GPA_SessionId sessionId, gpa_uint32 index, GPA_UUID* pCounterUuid);
+#else
+/// \brief Gets the UUID of the specified counter.
 ///
-/// @ingroup gpa_counter_interrogation
-///
-/// @param [in] gpa_context_id Unique identifier of the opened context.
-/// @param [in] index The index of the counter whose sample type is needed. Must lie between 0 and (GpaGetNumCounters result - 1).
-/// @param [out] counter_sample_type The value which will hold the counter's supported sample type upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorIndexOutOfRange If the counter index is out of range.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetCounterSampleType(GpaContextId gpa_context_id, GpaUInt32 index, GpaCounterSampleType* counter_sample_type);
+/// \param[in] contextId Unique identifier of the opened context.
+/// \param[in] index The index of the counter whose UUID is needed.. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] pCounterUuid The value which will hold the counter UUID upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterUuid(GPA_ContextId contextId, gpa_uint32 index, GPA_UUID* pCounterUuid);
+#endif // !GPA_PIX_BUILD
 
-/// @brief Gets a string representation of the specified counter data type.
+#ifdef GPA_PIX_BUILD
+/// \brief Gets the supported sample type of the specified counter.
+///
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[in] index The index of the counter whose sample type is needed.. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] pCounterSampleType The value which will hold the counter's supported sample type upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterSampleType(GPA_SessionId sessionId, gpa_uint32 index, GPA_Counter_Sample_Type* pCounterSampleType);
+#else
+/// \brief Gets the supported sample type of the specified counter.
+///
+/// Currently, only a single counter type (discrete) is supported
+/// \param[in] contextId Unique identifier of the opened context.
+/// \param[in] index The index of the counter whose sample type is needed.. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \param[out] pCounterSampleType The value which will hold the counter's supported sample type upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetCounterSampleType(GPA_ContextId contextId, gpa_uint32 index, GPA_Counter_Sample_Type* pCounterSampleType);
+#endif // !GPA_PIX_BUILD
+
+/// \brief Gets a string representation of the specified counter data type.
 ///
 /// This could be used to display counter types along with their name or value.
-/// For example, the kGpaDataTypeUint64 counter_data_type would return "gpa_uint64".
-///
-/// @ingroup gpa_counter_interrogation
-///
-/// @param [in] counter_data_type The data type whose string representation is needed.
-/// @param [out] type_as_str The address which will hold the string representation upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorInvalidParameter An invalid data type was supplied.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetDataTypeAsStr(GpaDataType counter_data_type, const char** type_as_str);
+/// For example, the GPA_DATA_TYPE_UINT64 counterDataType would return "gpa_uint64".
+/// \param[in] counterDataType The data type whose string representation is needed.
+/// \param[out] ppTypeStr The address which will hold the string representation upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetDataTypeAsStr(GPA_Data_Type counterDataType, const char** ppTypeStr);
 
-/// @brief Gets a string representation of the specified counter usage type.
+/// \brief Gets a string representation of the specified counter usage type.
 ///
 /// This could be used to display counter units along with their name or value.
 /// For example, the GPA_USAGE_TYPE_PERCENTAGE counterUsageType would return "percentage".
-///
-/// @ingroup gpa_counter_interrogation
-///
-/// @param [in] counter_usage_type The usage type whose string representation is needed.
-/// @param [out] usage_type_as_str The address which will hold the string representation upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorInvalidParameter An invalid usage type was supplied.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetUsageTypeAsStr(GpaUsageType counter_usage_type, const char** usage_type_as_str);
+/// \param[in] counterUsageType The usage type whose string representation is needed.
+/// \param[out] ppUsageTypeStr The address which will hold the string representation upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetUsageTypeAsStr(GPA_Usage_Type counterUsageType, const char** ppUsageTypeStr);
 
-/// @defgroup gpa_session_handling GPA Session Handling
+// Session handling
 
-/// @brief Creates a session on the specified context.
+/// \brief Creates a session on the specified context.
 ///
 /// A unique session identifier will be returned which allows counters to be enabled, samples to be
 /// measured, and stores the results of the profile. The sample type for the session should be
 /// specified by the caller. The requested sample types must be supported by the supplied context.
-/// Use GpaGetSupportedSampleTypes to determine which sample types are supported by a context.
-///
-/// @ingroup gpa_session_handling
-///
-/// @param [in] gpa_context_id The context on which to create the session.
-/// @param [in] gpa_session_sample_type The sample type that will be created on this session.
-/// @param [out] gpa_session_id The address of a GPA_SessionId which will be populated with the created session Id.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorContextNotFound If the supplied context is invalid.
-/// @retval kGpaStatusErrorContextNotOpen If the supplied context has not been opened.
-/// @retval kGpaStatusErrorInvalidParameter An invalid sample type was supplied.
-/// @retval kGpaStatusErrorIncompatibleSampleTypes The supplied sample type is not compatible with the supplied context.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaCreateSession(GpaContextId gpa_context_id, GpaSessionSampleType gpa_session_sample_type, GpaSessionId* gpa_session_id);
+/// Use GPA_GetSupportedSampleTypes to determine which sample types are supported by a context.
+/// \param[in] contextId The context on which to create the session.
+/// \param[in] sampleType The sample type that will be created on this session.
+/// \param[out] pSessionId The address of a GPA_SessionId which will be populated with the created session Id.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_CreateSession(GPA_ContextId contextId, GPA_Session_Sample_Type sampleType, GPA_SessionId* pSessionId);
 
-/// @brief Deletes a session object.
+/// \brief Deletes a session object.
 ///
 /// Deletes the specified session, along with all counter results associated with the session.
-///
-/// @ingroup gpa_session_handling
-///
-/// @param [in] gpa_session_id The session id that is to be deleted.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaDeleteSession(GpaSessionId gpa_session_id);
+/// \param[in] sessionId The session id that is to be deleted.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_DeleteSession(GPA_SessionId sessionId);
 
-/// @brief Begins sampling with the currently enabled set of counters.
+/// \brief Begins sampling with the currently enabled set of counters.
 ///
 /// This must be called to begin the counter sampling process.
 /// Counters must be appropriately enabled (or disabled) before BeginSession is called.
 /// The set of enabled counters cannot be changed inside a BeginSession/EndSession sequence.
-///
-/// @ingroup gpa_session_handling
-///
-/// @param [in] gpa_session_id Unique identifier of the GPA Session Object.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorContextNotOpen The context on this session is not open.
-/// @retval kGpaStatusErrorOtherSessionActive A different session is already active.
-/// @retval kGpaStatusErrorSessionAlreadyStarted This session has already started.
-/// @retval kGpaStatusErrorNoCountersEnabled No counters have been enabled on this session.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaBeginSession(GpaSessionId gpa_session_id);
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_BeginSession(GPA_SessionId sessionId);
 
-/// @brief Ends sampling with the currently enabled set of counters.
-///
-/// @ingroup gpa_session_handling
-///
-/// @param [in] gpa_session_id Unique identifier of the GPA Session Object.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorOtherSessionActive A different session is currently active.
-/// @retval kGpaStatusErrorSessionNotStarted The supplied session has not been started.
-/// @retval kGpaStatusErrorNotEnoughPasses There have not been enough passes to complete the counter collection on this session.
-/// @retval kGpaStatusErrorVariableNumberOfSamplesInPasses The number of samples in each pass was inconsistent.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaEndSession(GpaSessionId gpa_session_id);
+#ifdef GPA_PIX_BUILD
+GPA_LIB_DECL GPA_Status GPA_RestartSession(GPA_SessionId sessionId);
+#endif // GPA_PIX_BUILD
 
-/// @defgroup gpa_counter_scheduling GPA Counter Scheduling
+/// \brief Ends sampling with the currently enabled set of counters.
+///
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_EndSession(GPA_SessionId sessionId);
 
-/// @brief Enables the specified counter.
+#ifdef GPA_PIX_BUILD
+/// \brief Aborts sampling with the currently enabled set of counters. Regardless of whether all passes have completed or any errors have occurred
+///
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_AbortSession(GPA_SessionId sessionId);
+
+// Session Interrogation / Configuration
+
+// The following functions can be called at any time after a session is created. The Get functions return
+// the current value (or default value if nothing has been changed) of the particular property. The Set
+// functions allow the client to change the default values. Once changed, all subsequent samples will use
+// the new setting.
+
+// SPM data may be collected on the command-list or the session level
+
+/// \brief Gets the mask of instruction types to be included in the SQTT data
+///
+/// All subsequent SQTT samples will use this mask.
+/// Enabling detailed instruction information will lead to a much larger volume of SQTT data.
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[out] pSQTTInstructionMask The value which will hold the mask of instruction types to be included in the SQTT data.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SqttGetInstructionMask(GPA_SessionId sessionId, GPA_SqttInstructionFlags* pSQTTInstructionMask);
+
+/// \brief Sets the mask of instruction types to be included in the SQTT data
+///
+/// All subsequent SQTT samples will use this mask.
+/// Enabling detailed instruction information will lead to a much larger volume of SQTT data.
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] sqttInstructionMask The new value to set the mask to.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SqttSetInstructionMask(GPA_SessionId sessionId, GPA_SqttInstructionFlags sqttInstructionMask);
+
+/// \brief Gets the id of the compute unit which should generate the instruction level data.
+///
+/// All subsequent SQTT samples will use this compute unit id. Ignored if not collecting instruction-level information.
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[out] pSQTTComputeUnitId The value which will hold the compute unit id.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SqttGetComputeUnitId(GPA_SessionId sessionId, gpa_uint32* pSQTTComputeUnitId);
+
+/// \brief Sets the id of the compute unit which should generate the instruction level data.
+///
+/// All subsequent SQTT samples will use this compute unit id. Ignored if not collecting instruction-level information.
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] sqttComputeUnitId The new value to set the compute unit id to.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SqttSetComputeUnitId(GPA_SessionId sessionId, gpa_uint32 sqttComputeUnitId);
+
+/// Creates the SQTT session.
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SqttWarmup(GPA_SessionId sessionId);
+
+/// Begin collecting Session SQTT data
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] pCommandList the command list to begin collecting data
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SqttBegin(GPA_SessionId sessionId, void* pCommandList);
+
+/// End collecting SQTT data
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] pCommandList the command list to end collection of data
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SqttEnd(GPA_SessionId sessionId, void* pCommandList);
+
+/// Get SQTT sample result size
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[out] pSampleResultSizeInBytes returns the number of bytes of data collected
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SqttGetSampleResultSize(GPA_SessionId sessionId, size_t* pSampleResultSizeInBytes);
+
+/// Gets the SQTT sample results
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] sampleResultSizeInBytes size of the pSqttResults buffer
+/// \param[out] pSqttResults buffer to return results in
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SqttGetSampleResult(GPA_SessionId sessionId, size_t sampleResultSizeInBytes, void* pSqttResults);
+
+/// [Optional] Sets the sample interval for SPM data. The default is 4096.
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] interval sampling interval in clock cycles of the GPU shader clock domain (SCLK). This ranges from [32 - 4096]
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SpmSetSampleInterval(GPA_SessionId sessionId, gpa_uint32 interval);
+
+/// [Optional] Sets the duration of the SPM sample. The default is to assume that the sample is as large as possible.
+/// If the duration is set, this allows the driver to optimize the amount of memory that is allocated for
+/// the SPM session. If the duration is not set, the recommended maximum amount of GPU memory will be
+/// allocated for SPM collection
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] nsDuration duration in nanoseconds
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SpmSetDuration(GPA_SessionId sessionId, gpa_uint32 nsDuration);
+
+/// Begin collecting SPM data
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] pCommandList the command list to begin collecting data
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SpmBegin(GPA_SessionId sessionId, void* pCommandList);
+
+/// End collecting SPM data
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] pCommandList the command list to end collecting data
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SpmEnd(GPA_SessionId sessionId, void* pCommandList);
+
+/// Get SPM sample result size
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param pSampleResultSizeInBytes returns the number of bytes of data collected
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SpmGetSampleResultSize(GPA_SessionId sessionId, size_t* pSampleResultSizeInBytes);
+
+/// Gets the SPM sample results
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] sampleResultSizeInBytes size of the pSqttResults buffer
+/// \param[out] pSpmResults buffer to return results in
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SpmGetSampleResult(GPA_SessionId sessionId, size_t sampleResultSizeInBytes, void* pSqttResults);
+
+/// Calculate derived counters from collected SPM data
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] pSpmData collected SPM data
+/// \param[in] derivedCounterCount number of counters that were enabled
+/// \param[out] pDerivedCounterResults counter results of derivedCounterCount * timestamps entries
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_SpmCalculateDerivedCounters(GPA_SessionId sessionId,
+                                                       GpaSpmData*   pSpmData,
+                                                       gpa_uint32    derivedCounterCount,
+                                                       gpa_uint64*   pDerivedCounterResults);
+#endif // GPA_PIX_BUILD
+
+// Counter Scheduling
+
+/// \brief Enables the specified counter.
 ///
 /// Subsequent sampling sessions will provide values for any enabled counters.
 /// Initially all counters are disabled, and must explicitly be enabled.
-///
-/// @ingroup gpa_counter_scheduling
-///
-/// @param [in] gpa_session_id Unique identifier of the session on which to enable the counter.
-/// @param [in] counter_index The index of the counter to enable. Must lie between 0 and (GpaGetNumCounters result - 1).
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorCannotChangeCountersWhenSampling It is invalid to enable a counter while the session is active.
-/// @retval kGpaStatusErrorIndexOutOfRange If the counter index is out of range.
-/// @retval kGpaStatusErrorIncompatibleSampleTypes The specified counter is not compatible with the supplied session.
-/// @retval kGpaStatusErrorAlreadyEnabled The specified counter is already enabled.
-/// @retval kGpaStatusErrorNotEnabled The counter could not be enabled.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaEnableCounter(GpaSessionId gpa_session_id, GpaUInt32 counter_index);
+/// \param[in] sessionId Unique identifier of the session on which to enable the counter.
+/// \param[in] index The index of the counter to enable. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_EnableCounter(GPA_SessionId sessionId, gpa_uint32 index);
 
-/// @brief Disables the specified counter.
+/// \brief Disables the specified counter.
 ///
 /// Subsequent sampling sessions will not provide values for any disabled counters.
 /// Initially all counters are disabled, and must explicitly be enabled.
-///
-/// @ingroup gpa_counter_scheduling
-///
-/// @param [in] gpa_session_id Unique identifier of the session on which to disable the counter.
-/// @param [in] counter_index The index of the counter to disable. Must lie between 0 and (GpaGetNumCounters result - 1).
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorCannotChangeCountersWhenSampling It is invalid to disable a counter while the session is active.
-/// @retval kGpaStatusErrorIndexOutOfRange If the counter index is out of range.
-/// @retval kGpaStatusErrorNotEnabled The counter was not enabled, so it cannot be disabled.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaDisableCounter(GpaSessionId gpa_session_id, GpaUInt32 counter_index);
+/// \param[in] sessionId Unique identifier of the session on which to disable the counter.
+/// \param[in] index The index of the counter to disable. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_DisableCounter(GPA_SessionId sessionId, gpa_uint32 index);
 
-/// @brief Enables the counter with the specified counter name (case insensitive).
+/// \brief Enables the counter with the specified counter name (case insensitive).
 ///
 /// Subsequent sampling sessions will provide values for any enabled counters.
 /// Initially all counters are disabled, and must explicitly be enabled.
-///
-/// @ingroup gpa_counter_scheduling
-///
-/// @param [in] gpa_session_id Unique identifier of the session.
-/// @param [in] counter_name The name of the counter to enable.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorCannotChangeCountersWhenSampling It is invalid to enable a counter while the session is active.
-/// @retval kGpaStatusErrorContextNotOpen The context on this session is not open.
-/// @retval kGpaStatusErrorCounterNotFound The named counter cannot be found.
-/// @retval kGpaStatusErrorIncompatibleSampleTypes The specified counter is not compatible with the supplied session.
-/// @retval kGpaStatusErrorAlreadyEnabled The specified counter is already enabled.
-/// @retval kGpaStatusErrorNotEnabled The counter could not be enabled.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaEnableCounterByName(GpaSessionId gpa_session_id, const char* counter_name);
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[in] pCounterName The name of the counter to enable.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_EnableCounterByName(GPA_SessionId sessionId, const char* pCounterName);
 
-/// @brief Disables the counter with the specified counter name (case insensitive).
+/// \brief Disables the counter with the specified counter name (case insensitive).
 ///
 /// Subsequent sampling sessions will not provide values for any disabled counters.
 /// Initially all counters are disabled, and must explicitly be enabled.
-///
-/// @ingroup gpa_counter_scheduling
-///
-/// @param [in] gpa_session_id Unique identifier of the session.
-/// @param [in] counter_name The name of the counter to disable.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorCannotChangeCountersWhenSampling It is invalid to disable a counter while the session is active.
-/// @retval kGpaStatusErrorContextNotOpen The context on this session is not open.
-/// @retval kGpaStatusErrorCounterNotFound The named counter cannot be found.
-/// @retval kGpaStatusErrorIncompatibleSampleTypes The specified counter is not compatible with the supplied session.
-/// @retval kGpaStatusErrorNotEnabled The counter could not be enabled.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaDisableCounterByName(GpaSessionId gpa_session_id, const char* counter_name);
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[in] pCounterName The name of the counter to disable.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_DisableCounterByName(GPA_SessionId sessionId, const char* pCounterName);
 
-/// @brief Enables all counters.
+/// \brief Enables all counters.
 ///
 /// Subsequent sampling sessions will provide values for all counters.
 /// Initially all counters are disabled, and must explicitly be enabled.
-///
-/// @ingroup gpa_counter_scheduling
-///
-/// @param [in] gpa_session_id Unique identifier of the session.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorCannotChangeCountersWhenSampling It is invalid to enable a counter while the session is active.
-/// @retval kGpaStatusErrorContextNotOpen The context on this session is not open.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaEnableAllCounters(GpaSessionId gpa_session_id);
+/// \param[in] sessionId Unique identifier of the session.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_EnableAllCounters(GPA_SessionId sessionId);
 
-/// @brief Disables all counters.
+/// \brief Disables all counters.
 ///
 /// Subsequent sampling sessions will not provide values for any disabled counters.
 /// Initially all counters are disabled, and must explicitly be enabled.
-///
-/// @ingroup gpa_counter_scheduling
-///
-/// @param [in] gpa_session_id Unique identifier of the session.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorCannotChangeCountersWhenSampling It is invalid to disable a counter while the session is active.
-/// @retval kGpaStatusErrorContextNotOpen The context on this session is not open.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaDisableAllCounters(GpaSessionId gpa_session_id);
+/// \param[in] sessionId Unique identifier of the session.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_DisableAllCounters(GPA_SessionId sessionId);
 
-/// @defgroup gpa_counter_scheduling Counter Scheduling Queries
+// Query Counter Scheduling
 
-/// @brief Gets the number of passes required for the currently enabled set of counters.
+/// \brief Gets the number of passes required for the currently enabled set of counters.
 ///
 /// This represents the number of times the same sequence must be repeated to capture the counter data.
 /// On each pass a different (compatible) set of counters will be measured.
-///
-/// @ingroup gpa_counter_scheduling
-///
-/// @param [in] gpa_session_id Unique identifier of the session.
-/// @param [out] number_of_passes The value which will hold the number of required passes upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorContextNotOpen The context on this session is not open.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetPassCount(GpaSessionId gpa_session_id, GpaUInt32* number_of_passes);
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[out] pNumPasses The value which will hold the number of required passes upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetPassCount(GPA_SessionId sessionId, gpa_uint32* pNumPasses);
 
-/// @brief Gets the number of enabled counters.
+/// \brief Gets the number of enabled counters.
 ///
-/// @ingroup gpa_counter_scheduling
-///
-/// @param [in] gpa_session_id Unique identifier of the session.
-/// @param [out] enabled_counter_count The value which will hold the number of enabled counters contained within the session upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorContextNotOpen The context on this session is not open.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetNumEnabledCounters(GpaSessionId gpa_session_id, GpaUInt32* enabled_counter_count);
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[out] pCount The value which will hold the number of enabled counters contained within the session upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetNumEnabledCounters(GPA_SessionId sessionId, gpa_uint32* pCount);
 
-/// @brief Gets the counter index for an enabled counter.
+/// \brief Gets the counter index for an enabled counter.
 ///
 /// This is meant to be used with GPA_GetNumEnabledCounters. Once you determine the number of enabled counters,
 /// you can use GPA_GetEnabledIndex to determine which counters are enabled.
-///
-/// @ingroup gpa_counter_scheduling
-///
-/// @param [in] gpa_session_id Unique identifier of the session.
-/// @param [in] enabled_number The number of the enabled counter to get the counter index for. Must lie between 0 and (GPA_GetNumEnabledCounters result - 1).
-/// @param [out] enabled_counter_index The value that will hold the index of the counter upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorContextNotOpen The context on this session is not open.
-/// @retval kGpaStatusErrorIndexOutOfRange The enabled number is higher than the number of enabled counters.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetEnabledIndex(GpaSessionId gpa_session_id, GpaUInt32 enabled_number, GpaUInt32* enabled_counter_index);
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[in] enabledNumber The number of the enabled counter to get the counter index for. Must lie between 0 and (GPA_GetNumEnabledCounters result - 1).
+/// \param[out] pEnabledCounterIndex The value that will hold the index of the counter upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetEnabledIndex(GPA_SessionId sessionId, gpa_uint32 enabledNumber, gpa_uint32* pEnabledCounterIndex);
 
-/// @brief Checks whether or not a counter is enabled.
+/// \brief Checks whether or not a counter is enabled.
 ///
-/// @ingroup gpa_counter_scheduling
-///
-/// @param [in] gpa_session_id Unique identifier of the session.
-/// @param [in] counter_index The index of the counter. Must lie between 0 and (GpaGetNumCounters result - 1).
-///
-/// @retval kGpaStatusOk is returned if the counter is enabled.
-/// @retval kGpaStatusErrorCounterNotFound is returned if it is not enabled.
-/// @retval kGpaStatusErrorNullPointer If any of the parameters are NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorContextNotOpen The context on this session is not open.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaIsCounterEnabled(GpaSessionId gpa_session_id, GpaUInt32 counter_index);
+/// \param[in] sessionId Unique identifier of the session.
+/// \param[in] counterIndex The index of the counter. Must lie between 0 and (GPA_GetNumCounters result - 1).
+/// \return GPA_STATUS_OK is returned if the counter is enabled. GPA_STATUS_ERROR_COUNTER_NOT_FOUND is returned if it is not enabled.
+GPA_LIB_DECL GPA_Status GPA_IsCounterEnabled(GPA_SessionId sessionId, gpa_uint32 counterIndex);
 
-/// @defgroup gpa_sample_handling GPA Sample Handling
+// Sample Handling
 
-/// @brief Begins command list for sampling.
+/// \brief Begins command list for sampling.
 ///
-/// You will be unable to create samples on the specified command list before GpaBeginCommandList is called.
+/// You will be unable to create samples on the specified command list before GPA_BeginCommandList is called.
 /// Command list corresponds to ID3D12GraphicsCommandList in DirectX 12 and vkCommandBuffer in Vulkan.
-/// In OpenCL/OpenGL/DirectX 11, use GPA_NULL_COMMAND_LIST for the command_list parameter and kGpaCommandListNone for the command_list_type parameter.
-///
-/// @ingroup gpa_sample_handling
-///
-/// @param [in] gpa_session_id Unique identifier of the GPA Session Object.
-/// @param [in] pass_index 0-based index of the pass.
-/// @param [in] command_list The command list on which to begin sampling - ignored in OpenCL/OpenGL/DX11 applications.
-/// @param [in] command_list_type Command list type.
-/// @param [out] gpa_command_list_id GPA-generated unique command list id.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If the command list is required, it must not be NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorSessionNotStarted The supplied session has not been started.
-/// @retval kGpaStatusErrorInvalidParameter The command list type is invalid, or the command list must be null and the type must be kGpaCommandListNone.
-/// @retval kGpaStatusErrorCommandListAlreadyStarted The supplied command list has already been started, and cannot be started again.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaBeginCommandList(GpaSessionId       gpa_session_id,
-                                           GpaUInt32          pass_index,
-                                           void*              command_list,
-                                           GpaCommandListType command_list_type,
-                                           GpaCommandListId*  gpa_command_list_id);
+/// In OpenCL/OpenGL/DirectX 11, use GPA_NULL_COMMAND_LIST for the pCommandList parameter and GPA_COMMAND_LIST_NONE for the command_list_type parameter.
+/// \param[in] sessionId unique identifier of the GPA Session Object.
+/// \param[in] passIndex 0-based index of the pass.
+/// \param[in] pCommandList the command list on which to begin sampling - ignored in OpenCL/OpenGL/DX11 applications.
+/// \param[in] command_list_type command list type.
+/// \param[out] pCommandListId GPA-generated unique command list id.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_BeginCommandList(GPA_SessionId         sessionId,
+                                            gpa_uint32            passIndex,
+                                            void*                 pCommandList,
+                                            GPA_Command_List_Type command_list_type,
+                                            GPA_CommandListId*    pCommandListId);
 
-/// @brief Ends command list for sampling.
+/// \brief Ends command list for sampling.
 ///
 /// You will be unable to create samples on the specified command list after GPA_EndCommandList is called.
-///
-/// @ingroup gpa_sample_handling
-///
-/// @param [in] gpa_command_list_id The command list on which to end sampling - ignored in OpenCL/OpenGL applications.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If a NULL command list has been supplied.
-/// @retval kGpaStatusErrorCommandListNotFound If the supplied command list cannot be found.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaEndCommandList(GpaCommandListId gpa_command_list_id);
+/// \param[in] command_list_id the command list on which to end sampling - ignored in OpenCL/OpenGL applications.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_EndCommandList(GPA_CommandListId command_list_id);
 
-/// @brief Begins a sample in a command list.
+/// \brief Begins a sample in a command list.
 ///
 /// A sample is a particular workload for which counters will be collected.
 /// If the owning session was created with GPA_SESSION_SAMPLE_TYPE_DISCRETE_COUNTER and
@@ -782,230 +628,123 @@ GPA_LIB_DECL GpaStatus GpaEndCommandList(GpaCommandListId gpa_command_list_id);
 /// Samples can be created by multiple threads provided no two threads are creating samples on same command list.
 /// You must provide a unique Id for every new sample. When performing multiple passes, a sample must exist in all passes.
 /// You may create as many samples as needed. However, nesting of samples is not allowed.
-/// Each sample must be wrapped in sequence of GPA_BeginSample/GPA_EndSample before starting another one.
+/// Each sample must be wrapped in sequence of GpaBeginSample/GpaEndSample before starting another one.
 /// A sample can be started in one primary command list and continued/ended on another primary command list - See GPA_ContinueSampleOnCommandList.
-///
-/// @ingroup gpa_sample_handling
-///
-/// @param [in] sample_id Unique sample id.
-/// @param [in] gpa_command_list_id Unique identifier of a previously-created GPA Command List Object.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If a NULL command list has been supplied.
-/// @retval kGpaStatusErrorCommandListNotFound If the supplied command list cannot be found.
-/// @retval kGpaStatusErrorIndexOutOfRange The sample has been started in too many passes.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaBeginSample(GpaUInt32 sample_id, GpaCommandListId gpa_command_list_id);
+/// \param[in] sampleId unique sample id.
+/// \param[in] command_list_id unique identifier of a previously-created GPA Command List Object.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_BeginSample(gpa_uint32 sampleId, GPA_CommandListId command_list_id);
 
-/// @brief Ends a sample in a command list.
+/// \brief Ends a sample in a command list.
 ///
 /// A sample is a particular workload for which counters will be collected.
-/// If the owning session was created with kGpaSessionSampleTypeDiscreteCounter and
+/// If the owning session was created with GPA_SESSION_SAMPLE_TYPE_DISCRETE_COUNTER and
 /// one or more counters have been enabled, then those counters will be collected for this sample.
 /// Each sample must be associated with a GPA command list.
 /// Samples can be created by using multiple threads provided no two threads are creating samples on same command list.
 /// You must provide a unique Id for every new sample.
 /// You may create as many samples as needed. However, nesting of samples is not allowed.
 /// Each sample must be wrapped in sequence of GpaBeginSample/GpaEndSample before starting another one.
-/// A sample can be started in one primary command list and continued/ended on another primary command list - See GpaContinueSampleOnCommandList.
-///
-/// @ingroup gpa_sample_handling
-///
-/// @param [in] gpa_command_list_id Command list id on which the sample is ending - the command list may be different than the command list on which the sample was started.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer If a NULL command list has been supplied.
-/// @retval kGpaStatusErrorCommandListNotFound If the supplied command list cannot be found.
-/// @retval kGpaStatusErrorIndexOutOfRange The sample has been ended in too many passes.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaEndSample(GpaCommandListId gpa_command_list_id);
+/// A sample can be started in one primary command list and continued/ended on another primary command list - See GPA_ContinueSampleOnCommandList.
+/// \param[in] command_list_id command list id on which the sample is ending - the command list may be different than the command list on which the sample was started.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_EndSample(GPA_CommandListId command_list_id);
 
-/// @brief Continues a primary command list sample on another primary command list.
+/// \brief Continues a primary command list sample on another primary command list.
 ///
 /// This function is only supported for DirectX 12 and Vulkan.
 /// Samples can be started on one primary command list and continued/ended on another primary command list.
-///
-/// @ingroup gpa_sample_handling
-///
-/// @param [in] source_sample_id The sample id of the sample being continued on a different command list.
-/// @param [in] primary_gpa_command_list_id Primary command list id on which the sample is continuing.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorApiNotSupported This entrypoint is being called in a graphics API that does not support it.
-/// @retval kGpaStatusErrorNullPointer The supplied command list id is NULL.
-/// @retval kGpaStatusErrorCommandListNotFound The supplied command list id cannot be found.
-/// @retval kGpaStatusErrorSampleNotFound The source sample id cannot be found.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaContinueSampleOnCommandList(GpaUInt32 source_sample_id, GpaCommandListId primary_gpa_command_list_id);
+/// \param[in] srcSampleId The sample id of the sample being continued on a different command list.
+/// \param[in] primaryCommandListId primary command list id on which the sample is continuing.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_ContinueSampleOnCommandList(gpa_uint32 srcSampleId, GPA_CommandListId primaryCommandListId);
 
-/// @brief Copies a set of samples from a secondary command list back to the primary command list that executed the secondary command list.
+/// \brief Copies a set of samples from a secondary command list back to the primary command list that executed the secondary command list.
 ///
 /// This function is only supported for DirectX 12 and Vulkan.
 /// GPA doesn't collect data for the samples created on secondary command lists unless they are copied to a new set of samples for the primary command list.
-///
-/// @ingroup gpa_sample_handling
-///
-/// @param [in] secondary_gpa_command_list_id Aecondary command list where the secondary samples were created.
-/// @param [in] primary_gpa_command_list_id Primary command list to which the samples results should be copied. This should be the command list that executed the secondary command list.
-/// @param [in] number_of_samples Number of secondary samples.
-/// @param [in] new_sample_ids New sample ids on a primary command list.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorApiNotSupported This entrypoint is being called in a graphics API that does not support it.
-/// @retval kGpaStatusErrorNullPointer One of the supplied command list IDs is NULL.
-/// @retval kGpaStatusErrorCommandListNotFound One of the supplied command list IDs cannot be found.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaCopySecondarySamples(GpaCommandListId secondary_gpa_command_list_id,
-                                               GpaCommandListId primary_gpa_command_list_id,
-                                               GpaUInt32        number_of_samples,
-                                               GpaUInt32*       new_sample_ids);
+/// \param[in] secondaryCommandListId secondary command list where the secondary samples were created.
+/// \param[in] primaryCommandListId primary command list to which the samples results should be copied. This should be the command list that executed the secondary command list.
+/// \param[in] numSamples number of secondary samples.
+/// \param[in] pNewSampleIds new sample ids on a primary command list.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_CopySecondarySamples(GPA_CommandListId secondaryCommandListId,
+                                                GPA_CommandListId primaryCommandListId,
+                                                gpa_uint32        numSamples,
+                                                gpa_uint32*       pNewSampleIds);
 
-/// @brief Gets the number of samples created for the specified session.
+/// \brief Gets the number of samples created for the specified session.
 ///
 /// This is useful if samples are conditionally created and a count is not kept.
-///
-/// @ingroup gpa_sample_handling
-///
-/// @param [in] gpa_session_id Unique identifier of the GPA Session Object.
-/// @param [out] sample_count The value which will hold the number of samples contained within the session upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer One of the parameters is NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorSessionNotEnded The session has not been ended.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetSampleCount(GpaSessionId gpa_session_id, GpaUInt32* sample_count);
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[out] pSampleCount The value which will hold the number of samples contained within the session upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetSampleCount(GPA_SessionId sessionId, gpa_uint32* pSampleCount);
 
-/// @brief Gets the sample id by index.
+/// \brief Gets the sample id by index
 ///
 /// This is useful if sample ids are either not zero-based or not consecutive.
-///
-/// @ingroup gpa_sample_handling
-///
-/// @param [in] gpa_session_id Unique identifier of the GPA Session Object.
-/// @param [in] index The index of the sample. Must lie between 0 and (GpaGetSampleCount result - 1).
-/// @param [out] sample_id The value that will hold the id of the sample upon successful execution.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer One of the parameters is NULL.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorSessionNotEnded The session has not been ended.
-/// @retval kGpaStatusErrorSampleNotFound The supplied index is greater than the number of samples.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetSampleId(GpaSessionId gpa_session_id, GpaUInt32 index, GpaUInt32* sample_id);
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] index The index of the sample. Must lie between 0 and (GPA_GetSampleCount result - 1).
+/// \param[out] pSampleId The value that will hold the id of the sample upon successful execution.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetSampleId(GPA_SessionId sessionId, gpa_uint32 index, gpa_uint32* pSampleId);
 
-/// @defgroup gpa_query_results Query Results
+// Query Results
 
-/// @brief Checks whether or not a pass has finished.
+/// \brief Checks whether or not a pass has finished.
 ///
 /// After sampling a workload, results may be available immediately or take a certain amount of time to become available.
 /// This function allows you to determine when the pass has finished and associated resources are no longer needed in the application.
 /// The function does not block, permitting periodic polling.
-/// The application must not free its resources until this function returns kGpaStatusOk.
-///
-/// @ingroup gpa_query_results
-///
-/// @param [in] gpa_session_id Unique identifier of the GPA Session Object.
-/// @param [in] pass_index 0-based index of the pass.
-///
-/// @retval kGpaStatusOk If the pass is complete.
-/// @retval kGpaStatusResultNotReady If the result is not yet ready.
-/// @retval kGpaStatusErrorNullPointer An invalid session was supplied.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorSessionNotStarted The supplied session has not been started.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaIsPassComplete(GpaSessionId gpa_session_id, GpaUInt32 pass_index);
+/// The application must not free its resources until this function returns GPA_STATUS_OK.
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] passIndex 0-based index of the pass.
+/// \return GPA_STATUS_OK if pass is complete else GPA_STATUS_RESULT_NOT_READY.
+GPA_LIB_DECL GPA_Status GPA_IsPassComplete(GPA_SessionId sessionId, gpa_uint32 passIndex);
 
-/// @brief Checks if results for all samples within a session are available.
+/// \brief Checks if results for all samples within a session are available.
 ///
 /// After a sampling session results may be available immediately or take a certain amount of time to become available.
 /// This function allows you to determine when the results of a session can be read.
 /// The function does not block, permitting periodic polling.
 /// To block until a sample is ready use GPA_GetSampleResult instead.
-///
-/// @ingroup gpa_query_results
-///
-/// @param [in] gpa_session_id The value that will be set to the session identifier.
-///
-/// @retval kGpaStatusOk If the session is complete.
-/// @retval kGpaStatusResultNotReady If the result is not yet ready.
-/// @retval kGpaStatusErrorNullPointer An invalid session was supplied.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorSessionNotStarted If the supplied session has not been started.
-/// @retval kGpaStatusErrorSessionNotEnded The session has not been ended.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaIsSessionComplete(GpaSessionId gpa_session_id);
+/// \param[in] sessionId The value that will be set to the session identifier.
+/// \return GPA_STATUS_OK if pass is complete else GPA_STATUS_RESULT_NOT_READY.
+GPA_LIB_DECL GPA_Status GPA_IsSessionComplete(GPA_SessionId sessionId);
 
-/// @brief Gets the result size (in bytes) for a given sample.
+/// \brief Gets the result size (in bytes) for a given sample.
 ///
 /// For discrete counter samples, the size will be the same for all samples, so it would be valid to retrieve the
 /// result size for one sample and use that when retrieving results for all samples.
-///
-/// @ingroup gpa_query_results
-///
-/// @param [in] gpa_session_id Unique identifier of the GPA Session Object.
-/// @param [in] sample_id The identifier of the sample to get the result size for.
-/// @param [out] sample_result_size_in_bytes The value that will be set to the result size upon successful execution  - this value needs to be passed to GetSampleResult.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer An invalid session was supplied.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorSampleNotFound The supplied sample id could not be found.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetSampleResultSize(GpaSessionId gpa_session_id, GpaUInt32 sample_id, size_t* sample_result_size_in_bytes);
+/// \param[in] sessionId Unique identifier of the GPA Session Object.
+/// \param[in] sampleId The identifier of the sample to get the result size for.
+/// \param[out] pSampleResultSizeInBytes The value that will be set to the result size upon successful execution  - this value needs to be passed to GetSampleResult.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetSampleResultSize(GPA_SessionId sessionId, gpa_uint32 sampleId, size_t* pSampleResultSizeInBytes);
 
-/// @brief Gets the result data for a given sample.
+/// \brief Gets the result data for a given sample.
 ///
 /// This function will block until results are ready. Use GPA_IsSessionComplete to check if results are ready.
-///
-/// @ingroup gpa_query_results
-///
-/// @param [in] gpa_session_id The session identifier with the sample you wish to retrieve the result of.
-/// @param [in] sample_id The identifier of the sample to get the result for.
-/// @param [in] sample_result_size_in_bytes Size of sample in bytes.
-/// @param [out] counter_sample_results Address to which the counter data for the sample will be copied to.
-///
-/// @return The GPA result status of the operation.
-/// @retval kGpaStatusOk If the operation is successful.
-/// @retval kGpaStatusErrorNullPointer An invalid or NULL parameter was supplied.
-/// @retval kGpaStatusErrorSessionNotFound The supplied session could not be found.
-/// @retval kGpaStatusErrorSampleNotFound The supplied sample id could not be found.
-/// @retval kGpaStatusErrorReadingSampleResult The supplied buffer is too small for the sample results.
-/// @retval kGpaStatusErrorFailed If an internal error has occurred.
-/// @retval kGpaStatusErrorException If an unexpected error has occurred.
-GPA_LIB_DECL GpaStatus GpaGetSampleResult(GpaSessionId gpa_session_id, GpaUInt32 sample_id, size_t sample_result_size_in_bytes, void* counter_sample_results);
+/// \param[in] sessionId The session identifier with the sample you wish to retrieve the result of.
+/// \param[in] sampleId The identifier of the sample to get the result for.
+/// \param[in] sampleResultSizeInBytes size of sample in bytes.
+/// \param[out] pCounterSampleResults address to which the counter data for the sample will be copied to.
+/// \return The GPA result status of the operation. GPA_STATUS_OK is returned if the operation is successful.
+GPA_LIB_DECL GPA_Status GPA_GetSampleResult(GPA_SessionId sessionId, gpa_uint32 sampleId, size_t sampleResultSizeInBytes, void* pCounterSampleResults);
 
-/// @defgroup gpa_status_query GPA Status/Error Query
+// Status / Error Query
 
-/// @brief Gets a string representation of the specified GPA status value.
+/// \brief Gets a string representation of the specified GPA status value.
 ///
 /// Provides a simple method to convert a status enum value into a string which can be used to display log messages.
-///
-/// @ingroup gpa_status_query
-///
-/// @param [in] status The status whose string representation is needed.
-///
-/// @return A string which briefly describes the specified status.
-GPA_LIB_DECL const char* GpaGetStatusAsStr(GpaStatus status);
+/// \param[in] status The status whose string representation is needed.
+/// \return A string which briefly describes the specified status.
+GPA_LIB_DECL const char* GPA_GetStatusAsStr(GPA_Status status);
 
-#else  // Not USE_GPA
+#else  /// Not USE_GPA
+// Deprecated header
 #include "gpu_perf_api_stub.h"
 #endif  // USE_GPA
 
-#endif  // GPU_PERFORMANCE_API_GPU_PERF_API_H_
+#endif  // GPU_PERF_API_H_

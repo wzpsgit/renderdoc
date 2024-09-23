@@ -53,11 +53,19 @@ public:
   void OnCaptureClosed() override;
   void OnSelectedEventChanged(uint32_t eventId) override {}
   void OnEventChanged(uint32_t eventId) override;
+
+
+  void exportCounterDescriptions();
 private slots:
   // automatic slots
   void on_counterResults_doubleClicked(const QModelIndex &index);
   void on_syncViews_toggled(bool checked);
   void on_saveCSV_clicked();
+
+
+  //todo 
+  void on_exportCounters_clicked();
+
 
 private:
   /*
