@@ -590,13 +590,13 @@ public:
                                     const void *pExecutionParametersData,
                                 _In_ SIZE_T ExecutionParametersDataSizeInBytes);
 
-  bool PatchAccStructBlasAddress(const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC *accStructInput,
+  bool PatchAccStructBlasAddress(D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC &accStructInput,
                                  ID3D12GraphicsCommandList4 *unwrappedList,
                                  BakedCmdListInfo::PatchRaytracing *patchRaytracing);
 
   bool ProcessASBuildAfterSubmission(ResourceId asbWrappedResourceId,
                                      D3D12BufferOffset asbWrappedResourceBufferOffset,
-                                     UINT64 byteSize);
+                                     UINT64 byteSize, ASBuildData *buildData);
 
   IMPLEMENT_FUNCTION_SERIALISED(
       virtual void STDMETHODCALLTYPE, BuildRaytracingAccelerationStructure,

@@ -25,6 +25,7 @@
 #pragma once
 
 #include "core/resource_manager.h"
+#include "vk_acceleration_structure.h"
 #include "vk_resources.h"
 
 class WrappedVulkan;
@@ -113,7 +114,9 @@ struct VkInitialContents
     SAFE_DELETE(sparseTables);
     SAFE_DELETE(sparseBind);
 
-    // MemoryAllocation and serialised ASes are not free'd here
+    SAFE_RELEASE(accelerationStructureInfo);
+
+    // MemoryAllocation ise not free'd here
   }
 
   // for descriptor heaps, when capturing we save the slots, when replaying we store direct writes
@@ -139,7 +142,7 @@ struct VkInitialContents
   rdcarray<AspectSparseTable> *sparseTables;
   SparseBinding *sparseBind;
 
-  bool isTLAS;    // If the contents are an AS, this determines if it is a TLAS or BLAS
+  VkAccelerationStructureInfo *accelerationStructureInfo;
 };
 
 struct VulkanResourceManagerConfiguration
@@ -508,7 +511,7 @@ private:
   bool Serialise_InitialState(WriteSerialiser &ser, ResourceId id, VkResourceRecord *record,
                               const VkInitialContents *initial);
   void Create_InitialState(ResourceId id, WrappedVkRes *live, bool hasData);
-  void Apply_InitialState(WrappedVkRes *live, const VkInitialContents &initial);
+  void Apply_InitialState(WrappedVkRes *live, VkInitialContents &initial);
   rdcarray<ResourceId> InitialContentResources();
 
   // dummy handle to use - starting from near highest valid pointer to minimise risk of overlap with real handles

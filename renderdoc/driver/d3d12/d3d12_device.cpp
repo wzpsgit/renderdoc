@@ -50,6 +50,7 @@ RDOC_EXTERN_CONFIG(bool, Replay_Debug_SingleThreadedCompilation);
 RDOC_DEBUG_CONFIG(bool, D3D12_Debug_SingleSubmitFlushing, false,
                   "Every command buffer is submitted and fully flushed to the GPU, to narrow down "
                   "the source of problems.");
+RDOC_DEBUG_CONFIG(bool, D3D12_Debug_RTOverlay, false, "Add some RT tracking to the overlay.");
 
 WRAPPED_POOL_INST(WrappedID3D12Device);
 
@@ -2432,6 +2433,35 @@ HRESULT WrappedID3D12Device::Present(ID3D12GraphicsCommandList *pOverlayCommandL
         rdcstr overlayText =
             RenderDoc::Inst().GetOverlayText(RDCDriver::D3D12, devWnd, m_FrameCounter, 0);
 
+#if ENABLED(RDOC_DEVEL)
+        if(D3D12_Debug_RTOverlay() && m_UsedRT)
+        {
+          double now = GetResourceManager()->GetRTManager()->GetCurrentASTimestamp();
+          ASStats blasStats = {}, tlasStats = {};
+
+          ASBuildData::GatherASAgeStatistics(GetResourceManager(), now, blasStats, tlasStats);
+
+          overlayText += "       TLAS               BLAS\n";
+
+          for(size_t i = 0; i < ARRAY_COUNT(tlasStats.bucket); i++)
+          {
+            if(tlasStats.bucket[i].msThreshold == ~0U)
+              overlayText += "  older    ";
+            else
+              overlayText += StringFormat::Fmt("<=% 4ums   ", tlasStats.bucket[i].msThreshold);
+
+            overlayText += StringFormat::Fmt(
+                "% 4u (% 3.2f MB)   % 4u (%.2f MB)\n", tlasStats.bucket[i].count,
+                float(tlasStats.bucket[i].bytes) / 1048576.0f, blasStats.bucket[i].count,
+                float(blasStats.bucket[i].bytes) / 1048576.0f);
+          }
+
+          overlayText += StringFormat::Fmt(
+              "%.2f MB overhead\n",
+              float(blasStats.overheadBytes + tlasStats.overheadBytes) / 1048576.0f);
+        }
+#endif
+
         m_TextRenderer->RenderText(list, 0.0f, 0.0f, overlayText);
 
         // transition backbuffer back again
@@ -3198,7 +3228,6 @@ void WrappedID3D12Device::UploadBLASBufferAddresses()
     if(resManager->HasLiveResource(resId))
     {
       WrappedID3D12Resource *wrappedRes = (WrappedID3D12Resource *)resManager->GetLiveResource(resId);
-      if(wrappedRes->IsAccelerationStructureResource())
       {
         BlasAddressPair addressPair;
         addressPair.oldAddress.start = addressRange.start;
@@ -3206,7 +3235,15 @@ void WrappedID3D12Device::UploadBLASBufferAddresses()
 
         addressPair.newAddress.start = wrappedRes->GetGPUVirtualAddress();
         addressPair.newAddress.end = addressPair.newAddress.start + wrappedRes->GetDesc().Width;
-        blasAddressPair.push_back(addressPair);
+
+        // ASB addresses are far more likely to be used so put them at the front to be found first
+        // as this isn't sorted.
+        // The only time we are looking up 'normal' buffers on the GPU to patch is when we're
+        // unrolling an ARRAY_OF_POINTERS list on replay when building a TLAS
+        if(wrappedRes->IsAccelerationStructureResource())
+          blasAddressPair.insert(0, addressPair);
+        else
+          blasAddressPair.push_back(addressPair);
       }
     }
   }

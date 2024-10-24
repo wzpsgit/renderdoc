@@ -27,6 +27,7 @@
 #include "dxil_debug.h"
 #include "common/formatting.h"
 #include "maths/formatpacking.h"
+#include "replay/common/var_dispatch_helpers.h"
 
 using namespace DXIL;
 using namespace DXDebug;
@@ -2346,8 +2347,9 @@ bool ThreadState::ExecuteInstruction(DebugAPIWrapper *apiWrapper,
       break;
     }
     case Operation::Load:
+    case Operation::LoadAtomic:
     {
-      // TODO: full proper load from resource memory i.e. group shared
+      // TODO: full proper load from memory i.e. group shared
       // Currently only supporting Stack allocated pointers
       // Load(ptr)
       Id ptrId = GetArgumentId(0);
@@ -2358,44 +2360,42 @@ bool ThreadState::ExecuteInstruction(DebugAPIWrapper *apiWrapper,
       break;
     }
     case Operation::Store:
+    case Operation::StoreAtomic:
     {
-      // TODO: full proper store to resource memory i.e. group shared
+      // TODO: full proper store to memory i.e. group shared
       // Currently only supporting Stack allocated pointers
       // Store(ptr, value)
+      Id baseMemoryId = DXILDebug::INVALID_ID;
+      void *baseMemoryBackingPtr = NULL;
+      size_t allocSize = 0;
+      void *allocMemoryBackingPtr = NULL;
       Id ptrId = GetArgumentId(0);
       auto itPtr = m_StackAllocPointers.find(ptrId);
       RDCASSERT(itPtr != m_StackAllocPointers.end());
+
       const StackAllocPointer &ptr = itPtr->second;
-      Id baseMemoryId = ptr.baseMemoryId;
-      RDCASSERT(ptr.backingMemory);
-      RDCASSERTNOTEQUAL(baseMemoryId, DXILDebug::INVALID_ID);
+      baseMemoryId = ptr.baseMemoryId;
+      baseMemoryBackingPtr = ptr.backingMemory;
+
       auto itAlloc = m_StackAllocs.find(baseMemoryId);
       RDCASSERT(itAlloc != m_StackAllocs.end());
       StackAlloc &alloc = itAlloc->second;
+      allocSize = alloc.size;
+      allocMemoryBackingPtr = alloc.backingMemory;
 
-      ShaderVariable arg;
-      RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, arg));
+      RDCASSERT(baseMemoryBackingPtr);
+      RDCASSERTNOTEQUAL(baseMemoryId, DXILDebug::INVALID_ID);
+
+      ShaderVariable val;
+      RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, val));
       RDCASSERTEQUAL(resultId, DXILDebug::INVALID_ID);
 
-      // Memory copy from value to backing memory
-      VarType type = ConvertDXILTypeToVarType(inst.args[1]->type);
-      size_t size = GetElementByteSize(type);
-      RDCASSERT(size <= alloc.size);
-      RDCASSERT(size < sizeof(arg.value.f32v));
-      memcpy(ptr.backingMemory, &arg.value.f32v[0], size);
+      UpdateBackingMemoryFromVariable(baseMemoryBackingPtr, allocSize, val);
 
       ShaderVariableChange change;
       change.before = m_LiveVariables[baseMemoryId];
-      ShaderVariable &baseMemory = m_LiveVariables[baseMemoryId];
-      // TODO: Make this be a helper function UpdateVariableFromBackingMemory()
-      // Memory copy from backing memory to base memory variable
-      const uint8_t *src = (uint8_t *)alloc.backingMemory;
-      size_t elementSize = GetElementByteSize(baseMemory.type);
-      for(uint32_t i = 0; i < baseMemory.rows; ++i)
-      {
-        memcpy(&m_LiveVariables[baseMemoryId].members[i].value.f32v[0], src, elementSize);
-        src += elementSize;
-      }
+
+      UpdateMemoryVariableFromBackingMemory(baseMemoryId, allocMemoryBackingPtr);
 
       // record the change to the base memory variable
       change.after = m_LiveVariables[baseMemoryId];
@@ -2403,10 +2403,10 @@ bool ThreadState::ExecuteInstruction(DebugAPIWrapper *apiWrapper,
         m_State->changes.push_back(change);
 
       // Update the ptr variable value
-      // Set the result to be the ptr variable whcih will then be reocrded as a change
-      result = m_LiveVariables[ptrId];
-      result.value = arg.value;
+      // Set the result to be the ptr variable which will then be recorded as a change
       resultId = ptrId;
+      result = m_LiveVariables[resultId];
+      result.value = val.value;
       break;
     }
     case Operation::Alloca:
@@ -2495,74 +2495,20 @@ bool ThreadState::ExecuteInstruction(DebugAPIWrapper *apiWrapper,
     }
     case Operation::Bitcast:
     {
+      RDCASSERTEQUAL(retType->bitWidth, inst.args[0]->type->bitWidth);
       ShaderVariable a;
       RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
       result.value = a.value;
       break;
     }
-    case Operation::SToF:
-    {
-      const Type *argType = inst.args[0]->type;
-      RDCASSERTEQUAL(argType->type, Type::TypeKind::Scalar);
-      RDCASSERTEQUAL(argType->scalarType, Type::Int);
-      int64_t valueA = 0;
-      ShaderVariable arg;
-      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, arg));
-      switch(argType->bitWidth)
-      {
-        case 64: valueA = arg.value.s64v[0]; break;
-        case 32: valueA = arg.value.s32v[0]; break;
-        case 16: valueA = arg.value.s16v[0]; break;
-        case 8: valueA = arg.value.s8v[0]; break;
-        case 1: valueA = arg.value.s8v[0]; break;
-        default: RDCERR("Unexpected bitWidth %d", argType->bitWidth); break;
-      }
-
-      switch(result.type)
-      {
-        case VarType::Double: result.value.f64v[0] = (double)valueA; break;
-        case VarType::Float: result.value.f32v[0] = (float)valueA; break;
-        case VarType::Half: result.value.f16v[0].set((float)valueA); break;
-        default: RDCERR("Unexpected Result VarType %s", ToStr(result.type).c_str()); break;
-      };
-      break;
-    }
-    case Operation::UToF:
-    {
-      // TODO: NEED TO GET THE ARGUMENT AT THE CORRECT INTEGER SIZE TO SUPPORT THIS
-      // TODO: NEED TO GET THE UNSIGNED VALUE AT THE CORRECT INTEGER SIZE
-      //_Y = uitofp i8 -1 to double; yields double : 255.0
-      const Type *argType = inst.args[0]->type;
-      RDCASSERTEQUAL(argType->type, Type::TypeKind::Scalar);
-      RDCASSERTEQUAL(argType->scalarType, Type::Int);
-      uint64_t valueA = 0;
-      ShaderVariable arg;
-      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, arg));
-      switch(argType->bitWidth)
-      {
-        case 64: valueA = (uint64_t)arg.value.s64v[0]; break;
-        case 32: valueA = (uint64_t)(uint32_t)arg.value.s32v[0]; break;
-        case 16: valueA = (uint64_t)(uint16_t)arg.value.s16v[0]; break;
-        case 8: valueA = (uint64_t)(uint8_t)arg.value.s8v[0]; break;
-        case 1: valueA = (uint64_t)arg.value.s8v[0]; break;
-        default: RDCERR("Unexpected bitWidth %d", argType->bitWidth); break;
-      }
-
-      switch(result.type)
-      {
-        case VarType::Double: result.value.f64v[0] = (double)valueA; break;
-        case VarType::Float: result.value.f32v[0] = (float)valueA; break;
-        case VarType::Half: result.value.f16v[0].set((float)valueA); break;
-        default: RDCERR("Unexpected Result VarType %s", ToStr(result.type).c_str()); break;
-      };
-      break;
-    }
     case Operation::Add:
     case Operation::Sub:
     case Operation::Mul:
+    case Operation::UDiv:
+    case Operation::SDiv:
+    case Operation::URem:
+    case Operation::SRem:
     {
-      // TODO: check the bitwidth
-      // TODO: support i1, i8, i16, i64
       RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Scalar);
       RDCASSERTEQUAL(inst.args[0]->type->scalarType, Type::Int);
       RDCASSERTEQUAL(inst.args[1]->type->type, Type::TypeKind::Scalar);
@@ -2571,21 +2517,70 @@ bool ThreadState::ExecuteInstruction(DebugAPIWrapper *apiWrapper,
       ShaderVariable b;
       RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
       RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, b));
+      RDCASSERTEQUAL(a.type, b.type);
+      const uint32_t c = 0;
+
       if(opCode == Operation::Add)
-        result.value.u64v[0] = a.value.u64v[0] + b.value.u64v[0];
-      else if(opCode == Operation::Mul)
-        result.value.u64v[0] = a.value.u64v[0] * b.value.u64v[0];
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(result, c) = comp<I>(a, c) + comp<I>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
       else if(opCode == Operation::Sub)
-        result.value.u64v[0] = a.value.u64v[0] - b.value.u64v[0];
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(result, c) = comp<I>(a, c) - comp<I>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::Mul)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(result, c) = comp<I>(a, c) * comp<I>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::UDiv)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = comp<U>(a, c) / comp<U>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::SDiv)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(result, c) = comp<S>(a, c) / comp<S>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::URem)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = comp<U>(a, c) % comp<U>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::SRem)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(result, c) = comp<S>(a, c) % comp<S>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else
+      {
+        RDCERR("Unhandled opCode %s", ToStr(opCode).c_str());
+      }
       break;
     }
     case Operation::FAdd:
     case Operation::FSub:
     case Operation::FMul:
     case Operation::FDiv:
+    case Operation::FRem:
     {
-      // TODO: check the bitwidth
-      // TODO: support F16, F64
       RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Scalar);
       RDCASSERTEQUAL(inst.args[0]->type->scalarType, Type::Float);
       RDCASSERTEQUAL(inst.args[1]->type->type, Type::TypeKind::Scalar);
@@ -2594,135 +2589,479 @@ bool ThreadState::ExecuteInstruction(DebugAPIWrapper *apiWrapper,
       ShaderVariable b;
       RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
       RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, b));
+      RDCASSERTEQUAL(a.type, b.type);
+      const uint32_t c = 0;
 
       if(opCode == Operation::FAdd)
-        result.value.f32v[0] = a.value.f32v[0] + b.value.f32v[0];
+      {
+#undef _IMPL
+#define _IMPL(T) comp<T>(result, c) = comp<T>(a, c) + comp<T>(b, c);
+
+        IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
       else if(opCode == Operation::FSub)
-        result.value.f32v[0] = a.value.f32v[0] - b.value.f32v[0];
+      {
+#undef _IMPL
+#define _IMPL(T) comp<T>(result, c) = comp<T>(a, c) - comp<T>(b, c);
+
+        IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
       else if(opCode == Operation::FMul)
-        result.value.f32v[0] = a.value.f32v[0] * b.value.f32v[0];
+      {
+#undef _IMPL
+#define _IMPL(T) comp<T>(result, c) = comp<T>(a, c) * comp<T>(b, c);
+
+        IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
       else if(opCode == Operation::FDiv)
-        result.value.f32v[0] = a.value.f32v[0] / b.value.f32v[0];
+      {
+#undef _IMPL
+#define _IMPL(T) comp<T>(result, c) = comp<T>(a, c) / comp<T>(b, c);
+
+        IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::FRem)
+      {
+#undef _IMPL
+#define _IMPL(T) comp<T>(result, c) = fmod(comp<T>(a, c), comp<T>(b, c));
+
+        IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else
+      {
+        RDCERR("Unhandled opCode %s", ToStr(opCode).c_str());
+      }
       break;
     }
+    case Operation::FOrdFalse:
     case Operation::FOrdEqual:
+    case Operation::FOrdGreater:
+    case Operation::FOrdGreaterEqual:
+    case Operation::FOrdLess:
+    case Operation::FOrdLessEqual:
     case Operation::FOrdNotEqual:
+    case Operation::FOrd:
+    case Operation::FOrdTrue:
+    case Operation::FUnord:
+    case Operation::FUnordEqual:
+    case Operation::FUnordGreater:
+    case Operation::FUnordGreaterEqual:
+    case Operation::FUnordLess:
+    case Operation::FUnordLessEqual:
+    case Operation::FUnordNotEqual:
     {
-      // TODO: handle different bitwidths
-      // TODO: support F16, F64
-      RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Scalar);
-      RDCASSERTEQUAL(inst.args[0]->type->scalarType, Type::Float);
-      RDCASSERTEQUAL(inst.args[1]->type->type, Type::TypeKind::Scalar);
-      RDCASSERTEQUAL(inst.args[1]->type->scalarType, Type::Float);
-      ShaderVariable a;
-      ShaderVariable b;
-      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
-      RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, b));
-      uint32_t res = ~0U;
-      if(opCode == Operation::FOrdEqual)
-        res = (a.value.s32v[0] == b.value.f32v[0]) ? 1 : 0;
-      else if(opCode == Operation::FOrdNotEqual)
-        res = (a.value.s32v[0] != b.value.f32v[0]) ? 1 : 0;
-
-      RDCASSERTNOTEQUAL(res, ~0U);
       RDCASSERTEQUAL(result.type, VarType::Bool);
-      result.value.u32v[0] = res;
+
+      if(opCode == Operation::FOrdFalse)
+        result.value.u32v[0] = 0;
+      else if(opCode == Operation::FOrdTrue)
+        result.value.u32v[0] = 1;
+      else
+      {
+        RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Scalar);
+        RDCASSERTEQUAL(inst.args[0]->type->scalarType, Type::Float);
+        RDCASSERTEQUAL(inst.args[1]->type->type, Type::TypeKind::Scalar);
+        RDCASSERTEQUAL(inst.args[1]->type->scalarType, Type::Float);
+        ShaderVariable a;
+        ShaderVariable b;
+        RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
+        RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, b));
+        RDCASSERTEQUAL(a.type, b.type);
+        const uint32_t c = 0;
+
+        // FOrd are all floating-point comparison where both operands are guaranteed to be ordered
+        // Using normal comparison operators will give the correct result
+        if(opCode == Operation::FOrdEqual)
+        {
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = (comp<T>(a, c) == comp<T>(b, c)) ? 1 : 0
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else if(opCode == Operation::FOrdGreater)
+        {
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = (comp<T>(a, c) > comp<T>(b, c)) ? 1 : 0
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else if(opCode == Operation::FOrdGreaterEqual)
+        {
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = (comp<T>(a, c) >= comp<T>(b, c)) ? 1 : 0
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else if(opCode == Operation::FOrdLess)
+        {
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = (comp<T>(a, c) < comp<T>(b, c)) ? 1 : 0
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else if(opCode == Operation::FOrdLessEqual)
+        {
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = (comp<T>(a, c) <= comp<T>(b, c)) ? 1 : 0
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else if(opCode == Operation::FOrdNotEqual)
+        {
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = (comp<T>(a, c) != comp<T>(b, c)) ? 1 : 0
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else if(opCode == Operation::FOrd)
+        {
+          // Both operands are ordered (not NaN)
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = !RDCISNAN(comp<T>(a, c)) && !RDCISNAN(comp<T>(b, c));
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        // FUnord are all floating-point comparison where any operands may be unordered
+        // Any comparison with unordered comparisons will return false. Since we want
+        // 'or are unordered' then we want to negate the comparison so that unordered comparisons
+        // will always return true. So we negate and invert the actual comparison so that the
+        // comparison will be unchanged effectively.
+        else if(opCode == Operation::FUnord)
+        {
+          // Either operand is unordered (NaN)
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = RDCISNAN(comp<T>(a, c)) || RDCISNAN(comp<T>(b, c));
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else if(opCode == Operation::FUnordEqual)
+        {
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = (comp<T>(a, c) != comp<T>(b, c)) ? 0 : 1
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else if(opCode == Operation::FUnordGreater)
+        {
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = (comp<T>(a, c) <= comp<T>(b, c)) ? 0 : 1
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else if(opCode == Operation::FUnordGreaterEqual)
+        {
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = (comp<T>(a, c) < comp<T>(b, c)) ? 0 : 1
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else if(opCode == Operation::FUnordLess)
+        {
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = (comp<T>(a, c) >= comp<T>(b, c)) ? 0 : 1
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else if(opCode == Operation::FUnordLessEqual)
+        {
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = (comp<T>(a, c) > comp<T>(b, c)) ? 0 : 1
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else if(opCode == Operation::FUnordNotEqual)
+        {
+#undef _IMPL
+#define _IMPL(T) comp<uint32_t>(result, c) = (comp<T>(a, c) == comp<T>(b, c)) ? 0 : 1
+
+          IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+        }
+        else
+        {
+          RDCERR("Unhandled opCode %s", ToStr(opCode).c_str());
+        }
+      }
       break;
     }
     case Operation::IEqual:
     case Operation::INotEqual:
+    case Operation::UGreater:
+    case Operation::UGreaterEqual:
+    case Operation::ULess:
+    case Operation::ULessEqual:
+    case Operation::SGreater:
+    case Operation::SGreaterEqual:
+    case Operation::SLess:
+    case Operation::SLessEqual:
     {
       RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Scalar);
       RDCASSERTEQUAL(inst.args[0]->type->scalarType, Type::Int);
       RDCASSERTEQUAL(inst.args[1]->type->type, Type::TypeKind::Scalar);
       RDCASSERTEQUAL(inst.args[1]->type->scalarType, Type::Int);
-      // TODO: assert bitwidth
-      // TODO: support i1, i8, i16, i64
       ShaderVariable a;
       ShaderVariable b;
       RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
       RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, b));
-      uint32_t res = ~0U;
-      if(opCode == Operation::IEqual)
-        res = (a.value.s32v[0] == b.value.s32v[0]) ? 1 : 0;
-      else if(opCode == Operation::INotEqual)
-        res = (a.value.s32v[0] != b.value.s32v[0]) ? 1 : 0;
+      RDCASSERTEQUAL(a.type, b.type);
+      const uint32_t c = 0;
 
-      RDCASSERTNOTEQUAL(res, ~0U);
-      RDCASSERTEQUAL(result.type, VarType::Bool);
-      result.value.u32v[0] = res;
+      if(opCode == Operation::IEqual)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(result, c) = (comp<I>(a, c) == comp<I>(b, c)) ? 1 : 0;
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::INotEqual)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(result, c) = (comp<I>(a, c) != comp<I>(b, c)) ? 1 : 0;
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::UGreater)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = comp<U>(a, c) > comp<U>(b, c) ? 1 : 0
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::UGreaterEqual)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = comp<U>(a, c) >= comp<U>(b, c) ? 1 : 0
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::ULess)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = comp<U>(a, c) < comp<U>(b, c) ? 1 : 0
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::ULessEqual)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = comp<U>(a, c) <= comp<U>(b, c) ? 1 : 0
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::SGreater)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(result, c) = comp<S>(a, c) > comp<S>(b, c) ? 1 : 0
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::SGreaterEqual)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(result, c) = comp<S>(a, c) >= comp<S>(b, c) ? 1 : 0
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::SLess)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(result, c) = comp<S>(a, c) < comp<S>(b, c) ? 1 : 0
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else if(opCode == Operation::SLessEqual)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(result, c) = comp<S>(a, c) <= comp<S>(b, c) ? 1 : 0
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      else
+      {
+        RDCERR("Unhandled opCode %s", ToStr(opCode).c_str());
+      }
       break;
     }
     case Operation::FToS:
     case Operation::FToU:
+    case Operation::SToF:
+    case Operation::UToF:
     {
       RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Scalar);
       RDCASSERTEQUAL(inst.args[0]->type->scalarType, Type::Float);
-      // TODO: handle different bitwidths
-      // TODO: support F16, F64
-      ShaderVariable arg;
-      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, arg));
+      ShaderVariable a;
+      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
+      const uint32_t c = 0;
+
       if(opCode == Operation::FToS)
-        result.value.s64v[0] = (int64_t)arg.value.f32v[0];
+      {
+        double x = 0.0;
+#undef _IMPL
+#define _IMPL(T) x = comp<T>(a, c);
+        IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(result, c) = (S)x;
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+      }
       else if(opCode == Operation::FToU)
-        result.value.u64v[0] = (uint64_t)arg.value.f32v[0];
+      {
+        double x = 0.0;
+
+#undef _IMPL
+#define _IMPL(T) x = comp<T>(a, c);
+        IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = (U)x;
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+      }
+      else if(opCode == Operation::SToF)
+      {
+        int64_t x = 0;
+
+#undef _IMPL
+#define _IMPL(I, S, U) x = comp<S>(a, c);
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+        if(result.type == VarType::Float)
+          comp<float>(result, c) = (float)x;
+        else if(result.type == VarType::Half)
+          comp<half_float::half>(result, c) = (float)x;
+        else if(result.type == VarType::Double)
+          comp<double>(result, c) = (double)x;
+      }
+      else if(opCode == Operation::UToF)
+      {
+        // Need to handle this case, cast to unsigned at the width of the argument
+        //_Y = uitofp i8 -1 to double; yields double : 255.0
+        uint64_t x = 0;
+
+#undef _IMPL
+#define _IMPL(I, S, U) x = comp<U>(a, c);
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+        if(result.type == VarType::Float)
+          comp<float>(result, c) = (float)x;
+        else if(result.type == VarType::Half)
+          comp<half_float::half>(result, c) = (float)x;
+        else if(result.type == VarType::Double)
+          comp<double>(result, c) = (double)x;
+      }
+      else
+      {
+        RDCERR("Unhandled opCode %s", ToStr(opCode).c_str());
+      }
       break;
     }
     case Operation::Trunc:
-    {
-      uint32_t retBitWidth = retType->bitWidth;
-      RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Scalar);
-      RDCASSERTEQUAL(inst.args[0]->type->scalarType, Type::Int);
-      RDCASSERTEQUAL(retType->type, Type::TypeKind::Scalar);
-      RDCASSERTEQUAL(retType->scalarType, Type::Int);
-      RDCASSERT(inst.args[0]->type->bitWidth > retBitWidth);
-
-      ShaderVariable arg;
-      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, arg));
-      // Removes bits
-      // %X = trunc i32 257 to i8; yields i8 : 1
-      uint64_t mask = (1UL << retBitWidth) - 1UL;
-      switch(retType->bitWidth)
-      {
-        case 32:
-        case 16:
-        case 8:
-        case 1: result.value.u64v[0] = arg.value.u64v[0] & mask; break;
-        default: RDCERR("Unexpected result bitWidth %d", retType->bitWidth); break;
-      }
-      break;
-    }
     case Operation::ZExt:
-    {
-      uint32_t srcBitWidth = inst.args[0]->type->bitWidth;
-      RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Scalar);
-      RDCASSERTEQUAL(inst.args[0]->type->scalarType, Type::Int);
-      RDCASSERTEQUAL(retType->type, Type::TypeKind::Scalar);
-      RDCASSERTEQUAL(retType->scalarType, Type::Int);
-      RDCASSERT(srcBitWidth < retType->bitWidth);
-
-      ShaderVariable arg;
-      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, arg));
-      // Extras bits are 0's
-      // %X = zext i32 257 to i64; yields i64 : 257
-      uint64_t mask = (1UL << srcBitWidth) - 1UL;
-      switch(retType->bitWidth)
-      {
-        case 64:
-        case 32:
-        case 16:
-        case 8: result.value.u64v[0] = arg.value.u64v[0] & mask; break;
-        default: RDCERR("Unexpected result bitWidth %d", retType->bitWidth); break;
-      }
-      break;
-    }
     case Operation::SExt:
     {
-      // Value Type
-      // Value & Type must be Integer
-      // Value->Type->bit_width < Type->bit_width
-      // Sign Extend : copy sign (highest bit of Value) -> Result
-      // %X = sext i8  -1 to i16              ; yields i16   :65535
+      // Result & Value must be Integer
+      const uint32_t srcBitWidth = inst.args[0]->type->bitWidth;
+      RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Scalar);
+      RDCASSERTEQUAL(inst.args[0]->type->scalarType, Type::Int);
+      RDCASSERTEQUAL(retType->type, Type::TypeKind::Scalar);
+      RDCASSERTEQUAL(retType->scalarType, Type::Int);
+
+      ShaderVariable a;
+      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
+      const uint32_t c = 0;
+
+      if(opCode == Operation::Trunc)
+      {
+        // Result bit_width < Value bit_width
+        RDCASSERT(retType->bitWidth < srcBitWidth);
+
+        uint64_t x = 0;
+
+#undef _IMPL
+#define _IMPL(I, S, U) x = comp<U>(a, c);
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = (U)x;
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+      }
+      if(opCode == Operation::ZExt)
+      {
+        // Result bit_width >= Value bit_width
+        RDCASSERT(retType->bitWidth >= srcBitWidth);
+        // Extras bits are 0's
+        // %X = zext i32 257 to i64; yields i64 : 257
+        uint64_t x = 0;
+
+#undef _IMPL
+#define _IMPL(I, S, U) x = comp<U>(a, c);
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = (U)x;
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+      }
+      else if(opCode == Operation::SExt)
+      {
+        // Result bit_width >= Value bit_width
+        RDCASSERT(retType->bitWidth >= srcBitWidth);
+        // Sign Extend : copy sign (highest bit of Value) -> Result
+        // %X = sext i8  -1 to i16              ; yields i16   :65535
+        int64_t x = 0;
+
+#undef _IMPL
+#define _IMPL(I, S, U) x = comp<S>(a, c);
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(result, c) = (S)x;
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+      }
+      else
+      {
+        RDCERR("Unhandled opCode %s", ToStr(opCode).c_str());
+      }
+      break;
+    }
+    case Operation::FPTrunc:
+    case Operation::FPExt:
+    {
+      // Result & Value must be Float
+      const uint32_t srcBitWidth = inst.args[0]->type->bitWidth;
+      RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Scalar);
+      RDCASSERTEQUAL(inst.args[0]->type->scalarType, Type::Float);
+      RDCASSERTEQUAL(retType->type, Type::TypeKind::Scalar);
+      RDCASSERTEQUAL(retType->scalarType, Type::Float);
+
+      ShaderVariable a;
+      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
+      const uint32_t c = 0;
+
+      if(opCode == Operation::FPTrunc)
+      {
+        // Result bit_width < Value bit_width
+        RDCASSERT(retType->bitWidth < srcBitWidth);
+      }
+      else if(opCode == Operation::FPExt)
+      {
+        // Result bit_width > Value bit_width
+        RDCASSERT(retType->bitWidth > srcBitWidth);
+      }
+      else
+      {
+        RDCERR("Unhandled opCode %s", ToStr(opCode).c_str());
+      }
+      double x = 0.0;
+
+#undef _IMPL
+#define _IMPL(T) x = comp<T>(a, c);
+      IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+      if(result.type == VarType::Float)
+        comp<float>(result, c) = (float)x;
+      else if(result.type == VarType::Half)
+        comp<half_float::half>(result, c) = (float)x;
+      else if(result.type == VarType::Double)
+        comp<double>(result, c) = (double)x;
+
       break;
     }
     case Operation::And:
@@ -2745,61 +3084,226 @@ bool ThreadState::ExecuteInstruction(DebugAPIWrapper *apiWrapper,
       ShaderVariable b;
       RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
       RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, b));
+      const uint32_t c = 0;
+
       if(opCode == Operation::And)
-        result.value.u64v[0] = a.value.u64v[0] & b.value.u64v[0];
-      else if(opCode == Operation::And)
-        result.value.u64v[0] = a.value.u64v[0] | b.value.u64v[0];
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = comp<U>(a, c) & comp<U>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+      }
+      else if(opCode == Operation::Or)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = comp<U>(a, c) | comp<U>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+      }
       else if(opCode == Operation::Xor)
-        result.value.u64v[0] = a.value.u64v[0] ^ b.value.u64v[0];
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = comp<U>(a, c) ^ comp<U>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+      }
       else if(opCode == Operation::ShiftLeft)
-        result.value.u64v[0] = a.value.u64v[0] << b.value.u64v[0];
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = comp<U>(a, c) << comp<U>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+      }
       else if(opCode == Operation::LogicalShiftRight)
-        result.value.u64v[0] = a.value.u64v[0] >> b.value.u64v[0];
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = comp<U>(a, c) >> comp<U>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+      }
       else if(opCode == Operation::ArithShiftRight)
+      {
         result.value.s64v[0] = a.value.s64v[0] << b.value.u64v[0];
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(result, c) = comp<S>(a, c) >> comp<S>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+      }
+      else
+      {
+        RDCERR("Unhandled opCode %s", ToStr(opCode).c_str());
+      }
       break;
     }
-    case Operation::FPTrunc:
-    case Operation::FPExt:
     case Operation::PtrToI:
+    {
+      RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Pointer);
+      RDCASSERTEQUAL(inst.args[0]->type->scalarType, Type::Int);
+      RDCASSERTEQUAL(retType->type, Type::TypeKind::Scalar);
+      RDCASSERTEQUAL(retType->scalarType, Type::Int);
+      ShaderVariable a;
+      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
+      const uint32_t c = 0;
+      uint64_t x = 0;
+
+#undef _IMPL
+#define _IMPL(I, S, U) x = comp<U>(a, c);
+      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = (U)x;
+      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+
+      break;
+    }
     case Operation::IToPtr:
-    case Operation::AddrSpaceCast:
-    case Operation::FRem:
-    case Operation::UDiv:
-    case Operation::SDiv:
-    case Operation::URem:
-    case Operation::SRem:
-    case Operation::FOrdFalse:
-    case Operation::FOrdGreater:
-    case Operation::FOrdGreaterEqual:
-    case Operation::FOrdLess:
-    case Operation::FOrdLessEqual:
-    case Operation::FOrd:
-    case Operation::FUnord:
-    case Operation::FUnordEqual:
-    case Operation::FUnordGreater:
-    case Operation::FUnordGreaterEqual:
-    case Operation::FUnordLess:
-    case Operation::FUnordLessEqual:
-    case Operation::FUnordNotEqual:
-    case Operation::FOrdTrue:
-    case Operation::UGreater:
-    case Operation::UGreaterEqual:
-    case Operation::ULess:
-    case Operation::ULessEqual:
-    case Operation::SGreater:
-    case Operation::SGreaterEqual:
-    case Operation::SLess:
-    case Operation::SLessEqual:
+    {
+      RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Scalar);
+      RDCASSERTEQUAL(inst.args[0]->type->scalarType, Type::Int);
+      RDCASSERTEQUAL(retType->type, Type::TypeKind::Pointer);
+      RDCASSERTEQUAL(retType->scalarType, Type::Int);
+      ShaderVariable a;
+      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
+      const uint32_t c = 0;
+      uint64_t x = 0;
+
+#undef _IMPL
+#define _IMPL(I, S, U) x = comp<U>(a, c);
+      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(result, c) = (U)x;
+      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, result.type);
+
+      break;
+    }
     case Operation::ExtractElement:
+    {
+      RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Vector);
+      RDCASSERTEQUAL(retType->type, Type::TypeKind::Scalar);
+      RDCASSERTEQUAL(retType->scalarType, inst.args[0]->type->inner->scalarType);
+      ShaderVariable a;
+      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
+      ShaderVariable b;
+      RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, b));
+      const uint32_t idx = b.value.u32v[0];
+
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(result, 0) = comp<I>(a, idx);
+      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+#undef _IMPL
+#define _IMPL(T) comp<T>(result, 0) = comp<T>(a, idx);
+
+      IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+      break;
+    }
     case Operation::InsertElement:
+    {
+      RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Vector);
+      RDCASSERTEQUAL(retType->type, Type::TypeKind::Vector);
+      RDCASSERTEQUAL(retType->inner->scalarType, inst.args[0]->type->inner->scalarType);
+      RDCASSERTEQUAL(inst.args[1]->type->type, Type::TypeKind::Scalar);
+      RDCASSERTEQUAL(inst.args[1]->type->scalarType, inst.args[0]->type->inner->scalarType);
+      ShaderVariable a;
+      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
+      ShaderVariable b;
+      RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, b));
+      ShaderVariable c;
+      RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, c));
+      const uint32_t idx = c.value.u32v[0];
+
+      result = a;
+
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(result, idx) = comp<I>(b, 0);
+      IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+#undef _IMPL
+#define _IMPL(T) comp<T>(result, idx) = comp<T>(b, 0);
+
+      IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, b.type);
+      break;
+    }
     case Operation::ShuffleVector:
-    case Operation::InsertValue:
+    {
+      RDCASSERTEQUAL(inst.args[0]->type->type, Type::TypeKind::Vector);
+      RDCASSERTEQUAL(inst.args[1]->type->type, Type::TypeKind::Vector);
+      RDCASSERTEQUAL(retType->type, Type::TypeKind::Vector);
+      RDCASSERTEQUAL(retType->inner->scalarType, inst.args[0]->type->inner->scalarType);
+      RDCASSERTEQUAL(inst.args[1]->type->inner->scalarType, inst.args[0]->type->inner->scalarType);
+      RDCASSERTEQUAL(retType->elemCount, inst.args[2]->type->elemCount);
+      ShaderVariable a;
+      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, a));
+      ShaderVariable b;
+      bool bIsValid = GetShaderVariable(inst.args[1], opCode, dxOpCode, b);
+      ShaderVariable c;
+      RDCASSERT(GetShaderVariable(inst.args[2], opCode, dxOpCode, c));
+      // TODO: mask entries might be undef meaning "don’t care"
+      const uint32_t aMax = inst.args[0]->type->elemCount;
+      for(uint32_t idx = 0; idx < retType->elemCount; idx++)
+      {
+        const uint32_t mask = c.value.u32v[idx];
+        if(!bIsValid)
+          RDCASSERT(mask < aMax);
+        RDCASSERT(mask < retType->elemCount);
+
+#undef _IMPL
+#define _IMPL(I, S, U) \
+  comp<I>(result, idx) = (mask < aMax) ? comp<I>(a, mask) : comp<I>(b, mask - aMax);
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, a.type);
+
+#undef _IMPL
+#define _IMPL(T) comp<T>(result, idx) = (mask < aMax) ? comp<T>(a, mask) : comp<T>(b, mask - aMax);
+
+        IMPL_FOR_FLOAT_TYPES_FOR_TYPE(_IMPL, a.type);
+      }
+      break;
+    }
     case Operation::Switch:
+    {
+      // Value, Default_Label then Pairs of { targetValue, label }
+      ShaderVariable val;
+      RDCASSERT(GetShaderVariable(inst.args[0], opCode, dxOpCode, val));
+      uint32_t targetArg = 1;
+      for(uint32_t a = 2; a < inst.args.size(); a += 2)
+      {
+        ShaderVariable targetVal;
+        RDCASSERT(GetShaderVariable(inst.args[a], opCode, dxOpCode, targetVal));
+        bool match = false;
+
+#undef _IMPL
+#define _IMPL(I, S, U) match = comp<I>(val, 0) == comp<I>(targetVal, 0);
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, val.type);
+
+        if(match)
+        {
+          targetArg = a + 1;
+          break;
+        }
+      }
+
+      const Block *target = cast<Block>(inst.args[targetArg]);
+      RDCASSERT(target);
+      uint32_t blockId = target->id;
+      if(blockId < m_FunctionInfo->function->blocks.size())
+      {
+        m_Block = blockId;
+        m_FunctionInstructionIdx = m_FunctionInfo->function->blocks[m_Block]->startInstructionIdx;
+        m_GlobalInstructionIdx = m_FunctionInfo->globalInstructionOffset + m_FunctionInstructionIdx;
+      }
+      else
+      {
+        RDCERR("Unknown switch target %u '%s'", m_Block, GetArgumentName(targetArg).c_str());
+      }
+      break;
+    }
     case Operation::Fence:
-    case Operation::CompareExchange:
-    case Operation::LoadAtomic:
-    case Operation::StoreAtomic:
+    {
+      break;
+    }
     case Operation::AtomicExchange:
     case Operation::AtomicAdd:
     case Operation::AtomicSub:
@@ -2810,7 +3314,158 @@ bool ThreadState::ExecuteInstruction(DebugAPIWrapper *apiWrapper,
     case Operation::AtomicMax:
     case Operation::AtomicMin:
     case Operation::AtomicUMax:
-    case Operation::AtomicUMin: RDCERR("Unhandled LLVM opcode %s", ToStr(opCode).c_str()); break;
+    case Operation::AtomicUMin:
+    {
+      // JAKE TODO: full proper load and store from/to memory i.e. group shared
+      // Currently only supporting Stack allocated pointers
+      size_t allocSize = 0;
+      void *allocMemoryBackingPtr = NULL;
+      void *baseMemoryBackingPtr = NULL;
+      Id baseMemoryId = DXILDebug::INVALID_ID;
+      Id ptrId = GetArgumentId(0);
+      {
+        auto itPtr = m_StackAllocPointers.find(ptrId);
+        RDCASSERT(itPtr != m_StackAllocPointers.end());
+
+        const StackAllocPointer &ptr = itPtr->second;
+        baseMemoryId = ptr.baseMemoryId;
+        baseMemoryBackingPtr = ptr.backingMemory;
+
+        auto itAlloc = m_StackAllocs.find(baseMemoryId);
+        RDCASSERT(itAlloc != m_StackAllocs.end());
+        StackAlloc &alloc = itAlloc->second;
+        allocSize = alloc.size;
+        allocMemoryBackingPtr = alloc.backingMemory;
+      }
+
+      RDCASSERT(baseMemoryBackingPtr);
+      RDCASSERTNOTEQUAL(baseMemoryId, DXILDebug::INVALID_ID);
+
+      RDCASSERTEQUAL(resultId, DXILDebug::INVALID_ID);
+      ShaderVariable a = m_LiveVariables[baseMemoryId];
+
+      ShaderVariable b;
+      RDCASSERT(GetShaderVariable(inst.args[1], opCode, dxOpCode, b));
+      const uint32_t c = 0;
+
+      ShaderVariable res;
+
+      if(opCode == Operation::AtomicExchange)
+      {
+        // *ptr = val
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(res, c) = comp<I>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicAdd)
+      {
+        // *ptr = *ptr + val
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(res, c) = comp<I>(a, c) + comp<I>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicSub)
+      {
+        // *ptr = *ptr - val
+#undef _IMPL
+#define _IMPL(I, S, U) comp<I>(res, c) = comp<I>(a, c) - comp<I>(b, c)
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicAnd)
+      {
+        // *ptr = *ptr & val
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(res, c) = comp<U>(a, c) & comp<U>(b, c);
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicNand)
+      {
+        // *ptr = ~(*ptr & val)
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(res, c) = ~(comp<U>(a, c) & comp<U>(b, c));
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicOr)
+      {
+        // *ptr = *ptr | val
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(res, c) = comp<U>(a, c) | comp<U>(b, c);
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicXor)
+      {
+        // *ptr = *ptr ^ val
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(res, c) = comp<U>(a, c) ^ comp<U>(b, c);
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicMax)
+      {
+        // *ptr = max(*ptr, val)
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(res, c) = RDCMAX(comp<S>(a, c), comp<S>(b, c));
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicMin)
+      {
+        // *ptr = min(*ptr, val)
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(res, c) = RDCMIN(comp<S>(a, c), comp<S>(b, c));
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicUMax)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<S>(res, c) = RDCMAX(comp<S>(a, c), comp<S>(b, c));
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else if(opCode == Operation::AtomicUMin)
+      {
+#undef _IMPL
+#define _IMPL(I, S, U) comp<U>(res, c) = RDCMIN(comp<U>(a, c), comp<U>(b, c));
+
+        IMPL_FOR_INT_TYPES_FOR_TYPE(_IMPL, b.type);
+      }
+      else
+      {
+        RDCERR("Unhandled opCode %s", ToStr(opCode).c_str());
+      }
+
+      // Save the result back
+      UpdateBackingMemoryFromVariable(baseMemoryBackingPtr, allocSize, res);
+
+      ShaderVariableChange change;
+      change.before = m_LiveVariables[baseMemoryId];
+
+      UpdateMemoryVariableFromBackingMemory(baseMemoryId, allocMemoryBackingPtr);
+
+      // record the change to the base memory variable
+      change.after = m_LiveVariables[baseMemoryId];
+      if(m_State)
+        m_State->changes.push_back(change);
+
+      // Update the ptr variable value
+      // Set the result to be the ptr variable which will then be recorded as a change
+      resultId = ptrId;
+      result = m_LiveVariables[resultId];
+      result.value = res.value;
+      break;
+    }
+    case Operation::AddrSpaceCast:
+    case Operation::InsertValue:
+    case Operation::CompareExchange:
+      RDCERR("Unhandled LLVM opcode %s", ToStr(opCode).c_str());
+      break;
   };
 
   // Remove variables which have gone out of scope
@@ -3105,6 +3760,29 @@ void ThreadState::MarkResourceAccess(const rdcstr &name, const DXIL::ResourceRef
     change.before = change.after;
   else
     accessed.push_back(bp);
+}
+
+void ThreadState::UpdateBackingMemoryFromVariable(void *ptr, size_t allocSize,
+                                                  const ShaderVariable &var)
+{
+  // Memory copy from value to backing memory
+  size_t size = GetElementByteSize(var.type);
+  RDCASSERT(size <= allocSize);
+  RDCASSERT(size < sizeof(var.value.f32v));
+  memcpy(ptr, &var.value.f32v[0], size);
+}
+
+void ThreadState::UpdateMemoryVariableFromBackingMemory(Id memoryId, const void *ptr)
+{
+  ShaderVariable &baseMemory = m_LiveVariables[memoryId];
+  // Memory copy from backing memory to base memory variable
+  size_t elementSize = GetElementByteSize(baseMemory.type);
+  const uint8_t *src = (const uint8_t *)ptr;
+  for(uint32_t i = 0; i < baseMemory.rows; ++i)
+  {
+    memcpy(&baseMemory.members[i].value.f32v[0], src, elementSize);
+    src += elementSize;
+  }
 }
 
 void ThreadState::PerformGPUResourceOp(const rdcarray<ThreadState> &workgroups, Operation opCode,
@@ -4414,6 +5092,8 @@ void Debugger::ParseDebugData()
             SourceVariableMapping sourceVar;
             sourceVar.name = n->name;
             sourceVar.type = n->type;
+            sourceVar.rows = n->rows;
+            sourceVar.columns = n->columns;
             sourceVar.signatureIndex = -1;
             sourceVar.offset = n->offset;
             sourceVar.variables.clear();

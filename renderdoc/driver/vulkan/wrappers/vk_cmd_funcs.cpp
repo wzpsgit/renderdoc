@@ -4539,13 +4539,68 @@ void WrappedVulkan::vkCmdCopyQueryPoolResults(VkCommandBuffer commandBuffer, VkQ
 
     record->MarkResourceFrameReferenced(GetResID(queryPool), eFrameRef_Read);
 
+    const bool is64bit = (flags & VK_QUERY_RESULT_64_BIT) > 0;
     VkDeviceSize size = (queryCount - 1) * destStride + 4;
-    if(flags & VK_QUERY_RESULT_64_BIT)
+    if(is64bit)
     {
       size += 4;
     }
     record->MarkBufferFrameReferenced(GetRecord(destBuffer), destOffset, size,
                                       eFrameRef_PartialWrite);
+
+    const QueryPoolInfo *qpInfo = GetRecord(queryPool)->queryPoolInfo;
+    if(qpInfo)
+    {
+      VkMemoryBarrier barrier = {
+          VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+          NULL,
+          VK_ACCESS_TRANSFER_WRITE_BIT,
+          VK_ACCESS_TRANSFER_READ_BIT,
+      };
+      ObjDisp(commandBuffer)
+          ->CmdPipelineBarrier(Unwrap(commandBuffer), VK_PIPELINE_STAGE_TRANSFER_BIT,
+                               VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, 1, &barrier, 0, VK_NULL_HANDLE,
+                               0, VK_NULL_HANDLE);
+
+      const bool hasAvailability = (flags & VK_QUERY_RESULT_WITH_AVAILABILITY_BIT) > 0;
+      const VkDeviceSize resultSize = is64bit ? sizeof(uint64_t) : sizeof(uint32_t);
+
+      // If the stride matches the source buffer, then we can copy everything in a single region
+      if(is64bit && !hasAvailability && destStride == resultSize)
+      {
+        const VkBufferCopy region = {
+            firstQuery * resultSize,
+            destOffset,
+            queryCount * resultSize,
+        };
+        ObjDisp(commandBuffer)
+            ->CmdCopyBuffer(Unwrap(commandBuffer), Unwrap(qpInfo->m_Buffer.buf), Unwrap(destBuffer),
+                            1, &region);
+      }
+      else
+      {
+        // Copy each result into the destination, converting if required
+        rdcarray<VkBufferCopy> regions;
+        regions.reserve(queryCount);
+        for(size_t i = 0; i < queryCount; ++i)
+          regions.push_back(
+              {(firstQuery + i) * sizeof(uint64_t), destOffset + (i * destStride), resultSize});
+
+        ObjDisp(commandBuffer)
+            ->CmdCopyBuffer(Unwrap(commandBuffer), Unwrap(qpInfo->m_Buffer.buf), Unwrap(destBuffer),
+                            (uint32_t)regions.size(), regions.data());
+      }
+
+      if(hasAvailability)
+      {
+        const uint64_t availability = 1;
+        for(size_t i = 0; i < queryCount; ++i)
+          ObjDisp(commandBuffer)
+              ->CmdUpdateBuffer(Unwrap(commandBuffer), Unwrap(qpInfo->m_Buffer.buf),
+                                destOffset + (queryCount * resultSize) + resultSize, resultSize,
+                                (uint32_t *)&availability);
+      }
+    }
   }
 }
 
@@ -7873,6 +7928,14 @@ void WrappedVulkan::vkCmdBuildAccelerationStructuresKHR(
 
       // Add to the command buffer metadata, so we can know when it has been submitted
       record->cmdInfo->accelerationStructures.push_back(GetRecord(geomInfo.dstAccelerationStructure));
+
+      const RDResult copyResult = GetAccelerationStructureManager()->CopyInputBuffers(
+          commandBuffer, geomInfo, ppBuildRangeInfos[i]);
+      if(copyResult != ResultCode::Succeeded)
+      {
+        m_LastCaptureError = copyResult;
+        m_CaptureFailure = true;
+      }
     }
   }
 }
@@ -7924,6 +7987,8 @@ void WrappedVulkan::vkCmdCopyAccelerationStructureKHR(VkCommandBuffer commandBuf
 
     // Add to the command buffer metadata, so we can know when it has been submitted
     record->cmdInfo->accelerationStructures.push_back(GetRecord(pInfo->dst));
+
+    GetAccelerationStructureManager()->CopyAccelerationStructure(commandBuffer, *pInfo);
   }
 }
 
@@ -8009,27 +8074,43 @@ void WrappedVulkan::vkCmdWriteAccelerationStructuresPropertiesKHR(
   for(uint32_t i = 0; i < accelerationStructureCount; ++i)
     unwrappedASes[i] = Unwrap(pAccelerationStructures[i]);
 
+  // The compacted size can vary between capture and replay, so to ensure we always have enough
+  // memory we return the full AS size
+  QueryPoolInfo *qpInfo = GetRecord(queryPool)->queryPoolInfo;
+  if(qpInfo)
+  {
+    rdcarray<uint64_t> sizes;
+    sizes.reserve(accelerationStructureCount);
+    for(uint32_t i = 0; i < accelerationStructureCount; ++i)
+      sizes.push_back(GetRecord(pAccelerationStructures[i])->memSize);
+
+    constexpr size_t maxTransferrableBytes = 65536;
+    const size_t totalBytes = sizes.size() * sizeof(uint64_t);
+    for(size_t i = 0; i < totalBytes; i += maxTransferrableBytes)
+    {
+      const VkDeviceSize numBytes = RDCMIN(maxTransferrableBytes, totalBytes);
+      const VkDeviceSize startOffset = (firstQuery * sizeof(uint64_t)) + i;
+      ObjDisp(commandBuffer)
+          ->CmdUpdateBuffer(Unwrap(commandBuffer), Unwrap(qpInfo->m_Buffer.buf), startOffset,
+                            numBytes, (uint32_t *)((byte *)sizes.data() + i));
+    }
+  }
+
   ObjDisp(commandBuffer)
       ->CmdWriteAccelerationStructuresPropertiesKHR(Unwrap(commandBuffer),
                                                     accelerationStructureCount, unwrappedASes,
                                                     queryType, Unwrap(queryPool), firstQuery);
 }
 
+// CPU-side VK_KHR_acceleration_structure calls are not supported for now
 VkResult WrappedVulkan::vkWriteAccelerationStructuresPropertiesKHR(
     VkDevice device, uint32_t accelerationStructureCount,
     const VkAccelerationStructureKHR *pAccelerationStructures, VkQueryType queryType,
     size_t dataSize, void *pData, size_t stride)
 {
-  byte *memory = GetTempMemory(sizeof(VkAccelerationStructureKHR) * accelerationStructureCount);
-  VkAccelerationStructureKHR *unwrappedASes = (VkAccelerationStructureKHR *)memory;
-  for(uint32_t i = 0; i < accelerationStructureCount; ++i)
-    unwrappedASes[i] = Unwrap(pAccelerationStructures[i]);
-
-  return ObjDisp(device)->WriteAccelerationStructuresPropertiesKHR(
-      Unwrap(device), accelerationStructureCount, unwrappedASes, queryType, dataSize, pData, stride);
+  return VK_ERROR_UNKNOWN;
 }
 
-// CPU-side VK_KHR_acceleration_structure calls are not supported for now
 VkResult WrappedVulkan::vkCopyAccelerationStructureKHR(VkDevice device,
                                                        VkDeferredOperationKHR deferredOperation,
                                                        const VkCopyAccelerationStructureInfoKHR *pInfo)

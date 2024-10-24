@@ -1381,6 +1381,9 @@ void WrappedID3D12GraphicsCommandList::SetPipelineState(ID3D12PipelineState *pPi
 
     m_ListRecord->AddChunk(scope.Get(m_ListRecord->cmdInfo->alloc));
     m_ListRecord->MarkResourceFrameReferenced(GetResID(pPipelineState), eFrameRef_Read);
+
+    m_CaptureComputeState.pipe = GetResID(pPipelineState);
+    m_CaptureComputeState.stateobj = ResourceId();
   }
 }
 
@@ -4426,7 +4429,8 @@ void WrappedID3D12GraphicsCommandList::ExecuteIndirect(ID3D12CommandSignature *p
   UINT64 argOffset = ArgumentBufferOffset;
 
   PatchedRayDispatch patchedDispatch = {};
-  if(((WrappedID3D12CommandSignature *)pCommandSignature)->sig.raytraced)
+  const D3D12CommandSignature &sigData = ((WrappedID3D12CommandSignature *)pCommandSignature)->sig;
+  if(sigData.raytraced)
   {
     patchedDispatch = GetResourceManager()->GetRTManager()->PatchIndirectRayDispatch(
         m_pList, m_CaptureComputeState.heaps, pCommandSignature, MaxCommandCount, pArgumentBuffer,
@@ -4466,6 +4470,18 @@ void WrappedID3D12GraphicsCommandList::ExecuteIndirect(ID3D12CommandSignature *p
     {
       // free all the memory at the end of each replay
       m_RayDispatches.push_back(patchedDispatch.resources);
+    }
+
+    // an ExecuteIndirect could reference any buffer at all without us knowing if it has GPU VAs
+    // anywhere in its arguments
+    for(const D3D12_INDIRECT_ARGUMENT_DESC &arg : sigData.arguments)
+    {
+      if(arg.Type == D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW ||
+         arg.Type == D3D12_INDIRECT_ARGUMENT_TYPE_UNORDERED_ACCESS_VIEW ||
+         arg.Type == D3D12_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW ||
+         arg.Type == D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW ||
+         arg.Type == D3D12_INDIRECT_ARGUMENT_TYPE_INDEX_BUFFER_VIEW)
+        m_ListRecord->cmdInfo->forceMapsListEvent = true;
     }
   }
 }

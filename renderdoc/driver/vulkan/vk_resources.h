@@ -2236,6 +2236,17 @@ inline FrameRefType MarkMemoryReferenced(std::unordered_map<ResourceId, MemRefs>
   return MarkMemoryReferenced(memRefs, mem, offset, size, refType, ComposeFrameRefs);
 }
 
+// Used as an alternative backing store to VkQueryPool to replace query results
+class QueryPoolInfo
+{
+public:
+  QueryPoolInfo(WrappedVulkan *driver, VkDevice device, const VkQueryPoolCreateInfo *pCreateInfo);
+  ~QueryPoolInfo();
+
+  GPUBuffer m_Buffer;
+  byte *m_MappedMem;
+};
+
 struct DescUpdateTemplate;
 struct ImageLayouts;
 struct VkAccelerationStructureInfo;
@@ -2332,6 +2343,7 @@ public:
     DescPoolInfo *descPoolInfo;              // only for descriptor pools
     CmdPoolInfo *cmdPoolInfo;                // only for command pools
     uint32_t queueFamilyIndex;               // only for queues
+    QueryPoolInfo *queryPoolInfo;            // only for query pools
     VkAccelerationStructureInfo *accelerationStructureInfo;    // only for acceleration structures
   };
 

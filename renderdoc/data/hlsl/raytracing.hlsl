@@ -29,32 +29,29 @@ StructuredBuffer<BlasAddressPair> oldNewAddressesPair : register(t0);
 
 bool InRange(BlasAddressRange addressRange, GPUAddress address)
 {
-  if(lessEqual(addressRange.start, address) && lessThan(address, addressRange.end))
-  {
-    return true;
-  }
-
-  return false;
+  return (lessEqual(addressRange.start, address) && lessThan(address, addressRange.end));
 }
 
-// Each SV_GroupId corresponds to each of the BLAS (instance) in TLAS
-[numthreads(1, 1, 1)] void RENDERDOC_PatchAccStructAddressCS(uint3 dispatchGroup
-                                                             : SV_GroupId) {
-  GPUAddress instanceBlasAddress = instanceDescs[dispatchGroup.x].blasAddress;
-
+GPUAddress RemapCaptureToReplayAddress(GPUAddress instanceBlasAddress)
+{
   for(uint i = 0; i < addressCount; i++)
   {
     if(InRange(oldNewAddressesPair[i].oldAddress, instanceBlasAddress))
     {
       GPUAddress offset = sub(instanceBlasAddress, oldNewAddressesPair[i].oldAddress.start);
-      instanceDescs[dispatchGroup.x].blasAddress =
-          add(oldNewAddressesPair[i].newAddress.start, offset);
-      return;
+      return add(oldNewAddressesPair[i].newAddress.start, offset);
     }
   }
 
-  // This  might cause device hang but at least we won't access incorrect addresses
-  instanceDescs[dispatchGroup.x].blasAddress = 0;
+  // This might cause device hang but at least we won't access incorrect addresses
+  return 0;
+}
+
+// Each SV_GroupId corresponds to each of the BLAS (instance) in TLAS
+[numthreads(1, 1, 1)] void RENDERDOC_PatchAccStructAddressCS(uint3 dispatchGroup
+                                                             : SV_GroupId) {
+  instanceDescs[dispatchGroup.x].blasAddress =
+      RemapCaptureToReplayAddress(instanceDescs[dispatchGroup.x].blasAddress);
 }
 
 StructuredBuffer<StateObjectLookup> stateObjects : register(t1);
@@ -448,4 +445,38 @@ GPUAddress AlignRecordAddress(GPUAddress x)
 
   // store the number of patching indirect dispatches we'll do, up to 4 per the application's number
   internalExecuteCount.Store(0, dispatchIndex);
+}
+
+StructuredBuffer<uint2> applicationBLASPointers : register(t1);
+RWStructuredBuffer<TLASCopyExecute> internalTLASCopyArguments : register(u0);
+
+[numthreads(1, 1, 1)] void RENDERDOC_PrepareTLASCopyIndirectExecuteCS(uint3 dispatchThread
+                                                                      : SV_DispatchThreadID) {
+  TLASCopyExecute execute = (TLASCopyExecute)0;
+  if(addressCount > 0)
+    execute.blasPointer = RemapCaptureToReplayAddress(applicationBLASPointers[dispatchThread.x]);
+  else
+    execute.blasPointer = applicationBLASPointers[dispatchThread.x];
+  execute.index = dispatchThread.x;
+  execute.dispatchDim = uint3(1, 1, 1);
+
+  internalTLASCopyArguments[dispatchThread.x] = execute;
+}
+
+// this is from the EI argument above, so we always copy from [0] to indirect the pointer
+StructuredBuffer<InstanceDesc> copySource : register(t1);
+
+// also from the EI argument above
+cbuffer TLASCopyExecuteCB : register(b0)
+{
+  uint blas_index;
+};
+
+// this is set globally, so we index with the index
+RWStructuredBuffer<InstanceDesc> copyDest : register(u0);
+
+// Each SV_GroupId corresponds to one shader record to patch
+[numthreads(1, 1, 1)] void RENDERDOC_CopyBLASInstanceCS(uint3 dispatchThread
+                                                        : SV_DispatchThreadID) {
+  copyDest[blas_index] = copySource[0];
 }

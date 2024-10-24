@@ -1224,11 +1224,12 @@ public:
   bool Serialise_InitialState(SerialiserType &ser, ResourceId id, VkResourceRecord *record,
                               const VkInitialContents *initial);
   void Create_InitialState(ResourceId id, WrappedVkRes *live, bool hasData);
-  void Apply_InitialState(WrappedVkRes *live, const VkInitialContents &initial);
+  void Apply_InitialState(WrappedVkRes *live, VkInitialContents &initial);
 
   void RemapQueueFamilyIndices(uint32_t &srcQueueFamily, uint32_t &dstQueueFamily);
   uint32_t GetQueueFamilyIndex() const { return m_QueueFamilyIdx; }
   bool ReleaseResource(WrappedVkRes *res);
+  const rdcarray<uint32_t> &GetQueueFamilyIndices() const { return m_QueueFamilyIndices; }
 
   void AddDebugMessage(MessageCategory c, MessageSeverity sv, MessageSource src, rdcstr d);
 
@@ -1279,6 +1280,7 @@ public:
 
   void TrackBufferAddress(VkDevice device, VkBuffer buffer);
   void UntrackBufferAddress(VkDevice device, VkBuffer buffer);
+  void GetResIDFromAddr(GPUAddressRange::Address addr, ResourceId &id, uint64_t &offs);
 
   EventFlags GetEventFlags(uint32_t eid) { return m_EventFlags[eid]; }
   rdcarray<EventUsage> GetUsage(ResourceId id) { return m_ResourceUses[id]; }

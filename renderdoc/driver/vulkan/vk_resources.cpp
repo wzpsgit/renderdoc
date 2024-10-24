@@ -3948,6 +3948,19 @@ void ImgRefs::Split(bool splitAspects, bool splitLevels, bool splitLayers)
   areLayersSplit = newSplitLayerCount > 1;
 }
 
+QueryPoolInfo::QueryPoolInfo(WrappedVulkan *driver, VkDevice device,
+                             const VkQueryPoolCreateInfo *pCreateInfo)
+{
+  m_Buffer.Create(driver, device, pCreateInfo->queryCount * 8, 1, GPUBuffer::eGPUBufferReadback);
+  m_MappedMem = (byte *)m_Buffer.Map(0, m_Buffer.totalsize);
+}
+
+QueryPoolInfo::~QueryPoolInfo()
+{
+  m_Buffer.Unmap();
+  m_Buffer.Destroy();
+}
+
 VkResourceRecord::~VkResourceRecord()
 {
   // bufferviews and imageviews have non-owning pointers to the sparseinfo struct
@@ -3996,8 +4009,11 @@ VkResourceRecord::~VkResourceRecord()
   if(resType == eResCommandPool)
     SAFE_DELETE(cmdPoolInfo);
 
+  if(resType == eResQueryPool)
+    SAFE_DELETE(queryPoolInfo);
+
   if(resType == eResAccelerationStructureKHR)
-    SAFE_DELETE(accelerationStructureInfo);
+    SAFE_RELEASE(accelerationStructureInfo);
 }
 
 void VkResourceRecord::MarkImageFrameReferenced(VkResourceRecord *img, const ImageRange &range,

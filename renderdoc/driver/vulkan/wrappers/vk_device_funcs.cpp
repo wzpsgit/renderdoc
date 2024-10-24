@@ -1014,6 +1014,7 @@ void WrappedVulkan::Shutdown()
   }
 
   FreeAllMemory(MemoryScope::InitialContents);
+  FreeAllMemory(MemoryScope::InitialContentsFirstApplyOnly);
 
   if(m_MemoryFreeThread)
   {
@@ -4411,6 +4412,14 @@ VkResult WrappedVulkan::vkCreateDevice(VkPhysicalDevice physicalDevice,
   {
     accFeatures->accelerationStructureCaptureReplay = VK_TRUE;
     m_AccelerationStructures = true;
+  }
+
+  VkPhysicalDeviceRayTracingPipelineFeaturesKHR *rtpFeatures =
+      (VkPhysicalDeviceRayTracingPipelineFeaturesKHR *)FindNextStruct(
+          &createInfo, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR);
+  if(rtpFeatures && rtpFeatures->rayTracingPipeline)
+  {
+    rtpFeatures->rayTracingPipelineShaderGroupHandleCaptureReplay = VK_TRUE;
   }
 
   VkResult ret;

@@ -154,6 +154,7 @@ D3D12AccelerationStructure::D3D12AccelerationStructure(WrappedID3D12Device *wrap
 
 D3D12AccelerationStructure::~D3D12AccelerationStructure()
 {
+  SAFE_RELEASE(buildData);
   Shutdown();
 }
 
@@ -1254,7 +1255,7 @@ void D3D12ShaderExportDatabase::InheritExport(const rdcstr &exportName,
       memcpy(ownExports.back().real, identifier, sizeof(ShaderIdentifier));
 
     // and re-point this to point to ourselves when queried as we have the best data for it.
-    wrappedIdentifiers.back() = {objectOriginalId, (uint32_t)ownExports.size()};
+    wrappedIdentifiers.back() = {objectOriginalId, (uint32_t)ownExports.size() - 1};
 
     // if this is an incomplete hitgroup, also grab the hitgroup component data
     if(exportLookups.back().hitgroup)
