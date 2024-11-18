@@ -74,6 +74,8 @@ private slots:
   void on_childProcesses_itemActivated(QListWidgetItem *item);
   void on_triggerImmediateCapture_clicked();
   void on_cycleActiveWindow_clicked();
+  void on_triggerCaptureSubmitStart_clicked();
+  void on_triggerCaptureSubmitEnd_clicked();
   void on_triggerDelayedCapture_clicked();
   void on_queueCap_clicked();
   void on_previewSplit_splitterMoved(int pos, int index);
@@ -175,6 +177,9 @@ private:
   int m_CaptureNumFrames = 1;
   int m_QueueCaptureFrameNum = 0;
   int m_CaptureCounter = 0;
+
+  bool m_bStartCaptureSubmit = false;
+  bool m_bEndCaptureSubmit   = false;
   QSemaphore m_Connected;
 
   uint32_t m_CopyCaptureID = ~0U;

@@ -133,6 +133,8 @@ LiveCapture::LiveCapture(ICaptureContext &ctx, const QString &hostname, const QS
   ui->captures->setItemDelegate(new NameEditOnlyDelegate(this));
 
   ui->captures->verticalScrollBar()->setSingleStep(20);
+  ui->triggerCaptureSubmitStart->setEnabled(false);
+  ui->triggerCaptureSubmitEnd->setEnabled(false);
 
   {
     QToolBar *bottomTools = new QToolBar(this);
@@ -286,6 +288,8 @@ void LiveCapture::on_queueCap_clicked()
 
 void LiveCapture::on_triggerImmediateCapture_clicked()
 {
+  m_bEndCaptureSubmit   = false;
+  m_bStartCaptureSubmit = false;
   m_CaptureNumFrames = (int)ui->numFrames->value();
   m_TriggerCapture.release();
 }
@@ -293,6 +297,24 @@ void LiveCapture::on_triggerImmediateCapture_clicked()
 void LiveCapture::on_cycleActiveWindow_clicked()
 {
   m_CycleWindow.release();
+}
+
+void LiveCapture::on_triggerCaptureSubmitStart_clicked()
+{
+  ui->triggerCaptureSubmitStart->setEnabled(false);
+  ui->triggerCaptureSubmitEnd->setEnabled(true);
+  m_bEndCaptureSubmit   = false;
+  m_bStartCaptureSubmit = true;
+  m_TriggerCapture.release();
+}
+
+void LiveCapture::on_triggerCaptureSubmitEnd_clicked()
+{
+  ui->triggerCaptureSubmitStart->setEnabled(true);
+  ui->triggerCaptureSubmitEnd->setEnabled(false);
+  m_bEndCaptureSubmit   = true;
+  m_bStartCaptureSubmit = false;
+  m_TriggerCapture.release();
 }
 
 void LiveCapture::on_triggerDelayedCapture_clicked()
@@ -648,10 +670,13 @@ void LiveCapture::updateAPIStatus()
   QString apiStatus;
 
   bool nonpresenting = false;
-
   // add any fully working APIs first in the list.
   for(QString api : m_APIs.keys())
   {
+    if(api.toStdString() == "Vulkan")
+    {
+      ui->triggerCaptureSubmitStart->setEnabled(true);
+    }
     if(m_APIs[api].supported && m_APIs[api].presenting)
       apiStatus += lit(", <b>%1 (Active)</b>").arg(api);
   }
@@ -1300,8 +1325,19 @@ void LiveCapture::connectionThreadEntry()
   {
     if(m_TriggerCapture.tryAcquire())
     {
-      conn->TriggerCapture((uint)m_CaptureNumFrames);
-      m_CaptureNumFrames = 1;
+      if(m_bStartCaptureSubmit)
+      {
+        conn->StartCaptureSubmit();
+      }
+      else if(m_bEndCaptureSubmit)
+      {
+        conn->EndCaptureSubmit();
+      }
+      else
+      {
+        conn->TriggerCapture((uint)m_CaptureNumFrames);
+        m_CaptureNumFrames = 1;
+      }
     }
 
     if(m_QueueCapture.tryAcquire())

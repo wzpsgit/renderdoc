@@ -1171,6 +1171,11 @@ next after that.
 )");
   virtual void TriggerCapture(uint32_t numFrames) = 0;
 
+  virtual void StartCaptureSubmit() = 0;
+
+  virtual void EndCaptureSubmit() = 0;
+
+
   DOCUMENT(R"(Queue up a capture to happen on a particular frame number. When this frame is about to
 begin a capture is begun, and it ends when this frame number ends.
 

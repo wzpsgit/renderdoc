@@ -1477,6 +1477,9 @@ VkResult WrappedVulkan::vkQueueSubmit(VkQueue queue, uint32_t submitCount,
     }
   }
 
+  beginCapture |= RenderDoc::Inst().m_bStartCaptureSubmit;
+  endCapture   |= RenderDoc::Inst().m_bEndCaptureSubmit;
+
   if(beginCapture)
   {
     RenderDoc::Inst().StartFrameCapture(DeviceOwnedWindow(LayerDisp(m_Instance), NULL));
@@ -1645,6 +1648,9 @@ VkResult WrappedVulkan::vkQueueSubmit2(VkQueue queue, uint32_t submitCount,
     }
   }
 
+  beginCapture |= RenderDoc::Inst().m_bStartCaptureSubmit;
+  endCapture   |= RenderDoc::Inst().m_bEndCaptureSubmit;
+  
   if(beginCapture)
   {
     RenderDoc::Inst().StartFrameCapture(DeviceOwnedWindow(LayerDisp(m_Instance), NULL));

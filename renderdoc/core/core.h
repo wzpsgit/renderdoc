@@ -387,6 +387,9 @@ typedef void (*ShutdownFunction)();
 class RenderDoc
 {
 public:
+  bool m_bStartCaptureSubmit = false;
+  bool m_bEndCaptureSubmit   = false;
+  
   struct FramePixels
   {
     uint8_t *data = NULL;

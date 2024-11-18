@@ -86,7 +86,9 @@ enum PacketType : uint32_t
   ePacket_CaptureProgress,
   ePacket_CycleActiveWindow,
   ePacket_CapturableWindowCount,
-  ePacket_RequestShow
+  ePacket_RequestShow,
+  ePacket_StartCaptureSubmit,
+  ePacket_EndCaptureSubmit,
 };
 
 DECLARE_REFLECTION_ENUM(PacketType);
@@ -356,6 +358,17 @@ void RenderDoc::TargetControlClientThread(uint32_t version, Network::Socket *cli
         SERIALISE_ELEMENT(numFrames);
 
         RenderDoc::Inst().TriggerCapture(numFrames);
+      }
+      else if(type == ePacket_StartCaptureSubmit)
+      {
+        RenderDoc::Inst().m_bStartCaptureSubmit = true;
+        RenderDoc::Inst().m_bEndCaptureSubmit   = false;
+      }
+      else if(type == ePacket_EndCaptureSubmit)
+      {
+        RenderDoc::Inst().m_bStartCaptureSubmit = false;
+        RenderDoc::Inst().m_bEndCaptureSubmit   = true;
+
       }
       else if(type == ePacket_QueueCapture)
       {
@@ -666,6 +679,24 @@ public:
 
     SERIALISE_ELEMENT(numFrames);
 
+    if(ser.IsErrored())
+      SAFE_DELETE(m_Socket);
+  }
+
+  void StartCaptureSubmit() override
+  {
+    WRITE_DATA_SCOPE();
+    SCOPED_SERIALISE_CHUNK(ePacket_StartCaptureSubmit);
+    
+    if(ser.IsErrored())
+      SAFE_DELETE(m_Socket);
+  }
+
+  void EndCaptureSubmit() override
+  {
+    WRITE_DATA_SCOPE();
+    SCOPED_SERIALISE_CHUNK(ePacket_EndCaptureSubmit);
+    
     if(ser.IsErrored())
       SAFE_DELETE(m_Socket);
   }
