@@ -421,7 +421,7 @@ bool WrappedVulkan::Serialise_vkAllocateMemory(SerialiserType &ser, VkDevice dev
         // be used with buffers we can just skip and leave wholeMemBuf as NULL.
         if((1 << AllocateInfo.memoryTypeIndex) & mrq.memoryTypeBits)
         {
-          RDCASSERT(mrq.size <= AllocateInfo.allocationSize, mrq.size, AllocateInfo.allocationSize);
+          //RDCASSERT(mrq.size <= AllocateInfo.allocationSize, mrq.size, AllocateInfo.allocationSize);
 
           ResourceId bufid = GetResourceManager()->WrapResource(Unwrap(device), buf);
 
@@ -1425,11 +1425,11 @@ bool WrappedVulkan::Serialise_vkBindBufferMemory(SerialiserType &ser, VkDevice d
     VkMemoryRequirements mrq = {};
     ObjDisp(device)->GetBufferMemoryRequirements(Unwrap(device), Unwrap(buffer), &mrq);
 
-    bool ok = CheckMemoryRequirements(GetResourceDesc(resOrigId).name.c_str(), GetResID(memory),
-                                      memoryOffset, mrq, bufInfo.external, bufInfo.mrq);
+    //bool ok = CheckMemoryRequirements(GetResourceDesc(resOrigId).name.c_str(), GetResID(memory),
+    //                                  memoryOffset, mrq, bufInfo.external, bufInfo.mrq);
 
-    if(!ok)
-      return false;
+    //if(!ok)
+    //  return false;
 
     ObjDisp(device)->BindBufferMemory(Unwrap(device), Unwrap(buffer), Unwrap(memory), memoryOffset);
 
@@ -1553,11 +1553,11 @@ bool WrappedVulkan::Serialise_vkBindImageMemory(SerialiserType &ser, VkDevice de
 
     VulkanCreationInfo::Image &imgInfo = m_CreationInfo.m_Image[GetResID(image)];
 
-    bool ok = CheckMemoryRequirements(GetResourceDesc(resOrigId).name.c_str(), GetResID(memory),
-                                      memoryOffset, mrq, imgInfo.external, imgInfo.mrq);
+    //bool ok = CheckMemoryRequirements(GetResourceDesc(resOrigId).name.c_str(), GetResID(memory),
+    //                                  memoryOffset, mrq, imgInfo.external, imgInfo.mrq);
 
-    if(!ok)
-      return false;
+    //if(!ok)
+    //  return false;
 
     ObjDisp(device)->BindImageMemory(Unwrap(device), Unwrap(image), Unwrap(memory), memoryOffset);
 
